@@ -5,14 +5,27 @@ from backend.domain.interfaces.http_client import IHttpClient
 class RequestsHttpClient(IHttpClient):
     def __init__(self, timeout: int = 5):
         self.timeout = timeout
+        self.last_error = None
+        self.last_status_code = None
+        self.last_response_text = None
 
-    def post(self, url: str, payload: Dict[str, Any]) -> bool:
+    def post(self, url: str, payload: Dict[str, Any], headers: Dict[str, str] = None) -> bool:
         try:
+            self.last_error = None
+            self.last_status_code = None
+            self.last_response_text = None
             print(f"[HTTP Client] Enviando POST a {url} con carga útil: {payload}")
-            response = requests.post(url, json=payload, timeout=self.timeout)
+            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            self.last_status_code = response.status_code
+            self.last_response_text = response.text
             print(f"[HTTP Client] Respuesta recibida ({response.status_code}): {response.text}")
-            return response.status_code in [200, 201, 202, 204]
+            if response.status_code in [200, 201, 202, 204]:
+                return True
+
+            self.last_error = f"HTTP {response.status_code}: {response.text}"
+            return False
         except Exception as e:
+            self.last_error = str(e)
             print(f"[HTTP Client] Error al enviar POST a {url}: {e}")
             return False
 

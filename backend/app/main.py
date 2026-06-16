@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import os
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
@@ -10,6 +12,23 @@ from backend.infrastructure.iot.mock_controller import MockIoTController
 from backend.infrastructure.http.requests_client import RequestsHttpClient
 from backend.use_cases.detect_and_notify import DetectAndNotifyUseCase
 from backend.use_cases.control_device import ControlDeviceUseCase
+from backend.use_cases.send_lote_request import SendLoteRequestUseCase
+
+
+def load_env_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env_file(Path(__file__).resolve().parents[1] / ".env")
 
 app = FastAPI(
     title="YOLOv11 IoT Toast Detection API",
@@ -42,10 +61,13 @@ except Exception as e:
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
+central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", "http://localhost:8080")
+central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", "")
 
 # Instantiate Use Cases
 detect_use_case = DetectAndNotifyUseCase(detector, iot_controller, http_client)
 control_device_use_case = ControlDeviceUseCase(iot_controller)
+send_lote_use_case = SendLoteRequestUseCase(http_client, central_lotes_base_url, central_lotes_api_key)
 
 
 @app.get("/api/status")
@@ -99,6 +121,56 @@ def toggle_device(device_id: str):
         return {"status": "success", "device_id": device_id, "is_on": device.is_on}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Dispositivo '{device_id}' no encontrado.")
+
+
+@app.post("/api/lotes/finalizar")
+def finalizar_lote(lote_payload: Dict[str, Any]):
+    try:
+        required_fields = [
+            "id",
+            "productoId",
+            "productoNombre",
+            "turno",
+            "inicioAt",
+            "finAt",
+            "totalUnidades",
+            "correctos",
+            "quemados",
+            "correctosKg",
+            "quemadosKg",
+            "tempHorno1",
+            "tempCombHorno1",
+            "tempHorno2",
+            "tempCombHorno2",
+            "velocidadHorno",
+            "createdAt",
+            "updatedAt",
+        ]
+        missing_fields = [field for field in required_fields if field not in lote_payload]
+        if missing_fields:
+            raise HTTPException(status_code=400, detail=f"Faltan campos obligatorios: {', '.join(missing_fields)}")
+
+        success = send_lote_use_case.execute(lote_payload)
+        if not success:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "No se pudo registrar el lote en el servidor central.",
+                    "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+                    "status_code": send_lote_use_case.get_last_status_code(),
+                    "error": send_lote_use_case.get_last_error(),
+                    "response": send_lote_use_case.get_last_response_text(),
+                },
+            )
+        return {
+            "status": "success",
+            "message": "Lote enviado al servidor central.",
+            "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Falta el campo obligatorio: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/detect")
