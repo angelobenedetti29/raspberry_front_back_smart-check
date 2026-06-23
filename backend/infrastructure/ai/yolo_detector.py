@@ -11,14 +11,20 @@ class YoloDetector(IImageDetector):
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         
         if model_path is None:
-            model_path = os.path.join(base_dir, "ai_training", "models", "tostadas.onnx")
-            # If tostadas.onnx doesn't exist, try yolo11n.onnx
+            # Intentar cargar tostadas_v2.onnx primero, luego tostadas_v1.onnx, y finalmente yolo11n.onnx
+            model_path = os.path.join(base_dir, "ai_training", "models", "tostadas_v2.onnx")
             if not os.path.exists(model_path):
-                model_path = os.path.join(base_dir, "ai_training", "models", "yolo11n.onnx")
+                model_path = os.path.join(base_dir, "ai_training", "models", "tostadas_v1.onnx")
+                if not os.path.exists(model_path):
+                    model_path = os.path.join(base_dir, "ai_training", "models", "yolo11n.onnx")
 
         if names_path is None:
-            names_path = os.path.join(base_dir, "ai_training", "models", "tostadas.names")
-            if not os.path.exists(names_path):
+            # Intentar cargar las etiquetas que correspondan al modelo seleccionado
+            if "tostadas_v2" in model_path:
+                names_path = os.path.join(base_dir, "ai_training", "models", "tostadas_v2.names")
+            elif "tostadas_v1" in model_path:
+                names_path = os.path.join(base_dir, "ai_training", "models", "tostadas_v1.names")
+            else:
                 names_path = os.path.join(base_dir, "ai_training", "models", "class.names")
 
         self.model_path = model_path
