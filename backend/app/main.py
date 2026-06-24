@@ -204,7 +204,7 @@ async def detect_toast(
         # Format response
         results = []
         for det in detections:
-            results.append({
+            res_item = {
                 "label": det.label,
                 "confidence": float(det.confidence),
                 "bbox": {
@@ -213,13 +213,23 @@ async def detect_toast(
                     "width": det.bbox[2],
                     "height": det.bbox[3]
                 }
-            })
+            }
+            if hasattr(det, "id"):
+                res_item["id"] = det.id
+                res_item["state"] = getattr(det, "state", "unknown")
+            results.append(res_item)
+            
+        has_burned = any(
+            (hasattr(det, "state") and det.state == "burnt") or 
+            det.label.lower() in ("tostada quemada", "tcq") 
+            for det in detections
+        )
             
         response_payload = {
             "detections": results,
             "summary": {
                 "total_detected": len(results),
-                "burned_toast_found": any(det.label.lower() == "tostada quemada" for det in detections)
+                "burned_toast_found": has_burned
             }
         }
 
