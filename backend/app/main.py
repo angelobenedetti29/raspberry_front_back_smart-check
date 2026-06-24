@@ -61,8 +61,8 @@ except Exception as e:
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
-central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", "http://localhost:8080")
-central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", "")
+central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", str(Path(__file__).resolve().parents[1] / ".env"))
+central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", str(Path(__file__).resolve().parents[1] / ".env"))
 
 # Instantiate Use Cases
 detect_use_case = DetectAndNotifyUseCase(detector, iot_controller, http_client)
