@@ -1,8 +1,9 @@
+import json
 import cv2
 import numpy as np
 import os
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
 
@@ -61,13 +62,58 @@ except Exception as e:
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
-central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", str(Path(__file__).resolve().parents[1] / ".env"))
-central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", str(Path(__file__).resolve().parents[1] / ".env"))
+central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", "")
+central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", "")
 
 # Instantiate Use Cases
 detect_use_case = DetectAndNotifyUseCase(detector, iot_controller, http_client)
 control_device_use_case = ControlDeviceUseCase(iot_controller)
 send_lote_use_case = SendLoteRequestUseCase(http_client, central_lotes_base_url, central_lotes_api_key)
+
+
+def finalize_lote_payload(lote_payload: Dict[str, Any]) -> Dict[str, Any]:
+    required_fields = [
+        "id",
+        "productoId",
+        "productoNombre",
+        "turno",
+        "inicioAt",
+        "finAt",
+        "totalUnidades",
+        "correctos",
+        "quemados",
+        "correctosKg",
+        "quemadosKg",
+        "tempHorno1",
+        "tempCombHorno1",
+        "tempHorno2",
+        "tempCombHorno2",
+        "velocidadHorno",
+        "createdAt",
+        "updatedAt",
+    ]
+    missing_fields = [field for field in required_fields if field not in lote_payload]
+    if missing_fields:
+        raise HTTPException(status_code=400, detail=f"Faltan campos obligatorios: {', '.join(missing_fields)}")
+
+    success = send_lote_use_case.execute(lote_payload)
+    if not success:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "No se pudo registrar el lote en el servidor central.",
+                "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+                "status_code": send_lote_use_case.get_last_status_code(),
+                "error": send_lote_use_case.get_last_error(),
+                "response": send_lote_use_case.get_last_response_text(),
+            },
+        )
+
+    return {
+        "status": "success",
+        "message": "Lote enviado al servidor central.",
+        "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+    }
 
 
 @app.get("/api/status")
@@ -126,47 +172,7 @@ def toggle_device(device_id: str):
 @app.post("/api/lotes/finalizar")
 def finalizar_lote(lote_payload: Dict[str, Any]):
     try:
-        required_fields = [
-            "id",
-            "productoId",
-            "productoNombre",
-            "turno",
-            "inicioAt",
-            "finAt",
-            "totalUnidades",
-            "correctos",
-            "quemados",
-            "correctosKg",
-            "quemadosKg",
-            "tempHorno1",
-            "tempCombHorno1",
-            "tempHorno2",
-            "tempCombHorno2",
-            "velocidadHorno",
-            "createdAt",
-            "updatedAt",
-        ]
-        missing_fields = [field for field in required_fields if field not in lote_payload]
-        if missing_fields:
-            raise HTTPException(status_code=400, detail=f"Faltan campos obligatorios: {', '.join(missing_fields)}")
-
-        success = send_lote_use_case.execute(lote_payload)
-        if not success:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "message": "No se pudo registrar el lote en el servidor central.",
-                    "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
-                    "status_code": send_lote_use_case.get_last_status_code(),
-                    "error": send_lote_use_case.get_last_error(),
-                    "response": send_lote_use_case.get_last_response_text(),
-                },
-            )
-        return {
-            "status": "success",
-            "message": "Lote enviado al servidor central.",
-            "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
-        }
+        return finalize_lote_payload(lote_payload)
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Falta el campo obligatorio: {str(e)}")
     except ValueError as e:
@@ -174,7 +180,11 @@ def finalizar_lote(lote_payload: Dict[str, Any]):
 
 
 @app.post("/api/detect")
-async def detect_toast(file: UploadFile = File(...), notification_url: str = None):
+async def detect_toast(
+    file: UploadFile = File(...),
+    notification_url: str | None = Form(None),
+    lote_payload: str | None = Form(None),
+):
     """
     Recibe una imagen a través de HTTP POST, realiza la inferencia con YOLOv11
     y notifica/actualiza el hardware de IoT si se detecta una tostada quemada.
@@ -205,13 +215,26 @@ async def detect_toast(file: UploadFile = File(...), notification_url: str = Non
                 }
             })
             
-        return {
+        response_payload = {
             "detections": results,
             "summary": {
                 "total_detected": len(results),
                 "burned_toast_found": any(det.label.lower() == "tostada quemada" for det in detections)
             }
         }
+
+        if lote_payload:
+            try:
+                parsed_payload = json.loads(lote_payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="El campo lote_payload debe ser un JSON válido.") from exc
+
+            if not isinstance(parsed_payload, dict):
+                raise HTTPException(status_code=400, detail="El campo lote_payload debe ser un objeto JSON.")
+
+            response_payload["lote"] = finalize_lote_payload(parsed_payload)
+
+        return response_payload
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en inferencia: {str(e)}")
