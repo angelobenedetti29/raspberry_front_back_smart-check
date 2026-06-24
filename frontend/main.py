@@ -49,9 +49,11 @@ def resolve_path(relative_path):
     # Specific mapping for different directory layouts inside yolov11-python
     mapping = {
         "yolov11-python/yolo11n.onnx": "ai_training/models/yolo11n.onnx",
-        "yolov11-python/tostadas.onnx": "ai_training/models/tostadas.onnx",
+        "yolov11-python/tostadas_v1.onnx": "ai_training/models/tostadas_v1.onnx",
+        "yolov11-python/tostadas_v1.names": "ai_training/models/tostadas_v1.names",
+        "yolov11-python/tostadas_v2.onnx": "ai_training/models/tostadas_v2.onnx",
+        "yolov11-python/tostadas_v2.names": "ai_training/models/tostadas_v2.names",
         "yolov11-python/data/class.names": "ai_training/models/class.names",
-        "yolov11-python/data/tostadas.names": "ai_training/models/tostadas.names",
         "yolov11-python/data/videos/road.mp4": "multimedia/videos/road.mp4",
         "yolov11-python/data/videos": "multimedia/videos"
     }
@@ -246,6 +248,13 @@ class YOLODetectionThread(QThread):
         self.source_file = resolve_path(source_file)
         self.detect_use_case = detect_use_case
         self.running = True
+        self.show_ok_toasts = True
+        self.show_burnt_toasts = True
+        
+        # Reset tracker and alert records when starting a new stream
+        if hasattr(self.detect_use_case, "reset_tracker"):
+            self.detect_use_case.reset_tracker()
+        self.alerted_ids = set()
 
     def run(self):
         cv_source = 0 if self.source_file == "0" else self.source_file
@@ -254,7 +263,7 @@ class YOLODetectionThread(QThread):
         if not cap.isOpened():
             print(f"No se pudo abrir la fuente de video: {cv_source}")
             return
-
+ 
         # Generar colores de clases dinámicamente
         try:
             class_names = self.detect_use_case.detector.get_class_names()
@@ -277,11 +286,29 @@ class YOLODetectionThread(QThread):
                 print(f"[Thread] Error al ejecutar inferencia YOLO: {e}")
                 detections = []
 
-            # Filtrar si se detectaron tostadas quemadas para emitir alertas e indicar cambios en IoT
-            burned_dets = [d for d in detections if "quemada" in d.label.lower()]
-            if len(burned_dets) > 0:
-                max_conf = max(d.confidence for d in burned_dets)
-                self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA QUEMADA! (Conf: {max_conf:.2f})")
+            # Filtrar tostadas quemadas activas cuya alerta no ha sido emitida por este hilo
+            new_alerts = False
+            for det in detections:
+                toast_id = getattr(det, "id", None)
+                state = getattr(det, "state", "unknown")
+                
+                if toast_id is not None:
+                    # Usando ToastTracker con IDs de tracking
+                    if state == "burnt" and toast_id not in self.alerted_ids:
+                        self.alerted_ids.add(toast_id)
+                        self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA #{toast_id} QUEMADA! (Conf: {det.confidence:.2f})")
+                        new_alerts = True
+                else:
+                    # Compatibilidad con mock detector sin ID (rate-limiting de 5 segundos)
+                    is_burnt = "quemada" in det.label.lower() or det.label.lower() == "tcq"
+                    if is_burnt:
+                        current_time = time.time()
+                        if not hasattr(self, "_last_mock_alert_time") or (current_time - self._last_mock_alert_time) > 5.0:
+                            self._last_mock_alert_time = current_time
+                            self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA QUEMADA! (Conf: {det.confidence:.2f})")
+                            new_alerts = True
+
+            if new_alerts:
                 self.iot_status_changed_signal.emit()
 
             # Dibujar rectángulos y etiquetas
@@ -289,15 +316,31 @@ class YOLODetectionThread(QThread):
                 left, top, width, height = det.bbox
                 label = det.label
                 confidence = det.confidence
+                toast_id = getattr(det, "id", None)
+                state = getattr(det, "state", "unknown")
                 
+                # Filtrar dibujo basado en la configuración del hilo
+                is_burnt = state == "burnt" or "quemada" in label.lower() or label.lower() == "tcq"
+                
+                if is_burnt and not self.show_burnt_toasts:
+                    continue
+                if not is_burnt and not self.show_ok_toasts:
+                    continue
+
                 # Resaltar tostada quemada en Rojo, otras clases en Verde (o dinámico)
-                if "quemada" in label.lower():
+                if is_burnt:
                     color = (0, 0, 255) # Rojo en BGR
                 else:
                     color = colors.get(label, (0, 255, 0)) # Verde o dinámico en BGR
                     
                 cv2.rectangle(image, (left, top), (left + width, top + height), color, 2)
-                label_text = f"{label} {confidence:.2f}"
+                
+                # Mostrar el ID del tracking en la etiqueta si está disponible
+                if toast_id is not None:
+                    label_text = f"Tostada #{toast_id} ({label}) {confidence:.2f}"
+                else:
+                    label_text = f"{label} {confidence:.2f}"
+                    
                 cv2.putText(image, label_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -347,6 +390,10 @@ class FactoryControlApp(QMainWindow):
         self.detect_use_case = DetectAndNotifyUseCase(self.detector, self.iot_controller, self.http_client)
         self.control_device_use_case = ControlDeviceUseCase(self.iot_controller)
         
+        # Filtrado de clases visible por defecto
+        self.show_ok_toasts = True
+        self.show_burnt_toasts = True
+        
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
@@ -386,7 +433,8 @@ class FactoryControlApp(QMainWindow):
 
         self.model_selector = QComboBox()
         self.model_selector.addItem("YOLOv11 Original (COCO)")
-        self.model_selector.addItem("YOLOv11 Tostadas (Custom)")
+        self.model_selector.addItem("YOLOv11 Tostadas V1 (Custom)")
+        self.model_selector.addItem("YOLOv11 Tostadas V2 (Custom)")
         self.model_selector.currentIndexChanged.connect(self.change_model)
         sidebar_layout.addWidget(self.model_selector)
 
@@ -494,28 +542,27 @@ class FactoryControlApp(QMainWindow):
         
         info_panel_layout.addWidget(card_alerts, stretch=2)
 
-        # CARD 2: SERVIDOR STATUS
-        card_server = QFrame()
-        card_server.setProperty("class", "Card")
-        server_layout = QVBoxLayout(card_server)
-        server_title = QLabel("SERVIDOR STATUS")
-        server_title.setStyleSheet("font-weight: bold; font-size: 12px;")
-        server_layout.addWidget(server_title)
+        # CARD 2: FILTRO DE DETECCIONES
+        card_filter = QFrame()
+        card_filter.setProperty("class", "Card")
+        filter_layout = QVBoxLayout(card_filter)
+        filter_title = QLabel("🔍 FILTRO DE DETECCIONES")
+        filter_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #00FFCC;")
+        filter_layout.addWidget(filter_title)
         
-        for stat, value in [("Server Status:", 75), ("Gestión Eventos:", 45), ("Alertas:", 15)]:
-            stat_layout = QHBoxLayout()
-            lbl = QLabel(stat)
-            lbl.setStyleSheet("font-size: 11px;")
-            stat_layout.addWidget(lbl)
-            
-            bar = QProgressBar()
-            bar.setValue(value)
-            bar.setTextVisible(False)
-            bar.setFixedHeight(8)
-            stat_layout.addWidget(bar)
-            server_layout.addLayout(stat_layout)
-            
-        info_panel_layout.addWidget(card_server, stretch=1)
+        # Botón Filtro Tostadas OK
+        self.btn_filter_ok = QPushButton()
+        self.btn_filter_ok.clicked.connect(self.toggle_filter_ok)
+        filter_layout.addWidget(self.btn_filter_ok)
+        
+        # Botón Filtro Tostadas Quemadas
+        self.btn_filter_burnt = QPushButton()
+        self.btn_filter_burnt.clicked.connect(self.toggle_filter_burnt)
+        filter_layout.addWidget(self.btn_filter_burnt)
+        
+        self.update_filter_button_styles()
+        
+        info_panel_layout.addWidget(card_filter, stretch=1)
 
         # CARD 3: DISPOSITIVOS IOT
         card_iot = QFrame()
@@ -557,6 +604,83 @@ class FactoryControlApp(QMainWindow):
 
         self.yolo_thread = None
         self.play_internal_target(default_source)
+
+    def toggle_filter_ok(self):
+        self.show_ok_toasts = not self.show_ok_toasts
+        self.update_filter_button_styles()
+        if self.yolo_thread is not None:
+            self.yolo_thread.show_ok_toasts = self.show_ok_toasts
+
+    def toggle_filter_burnt(self):
+        self.show_burnt_toasts = not self.show_burnt_toasts
+        self.update_filter_button_styles()
+        if self.yolo_thread is not None:
+            self.yolo_thread.show_burnt_toasts = self.show_burnt_toasts
+
+    def update_filter_button_styles(self):
+        # Botón Tostadas OK
+        if self.show_ok_toasts:
+            self.btn_filter_ok.setText("Tostadas OK: VISIBLES")
+            self.btn_filter_ok.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 255, 204, 0.15);
+                    color: #00FFCC;
+                    border: 1px solid #00FFCC;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: rgba(0, 255, 204, 0.25);
+                }
+            """)
+        else:
+            self.btn_filter_ok.setText("Tostadas OK: OCULTAS")
+            self.btn_filter_ok.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    color: #888888;
+                    border: 1px solid #555555;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 255, 255, 0.1);
+                }
+            """)
+
+        # Botón Tostadas Quemadas
+        if self.show_burnt_toasts:
+            self.btn_filter_burnt.setText("Tostadas Quemadas: VISIBLES")
+            self.btn_filter_burnt.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 255, 204, 0.15);
+                    color: #00FFCC;
+                    border: 1px solid #00FFCC;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: rgba(0, 255, 204, 0.25);
+                }
+            """)
+        else:
+            self.btn_filter_burnt.setText("Tostadas Quemadas: OCULTAS")
+            self.btn_filter_burnt.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    color: #888888;
+                    border: 1px solid #555555;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 255, 255, 0.1);
+                }
+            """)
 
     def toggle_toaster(self):
         is_on = self.iot_controller.get_status("rele_tostadora")
@@ -669,9 +793,13 @@ class FactoryControlApp(QMainWindow):
             self.current_names = "yolov11-python/data/class.names"
             print("[INFO] Frente cambiado al Modelo Original (YOLOv11 COCO)")
         elif index == 1:
-            self.current_model = "yolov11-python/tostadas.onnx"
-            self.current_names = "yolov11-python/data/tostadas.names"
-            print("[INFO] Frente cambiado al Modelo de Tostadas (Personalizado)")
+            self.current_model = "yolov11-python/tostadas_v1.onnx"
+            self.current_names = "yolov11-python/tostadas_v1.names"
+            print("[INFO] Frente cambiado al Modelo de Tostadas V1 (Personalizado)")
+        elif index == 2:
+            self.current_model = "yolov11-python/tostadas_v2.onnx"
+            self.current_names = "yolov11-python/tostadas_v2.names"
+            print("[INFO] Frente cambiado al Modelo de Tostadas V2 (Personalizado)")
             
         # Re-instanciar detector y caso de uso
         model_path = resolve_path(self.current_model)
@@ -732,6 +860,8 @@ class FactoryControlApp(QMainWindow):
             return
             
         self.yolo_thread = YOLODetectionThread(source_path, self.detect_use_case)
+        self.yolo_thread.show_ok_toasts = self.show_ok_toasts
+        self.yolo_thread.show_burnt_toasts = self.show_burnt_toasts
         self.yolo_thread.change_pixmap_signal.connect(self.update_image)
         self.yolo_thread.iot_status_changed_signal.connect(self.update_iot_status_labels)
         self.yolo_thread.burned_toast_alert_signal.connect(self.add_alert_log)

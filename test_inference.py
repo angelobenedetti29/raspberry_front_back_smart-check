@@ -18,7 +18,7 @@ def main():
         return
 
     # 2. Definir imagen de prueba
-    image_path = os.path.join("multimedia", "images", "zidane.jpg")
+    image_path = os.path.join("multimedia", "images", "tostadas_test.jpg")
     output_path = os.path.join("multimedia", "output", "test_result_inference.jpg")
     
     if not os.path.exists(image_path):
