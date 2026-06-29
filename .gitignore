@@ -7,6 +7,7 @@ __pycache__/
 
 # Environment files
 .env
+raspberry_front_back_smart-check\backend\.env
 
 # Virtual environments
 .venv/

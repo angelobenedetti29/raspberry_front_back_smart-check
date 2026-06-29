@@ -1,4 +1,5 @@
 import json
+# pyrefly: ignore [missing-import]
 import cv2
 import numpy as np
 import os
@@ -8,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
 
 # Domain & Use Cases
+from backend.domain.entities.lote_request import LoteRequest
+from uuid import UUID
+from datetime import datetime
 from backend.infrastructure.ai.yolo_detector import YoloDetector
 from backend.infrastructure.iot.mock_controller import MockIoTController
 from backend.infrastructure.http.requests_client import RequestsHttpClient
@@ -62,8 +66,8 @@ except Exception as e:
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
-central_lotes_base_url = os.getenv("CENTRAL_LOTES_BASE_URL", "")
-central_lotes_api_key = os.getenv("CENTRAL_LOTES_API_KEY", "")
+central_lotes_base_url = os.getenv("CENTRAL_LOTE_BASE_URL") or os.getenv("CENTRAL_LOTES_BASE_URL") or ""
+central_lotes_api_key = os.getenv("CENTRAL_LOTE_API_KEY") or os.getenv("CENTRAL_LOTES_API_KEY") or ""
 
 # Instantiate Use Cases
 detect_use_case = DetectAndNotifyUseCase(detector, iot_controller, http_client)
@@ -71,30 +75,67 @@ control_device_use_case = ControlDeviceUseCase(iot_controller)
 send_lote_use_case = SendLoteRequestUseCase(http_client, central_lotes_base_url, central_lotes_api_key)
 
 
+def parse_datetime(val: Any) -> datetime:
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        return datetime.fromisoformat(val.replace("Z", "+00:00"))
+    raise ValueError(f"Formato de fecha inválido: {val}")
+
+
+def parse_uuid(val: Any) -> UUID:
+    if isinstance(val, UUID):
+        return val
+    if isinstance(val, str):
+        return UUID(val)
+    raise ValueError(f"Formato UUID inválido: {val}")
+
+
 def finalize_lote_payload(lote_payload: Dict[str, Any]) -> Dict[str, Any]:
     required_fields = [
-        "id",
         "productoId",
-        "productoNombre",
         "turno",
         "inicioAt",
         "finAt",
         "totalUnidades",
         "correctos",
         "quemados",
+        "crudas",
         "correctosKg",
         "quemadosKg",
+        "crudosKg",
         "tempHorno1",
         "tempCombHorno1",
         "tempHorno2",
         "tempCombHorno2",
-        "velocidadHorno",
-        "createdAt",
-        "updatedAt",
+        "velocidadCinta",
     ]
     missing_fields = [field for field in required_fields if field not in lote_payload]
     if missing_fields:
         raise HTTPException(status_code=400, detail=f"Faltan campos obligatorios: {', '.join(missing_fields)}")
+
+    # Validar el payload utilizando la lógica de negocio de la entidad de dominio LoteRequest
+    try:
+        LoteRequest(
+            productoId=parse_uuid(lote_payload["productoId"]),
+            turno=str(lote_payload["turno"]),
+            inicioAt=parse_datetime(lote_payload["inicioAt"]),
+            finAt=parse_datetime(lote_payload["finAt"]),
+            totalUnidades=int(lote_payload["totalUnidades"]),
+            correctos=int(lote_payload["correctos"]),
+            quemados=int(lote_payload["quemados"]),
+            crudas=int(lote_payload["crudas"]),
+            correctosKg=float(lote_payload["correctosKg"]),
+            quemadosKg=float(lote_payload["quemadosKg"]),
+            crudosKg=float(lote_payload["crudosKg"]),
+            tempHorno1=float(lote_payload["tempHorno1"]),
+            tempCombHorno1=float(lote_payload["tempCombHorno1"]),
+            tempHorno2=float(lote_payload["tempHorno2"]),
+            tempCombHorno2=float(lote_payload["tempCombHorno2"]),
+            velocidadCinta=float(lote_payload["velocidadCinta"]),
+        )
+    except Exception as e:
+        raise ValueError(str(e))
 
     success = send_lote_use_case.execute(lote_payload)
     if not success:

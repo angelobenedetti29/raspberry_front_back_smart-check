@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import random
 import time
+from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                                QVBoxLayout, QPushButton, QLabel, QFrame, QProgressBar, 
                                QSpacerItem, QSizePolicy, QScrollArea, QComboBox)
@@ -242,6 +243,7 @@ class YOLODetectionThread(QThread):
     change_pixmap_signal = Signal(QImage)
     iot_status_changed_signal = Signal()
     burned_toast_alert_signal = Signal(str)
+    lote_completed_signal = Signal(dict)
 
     def __init__(self, source_file, detect_use_case):
         super().__init__()
@@ -256,6 +258,15 @@ class YOLODetectionThread(QThread):
             self.detect_use_case.reset_tracker()
         self.alerted_ids = set()
 
+        # Acumuladores de métricas del lote
+        self.inicio_at = datetime.now()
+        self.seen_toasts = {}
+        self.temperatures_horno1 = []
+        self.temperatures_comb1 = []
+        self.temperatures_horno2 = []
+        self.temperatures_comb2 = []
+        self.velocidades_cinta = []
+
     def run(self):
         cv_source = 0 if self.source_file == "0" else self.source_file
         cap = cv2.VideoCapture(cv_source)
@@ -263,7 +274,7 @@ class YOLODetectionThread(QThread):
         if not cap.isOpened():
             print(f"No se pudo abrir la fuente de video: {cv_source}")
             return
- 
+  
         # Generar colores de clases dinámicamente
         try:
             class_names = self.detect_use_case.detector.get_class_names()
@@ -271,6 +282,8 @@ class YOLODetectionThread(QThread):
             class_names = []
             
         colors = {name: (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for name in class_names}
+
+        self.last_toast_seen_time = time.time()
 
         while self.running:
             ret, frame = cap.read()
@@ -285,6 +298,41 @@ class YOLODetectionThread(QThread):
             except Exception as e:
                 print(f"[Thread] Error al ejecutar inferencia YOLO: {e}")
                 detections = []
+
+            # Registrar tostadas vistas y su estado final
+            has_visible_toasts = False
+            for det in detections:
+                toast_id = getattr(det, "id", None)
+                state = getattr(det, "state", "unknown")
+                if toast_id is not None:
+                    has_visible_toasts = True
+                    if toast_id not in self.seen_toasts:
+                        self.seen_toasts[toast_id] = state
+                    elif state == "burnt":
+                        self.seen_toasts[toast_id] = "burnt"
+
+            # Simular lecturas de sensores en tiempo real
+            self.temperatures_horno1.append(220.0 + random.uniform(-1.5, 1.5))
+            self.temperatures_comb1.append(315.0 + random.uniform(-2.0, 2.0))
+            self.temperatures_horno2.append(218.0 + random.uniform(-1.5, 1.5))
+            self.temperatures_comb2.append(312.0 + random.uniform(-2.0, 2.0))
+            self.velocidades_cinta.append(1.10 + random.uniform(-0.05, 0.05))
+
+            # Lógica de cierre automático por inactividad
+            if has_visible_toasts:
+                self.last_toast_seen_time = time.time()
+            elif self.seen_toasts and (time.time() - self.last_toast_seen_time > 10.0):
+                print("[Thread] Inactividad detectada (10s sin tostadas). Finalizando y enviando lote actual...")
+                self.emit_batch_metrics()
+                # Reiniciar acumuladores para el próximo lote
+                self.inicio_at = datetime.now()
+                self.seen_toasts.clear()
+                self.temperatures_horno1.clear()
+                self.temperatures_comb1.clear()
+                self.temperatures_horno2.clear()
+                self.temperatures_comb2.clear()
+                self.velocidades_cinta.clear()
+                self.last_toast_seen_time = time.time()
 
             # Filtrar tostadas quemadas activas cuya alerta no ha sido emitida por este hilo
             new_alerts = False
@@ -351,6 +399,75 @@ class YOLODetectionThread(QThread):
             self.change_pixmap_signal.emit(qt_image)
 
         cap.release()
+        if self.seen_toasts:
+            self.emit_batch_metrics()
+
+    def emit_batch_metrics(self):
+        if not self.seen_toasts:
+            return
+
+        fin_at = datetime.now()
+        
+        # Contar correctos, quemados, crudas
+        quemados_count = 0
+        correctos_count = 0
+        crudas_count = 0
+        
+        for t_id, state in self.seen_toasts.items():
+            if state == "burnt":
+                quemados_count += 1
+            else:
+                correctos_count += 1
+                
+        # Simular una cantidad pequeña de crudas a partir del total de correctos
+        if correctos_count > 0:
+            crudas_count = random.randint(0, min(3, correctos_count // 10 + 1))
+            correctos_count -= crudas_count
+            
+        total_unidades = correctos_count + quemados_count + crudas_count
+        
+        # Calcular pesos en Kg (usando un estimado de 0.5 Kg por tostada)
+        weight_per_toast = 0.50
+        correctos_kg = round(correctos_count * weight_per_toast, 2)
+        quemados_kg = round(quemados_count * weight_per_toast, 2)
+        crudos_kg = round(crudas_count * weight_per_toast, 2)
+        
+        # Calcular promedios de sensores
+        temp_h1 = round(sum(self.temperatures_horno1) / len(self.temperatures_horno1), 2) if self.temperatures_horno1 else 220.0
+        temp_c1 = round(sum(self.temperatures_comb1) / len(self.temperatures_comb1), 2) if self.temperatures_comb1 else 315.0
+        temp_h2 = round(sum(self.temperatures_horno2) / len(self.temperatures_horno2), 2) if self.temperatures_horno2 else 218.0
+        temp_c2 = round(sum(self.temperatures_comb2) / len(self.temperatures_comb2), 2) if self.temperatures_comb2 else 312.0
+        vel_cinta = round(sum(self.velocidades_cinta) / len(self.velocidades_cinta), 2) if self.velocidades_cinta else 1.10
+        
+        # Determinar turno
+        hour = self.inicio_at.hour
+        if 6 <= hour < 14:
+            turno = "mañana"
+        elif 14 <= hour < 22:
+            turno = "tarde"
+        else:
+            turno = "noche"
+            
+        payload = {
+            "productoId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
+            "turno": turno,
+            "inicioAt": self.inicio_at.isoformat() + "Z",
+            "finAt": fin_at.isoformat() + "Z",
+            "totalUnidades": total_unidades,
+            "correctos": correctos_count,
+            "quemados": quemados_count,
+            "crudas": crudas_count,
+            "correctosKg": correctos_kg,
+            "quemadosKg": quemados_kg,
+            "crudosKg": crudos_kg,
+            "tempHorno1": temp_h1,
+            "tempCombHorno1": temp_c1,
+            "tempHorno2": temp_h2,
+            "tempCombHorno2": temp_c2,
+            "velocidadCinta": vel_cinta
+        }
+        
+        self.lote_completed_signal.emit(payload)
 
     def stop(self):
         self.running = False
@@ -831,15 +948,31 @@ class FactoryControlApp(QMainWindow):
         if checked:
             self.play_internal_target("0")
         else:
-            if self.yolo_thread is not None and self.yolo_thread.isRunning():
-                self.yolo_thread.stop()
+            if self.yolo_thread is not None:
+                try:
+                    self.yolo_thread.change_pixmap_signal.disconnect()
+                    self.yolo_thread.lote_completed_signal.disconnect()
+                    self.yolo_thread.iot_status_changed_signal.disconnect()
+                    self.yolo_thread.burned_toast_alert_signal.disconnect()
+                except Exception:
+                    pass
+                if self.yolo_thread.isRunning():
+                    self.yolo_thread.stop()
             self.video_label.clear()
             self.video_label.setText("Cámara Apagada")
             self.video_label.setStyleSheet("background-color: #1E1E28; border-radius: 10px; color: #E0B0FF;")
 
     def play_internal_target(self, video_name):
-        if self.yolo_thread is not None and self.yolo_thread.isRunning():
-            self.yolo_thread.stop()
+        if self.yolo_thread is not None:
+            try:
+                self.yolo_thread.change_pixmap_signal.disconnect()
+                self.yolo_thread.lote_completed_signal.disconnect()
+                self.yolo_thread.iot_status_changed_signal.disconnect()
+                self.yolo_thread.burned_toast_alert_signal.disconnect()
+            except Exception:
+                pass
+            if self.yolo_thread.isRunning():
+                self.yolo_thread.stop()
             
         if video_name != "0":
             self.nav_buttons[0].setChecked(False)
@@ -865,7 +998,22 @@ class FactoryControlApp(QMainWindow):
         self.yolo_thread.change_pixmap_signal.connect(self.update_image)
         self.yolo_thread.iot_status_changed_signal.connect(self.update_iot_status_labels)
         self.yolo_thread.burned_toast_alert_signal.connect(self.add_alert_log)
+        self.yolo_thread.lote_completed_signal.connect(self.handle_lote_completed)
         self.yolo_thread.start()
+
+    @Slot(dict)
+    def handle_lote_completed(self, payload):
+        print(f"[GUI App] Lote completado. Enviando POST con payload: {payload}")
+        url = "http://localhost:8000/api/lotes/finalizar"
+        
+        # Enviar petición HTTP POST al backend local
+        success = self.http_client.post(url, payload)
+        if success:
+            print("[GUI App] Lote registrado exitosamente en el servidor central a través del backend.")
+            self.add_alert_log(f"¡LOTE REGISTRADO! Unidades: {payload['totalUnidades']} (OK: {payload['correctos']}, Q: {payload['quemados']}, C: {payload['crudas']})")
+        else:
+            print(f"[GUI App] Error al registrar el lote: {self.http_client.last_error}")
+            self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
 
     @Slot(QImage)
     def update_image(self, qt_image):
@@ -878,8 +1026,16 @@ class FactoryControlApp(QMainWindow):
         self.video_label.setPixmap(pixmap)
 
     def closeEvent(self, event):
-        if self.yolo_thread is not None and self.yolo_thread.isRunning():
-            self.yolo_thread.stop()
+        if self.yolo_thread is not None:
+            try:
+                self.yolo_thread.change_pixmap_signal.disconnect()
+                self.yolo_thread.lote_completed_signal.disconnect()
+                self.yolo_thread.iot_status_changed_signal.disconnect()
+                self.yolo_thread.burned_toast_alert_signal.disconnect()
+            except Exception:
+                pass
+            if self.yolo_thread.isRunning():
+                self.yolo_thread.stop()
         event.accept()
 
 if __name__ == "__main__":
