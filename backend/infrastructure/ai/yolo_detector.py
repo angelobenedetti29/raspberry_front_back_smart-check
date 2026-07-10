@@ -25,6 +25,13 @@ class YoloDetector(IImageDetector):
                 if not os.path.exists(model_path):
                     model_path = os.path.join(base_dir, "ai_training", "models", "yolo11n.onnx")
 
+        # Redirigir automáticamente de .onnx a .hef si hay NPU (Hailo) disponible y existe el archivo compilado .hef
+        if HAILO_AVAILABLE and model_path is not None and model_path.endswith('.onnx'):
+            hef_candidate = model_path[:-5] + '.hef'
+            if os.path.exists(hef_candidate):
+                print(f"[YoloDetector] NPU detectada. Redirigiendo {os.path.basename(model_path)} -> {os.path.basename(hef_candidate)}")
+                model_path = hef_candidate
+
         if names_path is None:
             # Intentar cargar las etiquetas que correspondan al modelo seleccionado
             if "tostadas_v2" in model_path:
