@@ -1,15 +1,39 @@
+import json
+# pyrefly: ignore [missing-import]
 import cv2
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import os
+from pathlib import Path
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
 
 # Domain & Use Cases
+from backend.domain.entities.lote_request import LoteRequest
+from uuid import UUID
+from datetime import datetime
 from backend.infrastructure.ai.yolo_detector import YoloDetector
 from backend.infrastructure.iot.mock_controller import MockIoTController
 from backend.infrastructure.http.requests_client import RequestsHttpClient
 from backend.use_cases.detect_and_notify import DetectAndNotifyUseCase
 from backend.use_cases.control_device import ControlDeviceUseCase
+from backend.use_cases.send_lote_request import SendLoteRequestUseCase
+
+
+def load_env_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_env_file(Path(__file__).resolve().parents[1] / ".env")
 
 app = FastAPI(
     title="YOLOv11 IoT Toast Detection API",
@@ -42,10 +66,95 @@ except Exception as e:
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
+central_lotes_base_url = os.getenv("CENTRAL_LOTE_BASE_URL") or os.getenv("CENTRAL_LOTES_BASE_URL") or ""
+central_lotes_api_key = os.getenv("CENTRAL_LOTE_API_KEY") or os.getenv("CENTRAL_LOTES_API_KEY") or ""
 
 # Instantiate Use Cases
 detect_use_case = DetectAndNotifyUseCase(detector, iot_controller, http_client)
 control_device_use_case = ControlDeviceUseCase(iot_controller)
+send_lote_use_case = SendLoteRequestUseCase(http_client, central_lotes_base_url, central_lotes_api_key)
+
+
+def parse_datetime(val: Any) -> datetime:
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        return datetime.fromisoformat(val.replace("Z", "+00:00"))
+    raise ValueError(f"Formato de fecha inválido: {val}")
+
+
+def parse_uuid(val: Any) -> UUID:
+    if isinstance(val, UUID):
+        return val
+    if isinstance(val, str):
+        return UUID(val)
+    raise ValueError(f"Formato UUID inválido: {val}")
+
+
+def finalize_lote_payload(lote_payload: Dict[str, Any]) -> Dict[str, Any]:
+    required_fields = [
+        "productoId",
+        "turno",
+        "inicioAt",
+        "finAt",
+        "totalUnidades",
+        "correctos",
+        "quemados",
+        "crudas",
+        "correctosKg",
+        "quemadosKg",
+        "crudosKg",
+        "tempHorno1",
+        "tempCombHorno1",
+        "tempHorno2",
+        "tempCombHorno2",
+        "velocidadCinta",
+    ]
+    missing_fields = [field for field in required_fields if field not in lote_payload]
+    if missing_fields:
+        raise HTTPException(status_code=400, detail=f"Faltan campos obligatorios: {', '.join(missing_fields)}")
+
+    # Validar el payload utilizando la lógica de negocio de la entidad de dominio LoteRequest
+    try:
+        LoteRequest(
+            productoId=parse_uuid(lote_payload["productoId"]),
+            turno=str(lote_payload["turno"]),
+            inicioAt=parse_datetime(lote_payload["inicioAt"]),
+            finAt=parse_datetime(lote_payload["finAt"]),
+            totalUnidades=int(lote_payload["totalUnidades"]),
+            correctos=int(lote_payload["correctos"]),
+            quemados=int(lote_payload["quemados"]),
+            crudas=int(lote_payload["crudas"]),
+            correctosKg=float(lote_payload["correctosKg"]),
+            quemadosKg=float(lote_payload["quemadosKg"]),
+            crudosKg=float(lote_payload["crudosKg"]),
+            tempHorno1=float(lote_payload["tempHorno1"]),
+            tempCombHorno1=float(lote_payload["tempCombHorno1"]),
+            tempHorno2=float(lote_payload["tempHorno2"]),
+            tempCombHorno2=float(lote_payload["tempCombHorno2"]),
+            velocidadCinta=float(lote_payload["velocidadCinta"]),
+        )
+    except Exception as e:
+        raise ValueError(str(e))
+
+    success = send_lote_use_case.execute(lote_payload)
+    if not success:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "No se pudo registrar el lote en el servidor central.",
+                "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+                "status_code": send_lote_use_case.get_last_status_code(),
+                "error": send_lote_use_case.get_last_error(),
+                "response": send_lote_use_case.get_last_response_text(),
+            },
+        )
+
+    return {
+        "status": "success",
+        "message": "Lote enviado al servidor central.",
+        "target": f"{central_lotes_base_url.rstrip('/')}/api/v1/lotes",
+    }
 
 
 @app.get("/api/status")
@@ -101,8 +210,22 @@ def toggle_device(device_id: str):
         raise HTTPException(status_code=404, detail=f"Dispositivo '{device_id}' no encontrado.")
 
 
+@app.post("/api/lotes/finalizar")
+def finalizar_lote(lote_payload: Dict[str, Any]):
+    try:
+        return finalize_lote_payload(lote_payload)
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Falta el campo obligatorio: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/detect")
-async def detect_toast(file: UploadFile = File(...), notification_url: str = None):
+async def detect_toast(
+    file: UploadFile = File(...),
+    notification_url: str | None = Form(None),
+    lote_payload: str | None = Form(None),
+):
     """
     Recibe una imagen a través de HTTP POST, realiza la inferencia con YOLOv11
     y notifica/actualiza el hardware de IoT si se detecta una tostada quemada.
@@ -143,13 +266,26 @@ async def detect_toast(file: UploadFile = File(...), notification_url: str = Non
             for det in detections
         )
             
-        return {
+        response_payload = {
             "detections": results,
             "summary": {
                 "total_detected": len(results),
                 "burned_toast_found": has_burned
             }
         }
+
+        if lote_payload:
+            try:
+                parsed_payload = json.loads(lote_payload)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="El campo lote_payload debe ser un JSON válido.") from exc
+
+            if not isinstance(parsed_payload, dict):
+                raise HTTPException(status_code=400, detail="El campo lote_payload debe ser un objeto JSON.")
+
+            response_payload["lote"] = finalize_lote_payload(parsed_payload)
+
+        return response_payload
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en inferencia: {str(e)}")
