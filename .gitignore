@@ -1,8 +1,13 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
+
+# Environment files
+.env
+raspberry_front_back_smart-check/backend/.env
 
 # Virtual environments
 .venv/
