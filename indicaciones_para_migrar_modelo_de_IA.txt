@@ -1,0 +1,96 @@
+# INSTRUCCIONES PARA EL AGENTE DE IA (MIGRACIÓN ONNX A HEF EN WINDOWS)
+
+## Contexto y Rol
+Eres un asistente de IA especializado en Machine Learning y desarrollo de software. Tu objetivo es guiar al usuario paso a paso (o ejecutar los comandos si tienes acceso a la terminal de Windows) para compilar dos modelos de detección de objetos en formato ONNX (`tostadas_v1.onnx` y `tostadas_v2.onnx`) al formato propietario `.hef` (Hailo Executable Format) optimizado para la NPU Hailo-8L.
+
+## Recursos del Entorno
+* **Sistema Operativo:** Windows 10/11 en la PC local.
+* **Hardware:** GPU NVIDIA RTX 4060.
+* **Archivos origen:** `tostadas_v1.onnx` y `tostadas_v2.onnx` (YOLOv8/v11).
+* **Herramienta requerida:** Hailo Dataflow Compiler (Gratuito, requiere registro en Hailo).
+
+---
+
+## Tareas a Realizar (Paso a Paso)
+
+### TAREA 1: Habilitar y Configurar WSL2 (Ubuntu)
+El compilador de Hailo requiere Linux. Debes configurar Ubuntu dentro de Windows mediante WSL2.
+1. Ejecuta en PowerShell (como administrador):
+   ```powershell
+   wsl --install
+   ```
+2. Indica al usuario que reinicie la PC si es la primera vez que se instala.
+3. Una vez en la terminal de Ubuntu WSL2, prepara las dependencias del sistema:
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   sudo apt install python3-pip python3-virtualenv python3-tk -y
+   ```
+
+### TAREA 2: Descargar e Instalar Hailo Software Suite
+El usuario se registrará en la [Hailo Developer Zone](https://hailo.ai/developer-zone/) y descargará el instalador `.whl` (Python Wheel) correspondiente a Python 3.10 para Linux x86_64.
+1. Crea un entorno virtual de Python 3.10 en la terminal de WSL2:
+   ```bash
+   virtualenv -p python3.10 hailo_env
+   source hailo_env/bin/activate
+   ```
+2. Localiza el archivo descargado en la carpeta de descargas de Windows (accesible desde WSL en `/mnt/c/Users/<TuUsuario>/Downloads/`) e instálalo:
+   ```bash
+   pip install /mnt/c/Users/<TuUsuarioWindows>/Downloads/hailo_dataflow_compiler-*.whl
+   ```
+
+### TAREA 3: Procesar el Dataset de Calibración
+Para cuantizar el modelo a INT8 sin perder precisión, genera un archivo de calibración `.npy` a partir de un lote de 50 a 100 imágenes reales de tostadas del dataset del usuario.
+1. Escribe y ejecuta un script de Python llamado `prepare_calibration.py` en WSL2 que procese las imágenes en lote a un tamaño de 640x640 en formato RGB:
+   ```python
+   import cv2
+   import numpy as np
+   import glob
+
+   images = []
+   # Lee las imágenes desde la carpeta de Windows compartida
+   for img_path in glob.glob("/mnt/c/Ruta/A/Tus/Fotos/*.jpg")[:100]:
+       img = cv2.imread(img_path)
+       if img is not None:
+           img = cv2.resize(img, (640, 640))
+           img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+           images.append(img)
+
+   np.save("calib_dataset.npy", np.array(images, dtype=np.uint8))
+   print("Dataset de calibración creado con éxito: calib_dataset.npy")
+   ```
+
+### TAREA 4: Parsear y Compilar los Modelos ONNX a HEF
+Ejecuta la conversión para tostadas_v1 y tostadas_v2:
+
+1. **Parsear el archivo ONNX a HAR:**
+   ```bash
+   hailo parser yolo --hw-arch hailo8l --model-name tostadas_v2 tostadas_v2.onnx
+   ```
+2. **Generar y correr el Script de Cuantización (Python):**
+   ```python
+   from hailo_sdk_client import ClientRunner
+   import numpy as np
+
+   # Cargar el HAR parseado
+   runner = ClientRunner(har="tostadas_v2.har")
+   
+   # Cargar la calibración
+   calib_data = np.load("calib_dataset.npy")
+   
+   # Optimizar/Cuantizar
+   runner.optimize(calib_data)
+   
+   # Guardar HAR optimizado
+   runner.save_har("tostadas_v2_quantized.har")
+   ```
+3. **Compilar el archivo HEF final:**
+   ```bash
+   hailo compiler --hw-arch hailo8l tostadas_v2_quantized.har --output tostadas_v2.hef
+   ```
+
+### TAREA 5: Devolver los archivos HEF al usuario
+Indica al usuario cómo recuperar los archivos `.hef` compilados. En Windows, explícale que puede abrir el explorador de archivos e ingresar a la dirección de red:
+`\\wsl$\Ubuntu\home\<usuario_wsl>\`
+
+---
+**Por favor, comienza por la TAREA 1 y guíame interactivamente a través del proceso.**
