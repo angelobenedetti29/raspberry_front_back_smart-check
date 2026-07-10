@@ -275,13 +275,13 @@ class YOLODetectionThread(QThread):
             print(f"No se pudo abrir la fuente de video: {cv_source}")
             return
   
-        # Generar colores de clases dinámicamente
+        # Generar colores de clases de forma determinista
         try:
             class_names = self.detect_use_case.detector.get_class_names()
         except Exception:
             class_names = []
             
-        colors = {name: (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for name in class_names}
+        colors = {name: (0, 255, 0) for name in class_names}  # Todas las tostadas OK en verde
 
         self.last_toast_seen_time = time.time()
 
@@ -427,12 +427,14 @@ class YOLODetectionThread(QThread):
         total_unidades = correctos_count + quemados_count + crudas_count
         
         # Calcular pesos en Kg (usando un estimado de 0.5 Kg por tostada)
-        weight_per_toast = 0.50
+        # PESO PROMEDIO PARA UNA TOSTADA
+        weight_per_toast = 0.025
         correctos_kg = round(correctos_count * weight_per_toast, 2)
         quemados_kg = round(quemados_count * weight_per_toast, 2)
         crudos_kg = round(crudas_count * weight_per_toast, 2)
         
         # Calcular promedios de sensores
+        # Como leemos la info del horno?
         temp_h1 = round(sum(self.temperatures_horno1) / len(self.temperatures_horno1), 2) if self.temperatures_horno1 else 220.0
         temp_c1 = round(sum(self.temperatures_comb1) / len(self.temperatures_comb1), 2) if self.temperatures_comb1 else 315.0
         temp_h2 = round(sum(self.temperatures_horno2) / len(self.temperatures_horno2), 2) if self.temperatures_horno2 else 218.0
@@ -443,7 +445,7 @@ class YOLODetectionThread(QThread):
         hour = self.inicio_at.hour
         if 6 <= hour < 14:
             turno = "mañana"
-        elif 14 <= hour < 22:
+        elif 14 <= hour < 19:
             turno = "tarde"
         else:
             turno = "noche"
