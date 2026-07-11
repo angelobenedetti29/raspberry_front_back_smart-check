@@ -13,7 +13,7 @@ except ImportError:
     HAILO_AVAILABLE = False
 
 class YoloDetector(IImageDetector):
-    def __init__(self, model_path: str = None, names_path: str = None, confidence_threshold: float = 0.25, nms_threshold: float = 0.4):
+    def __init__(self, model_path: str = None, names_path: str = None, confidence_threshold: float = 0.60, nms_threshold: float = 0.4):
         # Default paths relative to workspace root
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         
@@ -45,6 +45,14 @@ class YoloDetector(IImageDetector):
         self.names_path = names_path
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
+        
+        # Umbrales específicos por clase para optimizar detección
+        self.class_thresholds = {
+            "tcq": 0.30,
+            "tostada quemada": 0.30,
+            "tcok": 0.60,
+            "tostadas ok": 0.60
+        }
         
         self.image_size = 640
         
@@ -136,14 +144,16 @@ class YoloDetector(IImageDetector):
                 class_detections = detections[cid]
                 for det in class_detections:
                     ymin, xmin, ymax, xmax, confidence = det
-                    if confidence >= self.confidence_threshold:
+                    label = self.names[cid] if cid < len(self.names) else f"class_{cid}"
+                    thresh = self.class_thresholds.get(label.lower(), self.confidence_threshold)
+                    
+                    if confidence >= thresh:
                         # Convertir coordenadas normalizadas a píxeles
                         left = int(xmin * w_img)
                         top = int(ymin * h_img)
                         width = int((xmax - xmin) * w_img)
                         height = int((ymax - ymin) * h_img)
                         
-                        label = self.names[cid] if cid < len(self.names) else f"class_{cid}"
                         results.append(
                             DetectionResult(
                                 label=label,
@@ -175,7 +185,10 @@ class YoloDetector(IImageDetector):
                 class_id = max_idx[1]
                 confidence = classes_score[class_id]
 
-                if confidence > self.confidence_threshold:
+                label = self.names[class_id] if class_id < len(self.names) else f"class_{class_id}"
+                thresh = self.class_thresholds.get(label.lower(), self.confidence_threshold)
+
+                if confidence > thresh:
                     confs.append(float(confidence))
                     class_ids.append(int(class_id))
                     
@@ -188,7 +201,8 @@ class YoloDetector(IImageDetector):
                     boxes.append([left, top, width, height])
 
             # Apply NMS
-            indexes = cv2.dnn.NMSBoxes(boxes, confs, self.confidence_threshold, self.nms_threshold)
+            min_thresh = min(self.class_thresholds.values()) if self.class_thresholds else self.confidence_threshold
+            indexes = cv2.dnn.NMSBoxes(boxes, confs, min_thresh, self.nms_threshold)
             
             results = []
             # Support both OpenCV NMS formats (sometimes a flat list, sometimes nested list)
