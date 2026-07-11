@@ -33,8 +33,8 @@ def main():
         print("[ERROR] No se encontraron imágenes en el directorio especificado.")
         return
 
-    # Limitar a un lote óptimo para la calibración (entre 50 y 100 imágenes)
-    max_images = min(100, len(img_paths))
+    # Limitar a un lote óptimo para la calibración (entre 50 y 500 imágenes)
+    max_images = min(500, len(img_paths))
     selected_paths = img_paths[:max_images]
     print(f"[INFO] Seleccionando {max_images} imágenes para la calibración...")
 
