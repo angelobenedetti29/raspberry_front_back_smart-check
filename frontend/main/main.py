@@ -310,6 +310,12 @@ class YOLODetectionThread(QThread):
         if not cap.isOpened():
             print(f"No se pudo abrir la fuente de video: {cv_source}")
             return
+            
+        # Determinar FPS del video original o usar 30 por defecto
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 100:
+            fps = 30.0
+        self.frame_time = 1.0 / fps
   
         # Generar colores de clases de forma determinista
         try:
@@ -322,6 +328,7 @@ class YOLODetectionThread(QThread):
         self.last_toast_seen_time = time.time()
 
         while self.running:
+            start_time = time.time()
             ret, frame = cap.read()
             if not ret:
                 break
@@ -433,6 +440,12 @@ class YOLODetectionThread(QThread):
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             
             self.change_pixmap_signal.emit(qt_image)
+            
+            # Limitar la velocidad de reproducción de video a sus FPS naturales
+            elapsed = time.time() - start_time
+            sleep_time = self.frame_time - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         cap.release()
         if self.seen_toasts:

@@ -41,6 +41,14 @@ class ToastTracker:
             return 0.0
         return interArea / unionArea
 
+    def _calculate_distance(self, boxA: Tuple[int, int, int, int], boxB: Tuple[int, int, int, int]) -> float:
+        """Calcula la distancia euclidiana entre los centros de dos cajas."""
+        cA_x = boxA[0] + boxA[2] / 2
+        cA_y = boxA[1] + boxA[3] / 2
+        cB_x = boxB[0] + boxB[2] / 2
+        cB_y = boxB[1] + boxB[3] / 2
+        return ((cA_x - cB_x) ** 2 + (cA_y - cB_y) ** 2) ** 0.5
+
     def update(self, detections) -> Tuple[List[TrackedToast], List[TrackedToast]]:
         """
         Actualiza el tracker con las nuevas detecciones del fotograma.
@@ -51,23 +59,30 @@ class ToastTracker:
         new_detections = list(detections)
         tracked_ids = list(self.tracked_toasts.keys())
 
-        # 1. Calcular matriz de IoU entre detecciones del fotograma y tostadas bajo seguimiento
+        # 1. Calcular coincidencia entre las tostadas trackeadas y las nuevas detecciones
         matches = []
         for t_id in tracked_ids:
             tracked_toast = self.tracked_toasts[t_id]
             for det_idx, det in enumerate(new_detections):
                 iou = self._calculate_iou(tracked_toast.bbox, det.bbox)
                 if iou >= self.iou_threshold:
-                    matches.append((iou, t_id, det_idx))
+                    # Prioridad alta para coincidencia por IoU
+                    matches.append((1.0 + iou, t_id, det_idx))
+                else:
+                    # Fallback a distancia de centros si no hay suficiente overlap
+                    dist = self._calculate_distance(tracked_toast.bbox, det.bbox)
+                    if dist < 150.0:  # Máxima distancia permitida de 150px
+                        score = 1.0 - (dist / 150.0)
+                        matches.append((score, t_id, det_idx))
 
-        # Ordenar coincidencias por IoU de manera descendente
+        # Ordenar coincidencias por score de manera descendente
         matches.sort(key=lambda x: x[0], reverse=True)
 
         matched_track_ids = set()
         matched_det_indices = set()
 
         # 2. Emparejamiento codicioso (Greedy Matching)
-        for iou, t_id, det_idx in matches:
+        for score, t_id, det_idx in matches:
             if t_id in matched_track_ids or det_idx in matched_det_indices:
                 continue
 
@@ -86,18 +101,17 @@ class ToastTracker:
             
             if tracked_toast.state == "burnt":
                 # La tostada quemada no puede des-quemarse
-                tracked_toast.label = "Tostada Quemada"
+                tracked_toast.label = "TCQ"
             else:
                 if is_burnt_detection:
                     tracked_toast.consecutive_burnt_frames += 1
-                else:
-                    # Reducir o reiniciar contador de quemado si se detecta ok
-                    tracked_toast.consecutive_burnt_frames = max(0, tracked_toast.consecutive_burnt_frames - 1)
 
-                # Transición a quemado si se alcanza el umbral de confirmación
-                if tracked_toast.consecutive_burnt_frames >= self.min_burnt_confirm_frames:
+                # Transición a quemado si se alcanza el umbral de confirmación (3 frames en total)
+                if tracked_toast.consecutive_burnt_frames >= 3:
                     tracked_toast.state = "burnt"
-                    tracked_toast.label = "Tostada Quemada"
+                    tracked_toast.label = "TCQ"
+                else:
+                    tracked_toast.label = "TCOK"
 
         # 3. Manejo de tostadas bajo seguimiento no emparejadas (perdidas en este fotograma)
         for t_id in tracked_ids:
@@ -118,10 +132,12 @@ class ToastTracker:
                 if is_burnt_detection and self.min_burnt_confirm_frames <= 1:
                     initial_state = "burnt"
 
+                initial_label = "TCQ" if initial_state == "burnt" else "TCOK"
+
                 new_toast = TrackedToast(
                     id=self.next_id,
                     bbox=det.bbox,
-                    label=det.label,
+                    label=initial_label,
                     confidence=det.confidence,
                     state=initial_state,
                     consecutive_burnt_frames=consecutive_burnt
@@ -143,8 +159,8 @@ class ToastTracker:
         newly_burnt_toasts = []
 
         for t_id, tracked_toast in self.tracked_toasts.items():
-            # Solo consideramos "visible" si no lleva demasiados fotogramas perdida
-            if tracked_toast.frames_since_seen == 0:
+            # Permitir mostrar la tostada incluso si se perdió por hasta 3 fotogramas (evita parpadeo de desaparición)
+            if tracked_toast.frames_since_seen <= 3:
                 active_toasts.append(tracked_toast)
                 
             # Identificar si acaba de pasar a quemado y requiere disparar la alarma
