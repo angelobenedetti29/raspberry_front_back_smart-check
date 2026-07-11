@@ -5,14 +5,14 @@
   "classes": 2,
   "background_class": false,
   "reg_layer": [
-    "/model.23/cv2.0/cv2.0.2/Conv",
-    "/model.23/cv2.1/cv2.1.2/Conv",
-    "/model.23/cv2.2/cv2.2.2/Conv"
+    "tostadas_v2/conv51",
+    "tostadas_v2/conv62",
+    "tostadas_v2/conv77"
   ],
   "cls_layer": [
-    "/model.23/cv3.0/cv3.0.2/Conv",
-    "/model.23/cv3.1/cv3.1.2/Conv",
-    "/model.23/cv3.2/cv3.2.2/Conv"
+    "tostadas_v2/conv54",
+    "tostadas_v2/conv65",
+    "tostadas_v2/conv80"
   ],
   "image_dims": [
     640,
