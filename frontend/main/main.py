@@ -981,6 +981,18 @@ class FactoryControlApp(QMainWindow):
         # Re-instanciar detector y caso de uso
         model_path = resolve_path(self.current_model)
         names_path = resolve_path(self.current_names)
+        
+        # Liberar explícitamente el detector anterior antes de crear el nuevo
+        if hasattr(self, 'detector') and self.detector is not None:
+            print("[GUI App] Liberando recursos del detector anterior...")
+            if hasattr(self.detector, 'release_hailo'):
+                try:
+                    self.detector.release_hailo()
+                except Exception as e:
+                    print(f"[GUI App] Error al liberar NPU: {e}")
+            del self.detector
+            self.detector = None
+            
         try:
             self.detector = YoloDetector(model_path=model_path, names_path=names_path)
             self.detector_status = "Hailo NPU Activo" if getattr(self.detector, 'use_hailo', False) else "ONNX Activo"

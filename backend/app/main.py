@@ -50,19 +50,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Instantiate Infrastructure adapters
-try:
-    detector = YoloDetector()
-    print("[Backend] Detector YOLO inicializado correctamente.")
-except Exception as e:
-    print(f"[Backend] Advertencia al cargar YOLO (se usará detección simulada si falla): {e}")
-    # Create a mock detector if model not found to prevent server crash during tests
-    class MockDetector:
-        def detect_frame(self, frame):
-            return []
-        def get_class_names(self):
-            return ['Tostada Quemada', 'tostadas ok']
-    detector = MockDetector()
+# Lazy Detector proxy to avoid locking the Hailo NPU on startup
+class LazyYoloDetector:
+    def __init__(self):
+        self._detector = None
+
+    @property
+    def detector(self):
+        if self._detector is None:
+            try:
+                self._detector = YoloDetector()
+                print("[Backend] Detector YOLO NPU/ONNX cargado perezosamente con éxito.")
+            except Exception as e:
+                print(f"[Backend] Error al cargar YOLO en inicialización diferida: {e}")
+                class MockDetector:
+                    def detect_frame(self, frame):
+                        return []
+                    def get_class_names(self):
+                        return ['Tostada Quemada', 'tostadas ok']
+                    @property
+                    def model_path(self):
+                        return "Mocked (Error)"
+                self._detector = MockDetector()
+        return self._detector
+
+    def detect_frame(self, frame):
+        return self.detector.detect_frame(frame)
+
+    def get_class_names(self):
+        return self.detector.get_class_names()
+
+    def release_hailo(self):
+        if self._detector is not None and hasattr(self._detector, "release_hailo"):
+            self._detector.release_hailo()
+
+    @property
+    def model_path(self):
+        return getattr(self.detector, "model_path", "Mocked")
+
+detector = LazyYoloDetector()
 
 iot_controller = MockIoTController()
 http_client = RequestsHttpClient()
