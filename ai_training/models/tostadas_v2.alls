@@ -1,2 +1,2 @@
 normalization1 = normalization([0.0, 0.0, 0.0], [255.0, 255.0, 255.0])
-nms_postprocess("/mnt/c/Users/angel/OneDrive/Desktop/tesis/raspberry_front_back_smart-check/ai_training/models/tostadas_v2_nms.json", meta_arch=yolov8, engine=cpu)
+nms_postprocess("/mnt/c/Users/angel/OneDrive/Desktop/tesis/raspberry_front_back_smart-check/ai_training/models/tostadas_v2_nms.json", meta_arch=yolov8, engine=nn)
