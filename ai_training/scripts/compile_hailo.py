@@ -82,6 +82,14 @@ def main():
         print(f"[INFO] Cargando HAR: {har_path}")
         runner = ClientRunner(har=har_path)
         
+        # Cargar el model script (.alls) para inyectar NMS y Normalización antes de optimizar
+        alls_path = os.path.join(models_dir, "tostadas_v2.alls")
+        if os.path.exists(alls_path):
+            print(f"[INFO] Cargando script de modelo (.alls): {alls_path}")
+            runner.load_model_script(alls_path)
+        else:
+            print(f"[WARN] No se encontró el script de modelo en: {alls_path}")
+            
         print(f"[INFO] Cargando dataset de calibración: {calib_path}")
         calib_data = np.load(calib_path)
         
