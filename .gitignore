@@ -28,3 +28,7 @@ multimedia/videos/
 *.har
 *.npy
 ai_training/runs/
+
+# Streaming pipeline runtime data
+streaming/data/*
+!streaming/data/.gitkeep

@@ -1,0 +1,16 @@
+[Unit]
+Description=MediaMTX RTSP and WebRTC server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mediamtx
+Group=mediamtx
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
