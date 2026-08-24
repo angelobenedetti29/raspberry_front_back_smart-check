@@ -1,0 +1,20 @@
+[Unit]
+Description=Tesis horno autonomous video streaming
+After=network-online.target mediamtx.service
+Wants=network-online.target mediamtx.service
+
+[Service]
+Type=simple
+User=tesis
+Group=video
+WorkingDirectory=/opt/raspberry_front_back_smart-check
+EnvironmentFile=/etc/tesis/streaming.env
+Environment=STREAMING_INFERENCE=true
+Environment=STREAMING_REQUIRE_HAILO=true
+ExecStart=/usr/bin/python3 -m streaming.main --inference --require-hailo
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

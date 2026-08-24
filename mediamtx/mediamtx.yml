@@ -1,0 +1,25 @@
+# MediaMTX configuration for the horno stream.
+# Keep explicit origins in production; localhost origins are for local development.
+logLevel: info
+
+rtsp: yes
+# Python publishes locally; do not expose the RTSP ingest port on the network.
+rtspAddress: 127.0.0.1:8554
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigins:
+  - http://localhost:3000
+  - http://127.0.0.1:3000
+
+# Interface addresses are advertised as ICE candidates locally. Configure this
+# only when a real public hostname or IP must be advertised to remote clients.
+
+# WHEP/WebRTC requires ICE candidates reachable by the browser. Keep UDP 8189
+# open, and add TURN here when the Raspberry Pi is behind a restrictive NAT.
+webrtcLocalUDPAddress: :8189
+
+paths:
+  horno:
+    # The Python process publishes rtsp://127.0.0.1:8554/horno.
+    source: publisher
