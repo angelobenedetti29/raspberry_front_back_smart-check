@@ -1089,17 +1089,19 @@ class FactoryControlApp(QMainWindow):
     @Slot(dict)
     def handle_lote_completed(self, payload):
         print(f"[GUI App] Lote completado. Enviando POST con payload: {payload}")
-        url = "http://localhost:8000/api/lotes/finalizar"
-        
+        url = "http://localhost:8080/api/v1/lotes"
+        headers = {
+            "X-API-Key": "dev-secret-key"
+        }
         # Enviar petición HTTP POST al backend local
-        success = self.http_client.post(url, payload)
+        success = self.http_client.post(url, payload, headers=headers)
         if success:
             print("[GUI App] Lote registrado exitosamente en el servidor central a través del backend.")
             self.add_alert_log(f"¡LOTE REGISTRADO! Unidades: {payload['totalUnidades']} (OK: {payload['correctos']}, Q: {payload['quemados']}, C: {payload['crudas']})")
         else:
             print(f"[GUI App] Error al registrar el lote: {self.http_client.last_error}")
-            self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
-
+        self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
+    
     @Slot(QImage)
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image).scaled(
