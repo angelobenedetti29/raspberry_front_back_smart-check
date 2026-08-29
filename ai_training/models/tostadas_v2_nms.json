@@ -1,0 +1,28 @@
+{
+  "nms_scores_th": 0.001,
+  "nms_iou_th": 0.7,
+  "max_proposals_per_class": 100,
+  "classes": 2,
+  "background_removal": false,
+  "image_dims": [
+    640,
+    640
+  ],
+  "bbox_decoders": [
+    {
+      "stride": 8,
+      "reg_layer": "tostadas_v2/conv51",
+      "cls_layer": "tostadas_v2/conv54"
+    },
+    {
+      "stride": 16,
+      "reg_layer": "tostadas_v2/conv62",
+      "cls_layer": "tostadas_v2/conv65"
+    },
+    {
+      "stride": 32,
+      "reg_layer": "tostadas_v2/conv77",
+      "cls_layer": "tostadas_v2/conv80"
+    }
+  ]
+}

@@ -1,9 +1,17 @@
 import sys
 import os
+import threading
+
+# Añadir el directorio raíz del proyecto al sys.path para poder importar el backend
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
 import cv2
 import numpy as np
 import random
 import time
+
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                                QVBoxLayout, QPushButton, QLabel, QFrame, QProgressBar, 
@@ -12,7 +20,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 
 # Backend imports (Clean Architecture)
-from backend.infrastructure.ai.yolo_detector import YoloDetector
+from backend.infrastructure.ai.yolo_detector import YoloDetector, HAILO_AVAILABLE
 from backend.infrastructure.iot.mock_controller import MockIoTController
 from backend.infrastructure.http.requests_client import RequestsHttpClient
 from backend.use_cases.detect_and_notify import DetectAndNotifyUseCase
@@ -21,33 +29,53 @@ from backend.use_cases.control_device import ControlDeviceUseCase
 def resolve_path(relative_path):
     """
     Resolves paths to make sure they work when executed from either:
-    1. The project root (yolov11-python)
-    2. The parent directory of the project root (test_tesis_00)
+    1. The project root (yolov11-python / raspberry_front_back_smart-check)
+    2. The frontend or frontend/main directory
     3. Anywhere else, by checking alternative directory structures.
     """
     if not relative_path:
         return relative_path
 
-    # Try exact path first
-    if os.path.exists(relative_path):
+    # Obtener el directorio raíz del proyecto (padre del directorio frontend/)
+    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # Si es una ruta absoluta y existe, devolverla directamente
+    if os.path.isabs(relative_path) and os.path.exists(relative_path):
         return relative_path
 
-    # Standardize path separators
+    # 1. Comprobar si existe tal cual relativa al CWD
+    if os.path.exists(relative_path):
+        return os.path.abspath(relative_path)
+
+    # 2. Comprobar si existe relativa a root_dir
+    path_in_root = os.path.join(root_dir, relative_path)
+    if os.path.exists(path_in_root):
+        return path_in_root
+
+    # Normalizar separadores
     normalized = relative_path.replace("\\", "/")
 
-    # If it starts with yolov11-python/ but we are already in yolov11-python, strip the prefix
+    # Si empieza con yolov11-python/, probar a quitar el prefijo
     if normalized.startswith("yolov11-python/"):
         stripped = normalized[len("yolov11-python/"):]
+        # Buscar en CWD
         if os.path.exists(stripped):
-            return stripped
+            return os.path.abspath(stripped)
+        # Buscar en root_dir
+        path_stripped_in_root = os.path.join(root_dir, stripped)
+        if os.path.exists(path_stripped_in_root):
+            return path_stripped_in_root
 
-    # If we are in parent directory and need to prepend yolov11-python/
-    if not normalized.startswith("yolov11-python/"):
+    # Si no empieza con yolov11-python/, probar a añadir el prefijo
+    else:
         prefixed = f"yolov11-python/{normalized}"
         if os.path.exists(prefixed):
-            return prefixed
+            return os.path.abspath(prefixed)
+        path_prefixed_in_root = os.path.join(root_dir, prefixed)
+        if os.path.exists(path_prefixed_in_root):
+            return path_prefixed_in_root
 
-    # Specific mapping for different directory layouts inside yolov11-python
+    # Mapeo específico para diferentes distribuciones de carpetas
     mapping = {
         "yolov11-python/yolo11n.onnx": "ai_training/models/yolo11n.onnx",
         "yolov11-python/tostadas_v1.onnx": "ai_training/models/tostadas_v1.onnx",
@@ -59,18 +87,27 @@ def resolve_path(relative_path):
         "yolov11-python/data/videos": "multimedia/videos"
     }
     
-    # Try mapping
+    # Probar mapeos
     for key, val in mapping.items():
         if normalized == key or normalized == key.replace("yolov11-python/", ""):
-            # Check val directly
+            # 1. Comprobar val relativo a CWD
             if os.path.exists(val):
-                return val
-            # Check with prefix
+                return os.path.abspath(val)
+            # 2. Comprobar val relativo a root_dir
+            path_val_in_root = os.path.join(root_dir, val)
+            if os.path.exists(path_val_in_root):
+                return path_val_in_root
+            # 3. Comprobar con prefijo yolov11-python/ en CWD
             prefixed_val = f"yolov11-python/{val}"
             if os.path.exists(prefixed_val):
-                return prefixed_val
+                return os.path.abspath(prefixed_val)
+            # 4. Comprobar con prefijo en root_dir
+            path_prefixed_val_in_root = os.path.join(root_dir, prefixed_val)
+            if os.path.exists(path_prefixed_val_in_root):
+                return path_prefixed_val_in_root
 
     return relative_path
+
 
 QSS = """
 QMainWindow {
@@ -274,6 +311,12 @@ class YOLODetectionThread(QThread):
         if not cap.isOpened():
             print(f"No se pudo abrir la fuente de video: {cv_source}")
             return
+            
+        # Determinar FPS del video original o usar 30 por defecto
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 100:
+            fps = 30.0
+        self.frame_time = 1.0 / fps
   
         # Generar colores de clases de forma determinista
         try:
@@ -286,6 +329,7 @@ class YOLODetectionThread(QThread):
         self.last_toast_seen_time = time.time()
 
         while self.running:
+            start_time = time.time()
             ret, frame = cap.read()
             if not ret:
                 break
@@ -397,6 +441,12 @@ class YOLODetectionThread(QThread):
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             
             self.change_pixmap_signal.emit(qt_image)
+            
+            # Limitar la velocidad de reproducción de video a sus FPS naturales
+            elapsed = time.time() - start_time
+            sleep_time = self.frame_time - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         cap.release()
         if self.seen_toasts:
@@ -477,6 +527,8 @@ class YOLODetectionThread(QThread):
 
 
 class FactoryControlApp(QMainWindow):
+    lote_prod_result_signal = Signal(bool, str)
+
     def __init__(self, default_source="road.mp4"):
         super().__init__()
         self.setWindowTitle("SISTEMA DE CONTROL INDUSTRIAL - PYSIDE6")
@@ -486,17 +538,34 @@ class FactoryControlApp(QMainWindow):
         # Inicializar componentes del Backend (Clean Architecture)
         self.iot_controller = MockIoTController()
         self.http_client = RequestsHttpClient()
-        
-        # Rutas iniciales de modelos
-        self.current_model = "yolov11-python/yolo11n.onnx"
-        self.current_names = "yolov11-python/data/class.names"
+        self.lote_prod_result_signal.connect(self.handle_lote_prod_result)
+        # Detección automática de plataforma (Raspberry Pi con chip Hailo)
+        is_pi = False
+        try:
+            if os.path.exists('/sys/firmware/devicetree/base/model'):
+                with open('/sys/firmware/devicetree/base/model', 'r') as f:
+                    is_pi = 'raspberry pi' in f.read().lower()
+        except Exception:
+            pass
+
+        self.is_running_on_npu = is_pi and HAILO_AVAILABLE
+
+        # Rutas iniciales de modelos según la plataforma
+        if self.is_running_on_npu:
+            self.current_model = "/usr/share/hailo-models/yolov8s_h8l.hef"
+            self.current_names = "yolov11-python/data/class.names"
+            print("[INFO] Raspberry Pi con NPU detectada. Usando YOLOv8s HEF por defecto.")
+        else:
+            self.current_model = "yolov11-python/yolo11n.onnx"
+            self.current_names = "yolov11-python/data/class.names"
+            print("[INFO] PC o simulador detectado. Usando YOLOv11 ONNX por defecto.")
         
         # Instanciar el detector de YOLO (Capa de infraestructura)
         try:
             model_path = resolve_path(self.current_model)
             names_path = resolve_path(self.current_names)
             self.detector = YoloDetector(model_path=model_path, names_path=names_path)
-            self.detector_status = "ONNX Activo"
+            self.detector_status = "Hailo NPU Activo" if getattr(self.detector, 'use_hailo', False) else "ONNX Activo"
         except Exception as e:
             print(f"[GUI App] Error al inicializar detector YOLO: {e}")
             class MockDetector:
@@ -554,6 +623,8 @@ class FactoryControlApp(QMainWindow):
         self.model_selector.addItem("YOLOv11 Original (COCO)")
         self.model_selector.addItem("YOLOv11 Tostadas V1 (Custom)")
         self.model_selector.addItem("YOLOv11 Tostadas V2 (Custom)")
+        self.model_selector.addItem("YOLOv8s NPU (Hailo-8L COCO)")
+        self.model_selector.setCurrentIndex(3 if getattr(self, 'is_running_on_npu', False) else 0)
         self.model_selector.currentIndexChanged.connect(self.change_model)
         sidebar_layout.addWidget(self.model_selector)
 
@@ -919,13 +990,29 @@ class FactoryControlApp(QMainWindow):
             self.current_model = "yolov11-python/tostadas_v2.onnx"
             self.current_names = "yolov11-python/tostadas_v2.names"
             print("[INFO] Frente cambiado al Modelo de Tostadas V2 (Personalizado)")
+        elif index == 3:
+            self.current_model = "/usr/share/hailo-models/yolov8s_h8l.hef"
+            self.current_names = "yolov11-python/data/class.names"
+            print("[INFO] Frente cambiado al Modelo Acelerado por NPU (YOLOv8s Hailo-8L COCO)")
             
         # Re-instanciar detector y caso de uso
         model_path = resolve_path(self.current_model)
         names_path = resolve_path(self.current_names)
+        
+        # Liberar explícitamente el detector anterior antes de crear el nuevo
+        if hasattr(self, 'detector') and self.detector is not None:
+            print("[GUI App] Liberando recursos del detector anterior...")
+            if hasattr(self.detector, 'release_hailo'):
+                try:
+                    self.detector.release_hailo()
+                except Exception as e:
+                    print(f"[GUI App] Error al liberar NPU: {e}")
+            del self.detector
+            self.detector = None
+            
         try:
             self.detector = YoloDetector(model_path=model_path, names_path=names_path)
-            self.detector_status = "ONNX Activo"
+            self.detector_status = "Hailo NPU Activo" if getattr(self.detector, 'use_hailo', False) else "ONNX Activo"
         except Exception as e:
             print(f"[GUI App] Error al cambiar detector YOLO: {e}")
             class MockDetector:
@@ -1003,13 +1090,24 @@ class FactoryControlApp(QMainWindow):
         self.yolo_thread.lote_completed_signal.connect(self.handle_lote_completed)
         self.yolo_thread.start()
 
+    @Slot(bool, str)
+    def handle_lote_prod_result(self, success, message):
+        if success:
+            print(f"[GUI App] Lote registrado exitosamente en producción. {message}")
+            self.add_alert_log(f"¡LOTE ENVIADO A PROD! {message}")
+        else:
+            print(f"[GUI App] Error al registrar el lote en producción: {message}")
+            self.add_alert_log(f"Error en prod: {message}")
+
     @Slot(dict)
     def handle_lote_completed(self, payload):
         print(f"[GUI App] Lote completado. Enviando POST con payload: {payload}")
-        url = "http://localhost:8000/api/lotes/finalizar"
-        
+        url = "http://localhost:8080/api/v1/lotes"
+        headers = {
+            "X-API-Key": "dev-smartcheck"
+        }
         # Enviar petición HTTP POST al backend local
-        success = self.http_client.post(url, payload)
+        success = self.http_client.post(url, payload, headers=headers)
         if success:
             print("[GUI App] Lote registrado exitosamente en el servidor central a través del backend.")
             self.add_alert_log(f"¡LOTE REGISTRADO! Unidades: {payload['totalUnidades']} (OK: {payload['correctos']}, Q: {payload['quemados']}, C: {payload['crudas']})")
@@ -1017,6 +1115,26 @@ class FactoryControlApp(QMainWindow):
             print(f"[GUI App] Error al registrar el lote: {self.http_client.last_error}")
             self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
 
+        # Enviar petición HTTP POST al backend productivo de Render (en un hilo separado para no bloquear la GUI)
+        def send_to_prod():
+            import requests
+            prod_url = "https://backend-smart-check-automation-go.onrender.com/api/v1/lotes"
+            prod_headers = {
+                "Content-Type": "application/json",
+                "X-API-Key": "dev-smartcheck"
+            }
+            try:
+                print(f"[GUI App] Enviando lote a producción de forma asíncrona: {prod_url}")
+                response = requests.post(prod_url, json=payload, headers=prod_headers, timeout=10)
+                if response.status_code in [200, 201, 202, 204]:
+                    self.lote_prod_result_signal.emit(True, f"Unidades: {payload['totalUnidades']}")
+                else:
+                    self.lote_prod_result_signal.emit(False, f"HTTP {response.status_code}")
+            except Exception as e:
+                self.lote_prod_result_signal.emit(False, str(e)[:50])
+
+        threading.Thread(target=send_to_prod, daemon=True).start()
+    
     @Slot(QImage)
     def update_image(self, qt_image):
         pixmap = QPixmap.fromImage(qt_image).scaled(

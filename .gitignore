@@ -23,3 +23,8 @@ multimedia/videos/
 *.mp4
 *.avi
 *.mkv
+
+# Hailo DFC intermediate files, datasets and YOLO training runs
+*.har
+*.npy
+ai_training/runs/

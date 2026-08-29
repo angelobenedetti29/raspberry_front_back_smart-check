@@ -2,13 +2,15 @@ import sys
 import os
 
 # Asegurar que el path del proyecto esté en el PYTHONPATH
-sys.path.append(r"c:\Users\UsuarioCaja\Desktop\Proyectos\raspberry_front_back_smart-check")
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 # Inicializar una aplicación de Qt básica para poder usar QObjects y Signals
 from PySide6.QtCore import QCoreApplication
 app = QCoreApplication(sys.argv)
 
-from frontend.main import YOLODetectionThread
+from frontend.main.main import YOLODetectionThread
 
 class MockDetector:
     def get_class_names(self):
