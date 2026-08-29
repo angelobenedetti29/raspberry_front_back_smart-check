@@ -1,5 +1,6 @@
 import sys
 import os
+import threading
 
 # Añadir el directorio raíz del proyecto al sys.path para poder importar el backend
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -526,6 +527,8 @@ class YOLODetectionThread(QThread):
 
 
 class FactoryControlApp(QMainWindow):
+    lote_prod_result_signal = Signal(bool, str)
+
     def __init__(self, default_source="road.mp4"):
         super().__init__()
         self.setWindowTitle("SISTEMA DE CONTROL INDUSTRIAL - PYSIDE6")
@@ -535,6 +538,7 @@ class FactoryControlApp(QMainWindow):
         # Inicializar componentes del Backend (Clean Architecture)
         self.iot_controller = MockIoTController()
         self.http_client = RequestsHttpClient()
+        self.lote_prod_result_signal.connect(self.handle_lote_prod_result)
         # Detección automática de plataforma (Raspberry Pi con chip Hailo)
         is_pi = False
         try:
@@ -1086,12 +1090,21 @@ class FactoryControlApp(QMainWindow):
         self.yolo_thread.lote_completed_signal.connect(self.handle_lote_completed)
         self.yolo_thread.start()
 
+    @Slot(bool, str)
+    def handle_lote_prod_result(self, success, message):
+        if success:
+            print(f"[GUI App] Lote registrado exitosamente en producción. {message}")
+            self.add_alert_log(f"¡LOTE ENVIADO A PROD! {message}")
+        else:
+            print(f"[GUI App] Error al registrar el lote en producción: {message}")
+            self.add_alert_log(f"Error en prod: {message}")
+
     @Slot(dict)
     def handle_lote_completed(self, payload):
         print(f"[GUI App] Lote completado. Enviando POST con payload: {payload}")
         url = "http://localhost:8080/api/v1/lotes"
         headers = {
-            "X-API-Key": "dev-secret-key"
+            "X-API-Key": "dev-smartcheck"
         }
         # Enviar petición HTTP POST al backend local
         success = self.http_client.post(url, payload, headers=headers)
@@ -1100,7 +1113,27 @@ class FactoryControlApp(QMainWindow):
             self.add_alert_log(f"¡LOTE REGISTRADO! Unidades: {payload['totalUnidades']} (OK: {payload['correctos']}, Q: {payload['quemados']}, C: {payload['crudas']})")
         else:
             print(f"[GUI App] Error al registrar el lote: {self.http_client.last_error}")
-        self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
+            self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
+
+        # Enviar petición HTTP POST al backend productivo de Render (en un hilo separado para no bloquear la GUI)
+        def send_to_prod():
+            import requests
+            prod_url = "https://backend-smart-check-automation-go.onrender.com/api/v1/lotes"
+            prod_headers = {
+                "Content-Type": "application/json",
+                "X-API-Key": "dev-smartcheck"
+            }
+            try:
+                print(f"[GUI App] Enviando lote a producción de forma asíncrona: {prod_url}")
+                response = requests.post(prod_url, json=payload, headers=prod_headers, timeout=10)
+                if response.status_code in [200, 201, 202, 204]:
+                    self.lote_prod_result_signal.emit(True, f"Unidades: {payload['totalUnidades']}")
+                else:
+                    self.lote_prod_result_signal.emit(False, f"HTTP {response.status_code}")
+            except Exception as e:
+                self.lote_prod_result_signal.emit(False, str(e)[:50])
+
+        threading.Thread(target=send_to_prod, daemon=True).start()
     
     @Slot(QImage)
     def update_image(self, qt_image):
