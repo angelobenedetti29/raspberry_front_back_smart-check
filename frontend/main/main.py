@@ -10,13 +10,17 @@ import cv2
 import numpy as np
 import random
 import time
+import threading
 
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                                QVBoxLayout, QPushButton, QLabel, QFrame, QProgressBar, 
                                QSpacerItem, QSizePolicy, QScrollArea, QComboBox)
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
+
+from streaming.config import StreamConfig
+from streaming.publisher import FFmpegPublisher
 
 # Backend imports (Clean Architecture)
 from backend.infrastructure.ai.yolo_detector import YoloDetector, HAILO_AVAILABLE
@@ -24,6 +28,22 @@ from backend.infrastructure.iot.mock_controller import MockIoTController
 from backend.infrastructure.http.requests_client import RequestsHttpClient
 from backend.use_cases.detect_and_notify import DetectAndNotifyUseCase
 from backend.use_cases.control_device import ControlDeviceUseCase
+
+
+class PreviewOnlyPublisher:
+    """Bounded no-op publisher used when streaming configuration is invalid."""
+
+    def __init__(self, config):
+        self.config = config
+
+    def start(self):
+        pass
+
+    def publish(self, _frame):
+        return True
+
+    def stop(self):
+        pass
 
 def resolve_path(relative_path):
     """
@@ -106,6 +126,13 @@ def resolve_path(relative_path):
                 return path_prefixed_val_in_root
 
     return relative_path
+
+
+def validate_stream_config(config):
+    """Validate frontend constraints in addition to StreamConfig's checks."""
+    if config.pixel_format == "yuv420p" and (config.width % 2 or config.height % 2):
+        raise ValueError("width y height deben ser pares para yuv420p")
+    return config
 
 
 QSS = """
@@ -281,11 +308,20 @@ class YOLODetectionThread(QThread):
     burned_toast_alert_signal = Signal(str)
     lote_completed_signal = Signal(dict)
 
-    def __init__(self, source_file, detect_use_case):
+    def __init__(self, source_file, detect_use_case, stream_config=None,
+                 capture_factory=None, publisher_factory=None):
         super().__init__()
         self.source_file = resolve_path(source_file)
         self.detect_use_case = detect_use_case
+        self.stream_config = validate_stream_config(
+            stream_config if stream_config is not None else StreamConfig.from_env()
+        )
+        self.capture_factory = capture_factory or cv2.VideoCapture
+        self.publisher_factory = publisher_factory or FFmpegPublisher
+        self.capture = None
+        self.publisher = None
         self.running = True
+        self._stop_event = threading.Event()
         self.show_ok_toasts = True
         self.show_burnt_toasts = True
         
@@ -305,149 +341,180 @@ class YOLODetectionThread(QThread):
 
     def run(self):
         cv_source = 0 if self.source_file == "0" else self.source_file
-        cap = cv2.VideoCapture(cv_source)
-        
-        if not cap.isOpened():
-            print(f"No se pudo abrir la fuente de video: {cv_source}")
-            return
-            
-        # Determinar FPS del video original o usar 30 por defecto
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps <= 0 or fps > 100:
-            fps = 30.0
-        self.frame_time = 1.0 / fps
-  
-        # Generar colores de clases de forma determinista
+        cap = None
+        publisher = None
         try:
-            class_names = self.detect_use_case.detector.get_class_names()
-        except Exception:
-            class_names = []
-            
-        colors = {name: (0, 255, 0) for name in class_names}  # Todas las tostadas OK en verde
+            # Both resources belong to the worker.  In particular, the GUI never
+            # releases a capture while OpenCV may still be inside read().
+            cap = self.capture = self.capture_factory(cv_source)
+            publisher = self.publisher = self.publisher_factory(self.stream_config)
 
-        self.last_toast_seen_time = time.time()
+            if not cap.isOpened():
+                print(f"No se pudo abrir la fuente de video: {cv_source}")
+                return
 
-        while self.running:
-            start_time = time.time()
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            image = frame.copy()
-            
-            # Ejecutar el Caso de Uso de Detección e IoT
+            # The publisher must not be started until the source is usable.
+            if self._stop_event.is_set():
+                return
             try:
-                detections = self.detect_use_case.execute(image)
-            except Exception as e:
-                print(f"[Thread] Error al ejecutar inferencia YOLO: {e}")
-                detections = []
+                publisher.start()
+            except Exception as exc:
+                # A local preview is still useful when FFmpeg is unavailable.
+                print(f"[Thread] No se pudo iniciar el publisher RTSP: {exc}")
 
-            # Registrar tostadas vistas y su estado final
-            has_visible_toasts = False
-            for det in detections:
-                toast_id = getattr(det, "id", None)
-                state = getattr(det, "state", "unknown")
-                if toast_id is not None:
-                    has_visible_toasts = True
-                    if toast_id not in self.seen_toasts:
-                        self.seen_toasts[toast_id] = state
-                    elif state == "burnt":
-                        self.seen_toasts[toast_id] = "burnt"
+            self.frame_time = 1.0 / self.stream_config.fps
 
-            # Simular lecturas de sensores en tiempo real
-            self.temperatures_horno1.append(220.0 + random.uniform(-1.5, 1.5))
-            self.temperatures_comb1.append(315.0 + random.uniform(-2.0, 2.0))
-            self.temperatures_horno2.append(218.0 + random.uniform(-1.5, 1.5))
-            self.temperatures_comb2.append(312.0 + random.uniform(-2.0, 2.0))
-            self.velocidades_cinta.append(1.10 + random.uniform(-0.05, 0.05))
+            # Generar colores de clases de forma determinista
+            try:
+                class_names = self.detect_use_case.detector.get_class_names()
+            except Exception:
+                class_names = []
 
-            # Lógica de cierre automático por inactividad
-            if has_visible_toasts:
-                self.last_toast_seen_time = time.time()
-            elif self.seen_toasts and (time.time() - self.last_toast_seen_time > 10.0):
-                print("[Thread] Inactividad detectada (10s sin tostadas). Finalizando y enviando lote actual...")
-                self.emit_batch_metrics()
-                # Reiniciar acumuladores para el próximo lote
-                self.inicio_at = datetime.now()
-                self.seen_toasts.clear()
-                self.temperatures_horno1.clear()
-                self.temperatures_comb1.clear()
-                self.temperatures_horno2.clear()
-                self.temperatures_comb2.clear()
-                self.velocidades_cinta.clear()
-                self.last_toast_seen_time = time.time()
+            colors = {name: (0, 255, 0) for name in class_names}  # Todas las tostadas OK en verde
 
-            # Filtrar tostadas quemadas activas cuya alerta no ha sido emitida por este hilo
-            new_alerts = False
-            for det in detections:
-                toast_id = getattr(det, "id", None)
-                state = getattr(det, "state", "unknown")
-                
-                if toast_id is not None:
-                    # Usando ToastTracker con IDs de tracking
-                    if state == "burnt" and toast_id not in self.alerted_ids:
-                        self.alerted_ids.add(toast_id)
-                        self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA #{toast_id} QUEMADA! (Conf: {det.confidence:.2f})")
-                        new_alerts = True
-                else:
-                    # Compatibilidad con mock detector sin ID (rate-limiting de 5 segundos)
-                    is_burnt = "quemada" in det.label.lower() or det.label.lower() == "tcq"
-                    if is_burnt:
-                        current_time = time.time()
-                        if not hasattr(self, "_last_mock_alert_time") or (current_time - self._last_mock_alert_time) > 5.0:
-                            self._last_mock_alert_time = current_time
-                            self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA QUEMADA! (Conf: {det.confidence:.2f})")
+            self.last_toast_seen_time = time.time()
+
+            while self.running and not self._stop_event.is_set():
+                start_time = time.time()
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                image = frame.copy()
+                # Ejecutar el Caso de Uso de Detección e IoT
+                try:
+                    detections = self.detect_use_case.execute(image)
+                except Exception as e:
+                    print(f"[Thread] Error al ejecutar inferencia YOLO: {e}")
+                    detections = []
+
+                # Registrar tostadas vistas y su estado final
+                has_visible_toasts = False
+                for det in detections:
+                    toast_id = getattr(det, "id", None)
+                    state = getattr(det, "state", "unknown")
+                    if toast_id is not None:
+                        has_visible_toasts = True
+                        if toast_id not in self.seen_toasts:
+                            self.seen_toasts[toast_id] = state
+                        elif state == "burnt":
+                            self.seen_toasts[toast_id] = "burnt"
+
+                # Simular lecturas de sensores en tiempo real
+                self.temperatures_horno1.append(220.0 + random.uniform(-1.5, 1.5))
+                self.temperatures_comb1.append(315.0 + random.uniform(-2.0, 2.0))
+                self.temperatures_horno2.append(218.0 + random.uniform(-1.5, 1.5))
+                self.temperatures_comb2.append(312.0 + random.uniform(-2.0, 2.0))
+                self.velocidades_cinta.append(1.10 + random.uniform(-0.05, 0.05))
+
+                # Lógica de cierre automático por inactividad
+                if has_visible_toasts:
+                    self.last_toast_seen_time = time.time()
+                elif self.seen_toasts and (time.time() - self.last_toast_seen_time > 10.0):
+                    print("[Thread] Inactividad detectada (10s sin tostadas). Finalizando y enviando lote actual...")
+                    self.emit_batch_metrics()
+                    self.inicio_at = datetime.now()
+                    self.seen_toasts.clear()
+                    self.temperatures_horno1.clear()
+                    self.temperatures_comb1.clear()
+                    self.temperatures_horno2.clear()
+                    self.temperatures_comb2.clear()
+                    self.velocidades_cinta.clear()
+                    self.last_toast_seen_time = time.time()
+
+                # Filtrar tostadas quemadas activas cuya alerta no ha sido emitida por este hilo
+                new_alerts = False
+                for det in detections:
+                    toast_id = getattr(det, "id", None)
+                    state = getattr(det, "state", "unknown")
+
+                    if toast_id is not None:
+                        if state == "burnt" and toast_id not in self.alerted_ids:
+                            self.alerted_ids.add(toast_id)
+                            self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA #{toast_id} QUEMADA! (Conf: {det.confidence:.2f})")
                             new_alerts = True
+                    else:
+                        is_burnt = "quemada" in det.label.lower() or det.label.lower() == "tcq"
+                        if is_burnt:
+                            current_time = time.time()
+                            if not hasattr(self, "_last_mock_alert_time") or (current_time - self._last_mock_alert_time) > 5.0:
+                                self._last_mock_alert_time = current_time
+                                self.burned_toast_alert_signal.emit(f"¡ALERTA TOSTADA QUEMADA! (Conf: {det.confidence:.2f})")
+                                new_alerts = True
 
-            if new_alerts:
-                self.iot_status_changed_signal.emit()
+                if new_alerts:
+                    self.iot_status_changed_signal.emit()
 
-            # Dibujar rectángulos y etiquetas
-            for det in detections:
-                left, top, width, height = det.bbox
-                label = det.label
-                confidence = det.confidence
-                toast_id = getattr(det, "id", None)
-                state = getattr(det, "state", "unknown")
-                
-                # Filtrar dibujo basado en la configuración del hilo
-                is_burnt = state == "burnt" or "quemada" in label.lower() or label.lower() == "tcq"
-                
-                if is_burnt and not self.show_burnt_toasts:
-                    continue
-                if not is_burnt and not self.show_ok_toasts:
-                    continue
+                # Dibujar rectángulos y etiquetas
+                for det in detections:
+                    left, top, width, height = det.bbox
+                    label = det.label
+                    confidence = det.confidence
+                    toast_id = getattr(det, "id", None)
+                    state = getattr(det, "state", "unknown")
 
-                # Resaltar tostada quemada en Rojo, otras clases en Verde (o dinámico)
-                if is_burnt:
-                    color = (0, 0, 255) # Rojo en BGR
-                else:
-                    color = colors.get(label, (0, 255, 0)) # Verde o dinámico en BGR
-                    
-                cv2.rectangle(image, (left, top), (left + width, top + height), color, 2)
-                
-                # Mostrar el ID del tracking en la etiqueta si está disponible
-                if toast_id is not None:
-                    label_text = f"Tostada #{toast_id} ({label}) {confidence:.2f}"
-                else:
-                    label_text = f"{label} {confidence:.2f}"
-                    
-                cv2.putText(image, label_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    is_burnt = state == "burnt" or "quemada" in label.lower() or label.lower() == "tcq"
+                    if is_burnt and not self.show_burnt_toasts:
+                        continue
+                    if not is_burnt and not self.show_ok_toasts:
+                        continue
 
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_image.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            
-            self.change_pixmap_signal.emit(qt_image)
-            
-            # Limitar la velocidad de reproducción de video a sus FPS naturales
-            elapsed = time.time() - start_time
-            sleep_time = self.frame_time - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+                    color = (0, 0, 255) if is_burnt else colors.get(label, (0, 255, 0))
+                    cv2.rectangle(image, (left, top), (left + width, top + height), color, 2)
+                    if toast_id is not None:
+                        label_text = f"Tostada #{toast_id} ({label}) {confidence:.2f}"
+                    else:
+                        label_text = f"{label} {confidence:.2f}"
+                    cv2.putText(image, label_text, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cap.release()
+                # This is the one canonical frame for both RTSP and the local preview.
+                output = cv2.resize(
+                    image,
+                    (self.stream_config.width, self.stream_config.height),
+                    interpolation=cv2.INTER_AREA,
+                )
+                if output.ndim == 2:
+                    output = cv2.cvtColor(output, cv2.COLOR_GRAY2BGR)
+                elif output.ndim != 3 or output.shape[2] != 3:
+                    raise ValueError("la salida de vídeo no tiene tres canales BGR")
+                if output.dtype != np.uint8:
+                    output = output.astype(np.uint8)
+                output = np.ascontiguousarray(output)
+
+                try:
+                    published = publisher.publish(output)
+                    if published is False:
+                        print("[Thread] Publisher RTSP rechazó un frame; continúa la vista local")
+                except Exception as exc:
+                    print(f"[Thread] Error publicando frame RTSP: {exc}")
+
+                rgb_image = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb_image.shape
+                qt_image = QImage(
+                    rgb_image.data, w, h, ch * w, QImage.Format_RGB888
+                ).copy()
+                self.change_pixmap_signal.emit(qt_image)
+
+                # Event.wait is interruptible, unlike time.sleep.
+                elapsed = time.time() - start_time
+                sleep_time = self.frame_time - elapsed
+                if sleep_time > 0:
+                    self._stop_event.wait(sleep_time)
+        except Exception as exc:
+            print(f"[Thread] Error en el procesamiento de video: {exc}")
+        finally:
+            # Keep this order: stop any FFmpeg activity before releasing input.
+            if publisher is not None:
+                try:
+                    publisher.stop()
+                except Exception as exc:
+                    print(f"[Thread] Error al detener el publisher RTSP: {exc}")
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception as exc:
+                    print(f"[Thread] Error al liberar la captura: {exc}")
+
         if self.seen_toasts:
             self.emit_batch_metrics()
 
@@ -522,7 +589,7 @@ class YOLODetectionThread(QThread):
 
     def stop(self):
         self.running = False
-        self.wait()
+        self._stop_event.set()
 
 
 class FactoryControlApp(QMainWindow):
@@ -789,6 +856,13 @@ class FactoryControlApp(QMainWindow):
         self.update_iot_status_labels()
 
         self.yolo_thread = None
+        self._shutdown_thread = None
+        self._pending_action = None
+        self._closing_requested = False
+        self._recovery_required = False
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setSingleShot(True)
+        self._shutdown_timer.timeout.connect(self._on_shutdown_timeout)
         self.play_internal_target(default_source)
 
     def toggle_filter_ok(self):
@@ -974,6 +1048,20 @@ class FactoryControlApp(QMainWindow):
 
     # Lógica de cambio de modelo dinámico
     def change_model(self, index):
+        if self._recovery_required:
+            self._show_recovery_required()
+            return
+
+        active_worker = (
+            (self.yolo_thread is not None and self.yolo_thread.isRunning())
+            or self._shutdown_thread is not None
+        )
+        stream_config, publisher_factory = self._stream_setup(
+            allow_preview_fallback=not active_worker
+        )
+        if stream_config is None:
+            return
+
         if index == 0:
             self.current_model = "yolov11-python/yolo11n.onnx"
             self.current_names = "yolov11-python/data/class.names"
@@ -991,11 +1079,37 @@ class FactoryControlApp(QMainWindow):
             self.current_names = "yolov11-python/data/class.names"
             print("[INFO] Frente cambiado al Modelo Acelerado por NPU (YOLOv8s Hailo-8L COCO)")
             
-        # Re-instanciar detector y caso de uso
         model_path = resolve_path(self.current_model)
         names_path = resolve_path(self.current_names)
-        
-        # Liberar explícitamente el detector anterior antes de crear el nuevo
+
+        # Keep the exact active source, rather than reconstructing a gallery
+        # filename from it after the asynchronous shutdown.
+        active_source = None
+        if self.yolo_thread is not None and self.yolo_thread.isRunning():
+            active_source = self.yolo_thread.source_file
+            if active_source != "0":
+                active_source = os.path.abspath(active_source)
+
+        if active_source is not None:
+            self._request_thread_shutdown(
+                pending_action=lambda: self._finish_model_change(
+                    model_path, names_path, active_source,
+                    stream_config, publisher_factory,
+                )
+            )
+            return
+
+        self._finish_model_change(
+            model_path, names_path, active_source,
+            stream_config, publisher_factory,
+        )
+
+    def _finish_model_change(self, model_path, names_path, active_source,
+                             stream_config, publisher_factory):
+        """Apply a model change only after the previous worker has finished."""
+        # This method is only used as the finished callback for a running
+        # worker, or directly when no worker is active.  A timeout clears the
+        # pending action, so this release cannot race a live capture.
         if hasattr(self, 'detector') and self.detector is not None:
             print("[GUI App] Liberando recursos del detector anterior...")
             if hasattr(self.detector, 'release_hailo'):
@@ -1019,47 +1133,210 @@ class FactoryControlApp(QMainWindow):
 
         self.detect_use_case = DetectAndNotifyUseCase(self.detector, self.iot_controller, self.http_client)
 
-        # Reiniciar hilo
-        if self.yolo_thread is not None and self.yolo_thread.isRunning():
-            source = self.yolo_thread.source_file
-            if source == "0":
-                self.play_internal_target("0")
-            else:
-                video_name = os.path.basename(source)
-                self.play_internal_target(video_name)
+        if active_source is not None:
+            self._start_internal_target(
+                active_source,
+                source_path_override=active_source,
+                stream_config=stream_config,
+                publisher_factory=publisher_factory,
+                model_path=model_path,
+                names_path=names_path,
+            )
+
+    def _disconnect_worker_signals(self, thread):
+        """Disconnect UI consumers while a worker is winding down."""
+        for signal in (
+            thread.change_pixmap_signal,
+            thread.lote_completed_signal,
+            thread.iot_status_changed_signal,
+            thread.burned_toast_alert_signal,
+        ):
+            try:
+                signal.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+
+    def _show_recovery_required(self):
+        self._recovery_required = True
+        message = "Se requiere recuperación: no se pudo detener el vídeo anterior"
+        print(f"[GUI App] {message}")
+        if hasattr(self, "video_label"):
+            self.video_label.clear()
+            self.video_label.setText(message)
+            self.video_label.setStyleSheet(
+                "background-color: #2A1B2E; border-radius: 10px; "
+                "color: #FF4500; font-weight: bold;"
+            )
+        if hasattr(self, "add_alert_log") and hasattr(self, "alerts_log_layout"):
+            self.add_alert_log(message)
+
+    def _on_shutdown_timeout(self):
+        thread = self._shutdown_thread
+        if thread is None:
+            return
+        # A finished signal can be queued behind this timer event.
+        if not thread.isRunning():
+            self._on_worker_finished()
+            return
+
+        # Do not release or terminate a potentially blocked native capture.
+        # Keeping yolo_thread is deliberate: no replacement may be created
+        # until the operator recovers this still-running worker.
+        try:
+            thread.finished.disconnect(self._on_worker_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self._pending_action = None
+        self._shutdown_thread = None
+        self._show_recovery_required()
+
+    @Slot()
+    def _on_worker_finished(self):
+        thread = self._shutdown_thread
+        if thread is None:
+            return
+        self._shutdown_timer.stop()
+        try:
+            thread.finished.disconnect(self._on_worker_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self._disconnect_worker_signals(thread)
+        self._shutdown_thread = None
+        if self.yolo_thread is thread:
+            self.yolo_thread = None
+
+        pending_action = self._pending_action
+        self._pending_action = None
+        closing = self._closing_requested
+        self._closing_requested = False
+        if closing:
+            # The second closeEvent is accepted only after QThread has emitted
+            # finished, never while its native capture may still be running.
+            self.close()
+        elif pending_action is not None and not self._recovery_required:
+            pending_action()
+
+    def _request_thread_shutdown(self, pending_action=None, closing=False):
+        """Request stop and queue work until the old QThread has finished."""
+        if self._recovery_required and pending_action is not None:
+            self._show_recovery_required()
+            return False
+
+        if self._shutdown_thread is not None:
+            self._pending_action = pending_action
+            self._closing_requested = self._closing_requested or closing
+            return False
+
+        thread = self.yolo_thread
+        if thread is None:
+            if pending_action is not None and not closing:
+                pending_action()
+            return True
+
+        self._disconnect_worker_signals(thread)
+        if not thread.isRunning():
+            if self.yolo_thread is thread:
+                self.yolo_thread = None
+            if pending_action is not None and not closing:
+                pending_action()
+            return True
+
+        self._shutdown_thread = thread
+        self._pending_action = pending_action
+        self._closing_requested = closing
+        thread.finished.connect(self._on_worker_finished)
+        thread.stop()  # Nonblocking; capture.release remains in worker.run().
+        self._shutdown_timer.start(5000)
+        return False
 
     # Lógica Botón Cámara (Manejo de estado)
     def toggle_camera(self, checked):
         if checked:
             self.play_internal_target("0")
-        else:
-            if self.yolo_thread is not None:
-                try:
-                    self.yolo_thread.change_pixmap_signal.disconnect()
-                    self.yolo_thread.lote_completed_signal.disconnect()
-                    self.yolo_thread.iot_status_changed_signal.disconnect()
-                    self.yolo_thread.burned_toast_alert_signal.disconnect()
-                except Exception:
-                    pass
-                if self.yolo_thread.isRunning():
-                    self.yolo_thread.stop()
-            self.video_label.clear()
-            self.video_label.setText("Cámara Apagada")
-            self.video_label.setStyleSheet("background-color: #1E1E28; border-radius: 10px; color: #E0B0FF;")
+            return
+
+        self.video_label.clear()
+        self.video_label.setText("Cámara Apagada")
+        self.video_label.setStyleSheet("background-color: #1E1E28; border-radius: 10px; color: #E0B0FF;")
+        self._request_thread_shutdown()
 
     def play_internal_target(self, video_name):
-        if self.yolo_thread is not None:
-            try:
-                self.yolo_thread.change_pixmap_signal.disconnect()
-                self.yolo_thread.lote_completed_signal.disconnect()
-                self.yolo_thread.iot_status_changed_signal.disconnect()
-                self.yolo_thread.burned_toast_alert_signal.disconnect()
-            except Exception:
-                pass
-            if self.yolo_thread.isRunning():
-                self.yolo_thread.stop()
-            
-        if video_name != "0":
+        if self._recovery_required:
+            self._show_recovery_required()
+            return
+
+        active_worker = (
+            (self.yolo_thread is not None and self.yolo_thread.isRunning())
+            or self._shutdown_thread is not None
+        )
+        stream_config, publisher_factory = self._stream_setup(
+            allow_preview_fallback=not active_worker
+        )
+        if stream_config is None:
+            return
+
+        def start_target():
+            self._start_internal_target(
+                video_name,
+                stream_config=stream_config,
+                publisher_factory=publisher_factory,
+            )
+
+        self._request_thread_shutdown(pending_action=start_target)
+
+    def _show_video_start_error(self, message):
+        print(f"[GUI App] {message}")
+        self.video_label.clear()
+        self.video_label.setText(message)
+        self.video_label.setStyleSheet(
+            "background-color: #2A1B2E; border-radius: 10px; "
+            "color: #FF4500; font-weight: bold; text-align: center;"
+        )
+
+    def _show_streaming_disabled(self, error, preview_only):
+        if preview_only:
+            message = (
+                "Streaming deshabilitado (configuración inválida); "
+                "vista local en modo preview"
+            )
+        else:
+            message = (
+                "Streaming deshabilitado: configuración inválida; "
+                "se conserva la fuente activa"
+            )
+        print(f"[GUI App] {message}: {error}")
+        if hasattr(self, "video_label") and preview_only:
+            self._show_video_start_error(message)
+        if hasattr(self, "add_alert_log") and hasattr(self, "alerts_log_layout"):
+            self.add_alert_log(message)
+
+    def _stream_setup(self, allow_preview_fallback):
+        try:
+            config = validate_stream_config(StreamConfig.from_env())
+            return config, None
+        except Exception as exc:
+            self._show_streaming_disabled(exc, allow_preview_fallback)
+            if not allow_preview_fallback:
+                return None, None
+            # StreamConfig() is a known-good, even-dimension preview config.
+            return validate_stream_config(StreamConfig()), PreviewOnlyPublisher
+
+    def _validated_stream_config(self, stream_config=None):
+        try:
+            config = stream_config if stream_config is not None else StreamConfig.from_env()
+            return validate_stream_config(config)
+        except Exception as exc:
+            self._show_video_start_error(f"Error de configuración de vídeo: {exc}")
+            return None
+
+    def _start_internal_target(self, video_name, source_path_override=None,
+                               stream_config=None, model_path=None,
+                               names_path=None, publisher_factory=None):
+        if source_path_override is not None:
+            source_path = source_path_override
+            if source_path != "0":
+                self.nav_buttons[0].setChecked(False)
+        elif video_name != "0":
             self.nav_buttons[0].setChecked(False)
             videos_dir = resolve_path("yolov11-python/data/videos")
             if os.path.isabs(video_name) or video_name.startswith("multimedia/videos") or video_name.startswith("yolov11-python/"):
@@ -1068,16 +1345,25 @@ class FactoryControlApp(QMainWindow):
                 source_path = os.path.join(videos_dir, video_name)
         else:
             source_path = "0"
-            
-        resolved_model = resolve_path(self.current_model)
-        resolved_names = resolve_path(self.current_names)
-        if not os.path.exists(resolved_model) or not os.path.exists(resolved_names):
-            self.video_label.clear()
-            self.video_label.setText(f"Error: No se encontró el modelo o las etiquetas\nCargar: {os.path.basename(resolved_model)}")
-            self.video_label.setStyleSheet("background-color: #2A1B2E; border-radius: 10px; color: #FF4500; font-weight: bold; text-align: center;")
+
+        stream_config = self._validated_stream_config(stream_config)
+        if stream_config is None:
             return
-            
-        self.yolo_thread = YOLODetectionThread(source_path, self.detect_use_case)
+
+        resolved_model = model_path if model_path is not None else resolve_path(self.current_model)
+        resolved_names = names_path if names_path is not None else resolve_path(self.current_names)
+        if not os.path.exists(resolved_model) or not os.path.exists(resolved_names):
+            self._show_video_start_error(
+                f"Error: No se encontró el modelo o las etiquetas\nCargar: {os.path.basename(resolved_model)}"
+            )
+            return
+
+        self.yolo_thread = YOLODetectionThread(
+            source_path,
+            self.detect_use_case,
+            stream_config=stream_config,
+            publisher_factory=publisher_factory,
+        )
         self.yolo_thread.show_ok_toasts = self.show_ok_toasts
         self.yolo_thread.show_burnt_toasts = self.show_burnt_toasts
         self.yolo_thread.change_pixmap_signal.connect(self.update_image)
@@ -1111,16 +1397,13 @@ class FactoryControlApp(QMainWindow):
         self.video_label.setPixmap(pixmap)
 
     def closeEvent(self, event):
-        if self.yolo_thread is not None:
-            try:
-                self.yolo_thread.change_pixmap_signal.disconnect()
-                self.yolo_thread.lote_completed_signal.disconnect()
-                self.yolo_thread.iot_status_changed_signal.disconnect()
-                self.yolo_thread.burned_toast_alert_signal.disconnect()
-            except Exception:
-                pass
-            if self.yolo_thread.isRunning():
-                self.yolo_thread.stop()
+        # A close request is asynchronous: QThread must finish before Qt may
+        # destroy the window and its worker-owned capture.
+        if self.yolo_thread is not None and self.yolo_thread.isRunning():
+            self._request_thread_shutdown(closing=True)
+            event.ignore()
+            return
+        self._request_thread_shutdown(closing=True)
         event.accept()
 
 if __name__ == "__main__":
