@@ -7,7 +7,6 @@ __pycache__/
 
 # Environment files
 .env
-raspberry_front_back_smart-check/backend/.env
 
 # Virtual environments
 .venv/
@@ -24,6 +23,9 @@ multimedia/videos/
 *.avi
 *.mkv
 
+# Generated inference artifacts
+multimedia/output/
+
 # Hailo DFC intermediate files, datasets and YOLO training runs
 *.har
 *.npy
@@ -32,3 +34,6 @@ ai_training/runs/
 # Streaming pipeline runtime data
 streaming/data/*
 !streaming/data/.gitkeep
+
+# Deepwork session state (local only)
+.slim/deepwork/

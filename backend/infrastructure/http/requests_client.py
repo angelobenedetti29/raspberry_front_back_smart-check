@@ -28,15 +28,3 @@ class RequestsHttpClient(IHttpClient):
             self.last_error = str(e)
             print(f"[HTTP Client] Error al enviar POST a {url}: {e}")
             return False
-
-    def get(self, url: str) -> Dict[str, Any]:
-        try:
-            print(f"[HTTP Client] Enviando GET a {url}")
-            response = requests.get(url, timeout=self.timeout)
-            if response.status_code == 200:
-                return response.json()
-            print(f"[HTTP Client] Respuesta GET no exitosa ({response.status_code})")
-            return {}
-        except Exception as e:
-            print(f"[HTTP Client] Error al enviar GET a {url}: {e}")
-            return {}
