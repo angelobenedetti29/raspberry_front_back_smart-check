@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Dict
 from backend.domain.entities.device import IoTDevice
 
 class IIoTController(ABC):
@@ -16,4 +17,8 @@ class IIoTController(ABC):
 
     @abstractmethod
     def get_device(self, device_id: str) -> IoTDevice:
+        pass
+
+    @abstractmethod
+    def get_all_devices(self) -> Dict[str, IoTDevice]:
         pass

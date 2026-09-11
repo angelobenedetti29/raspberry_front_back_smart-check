@@ -1,7 +1,5 @@
-import cv2
 import numpy as np
-from typing import List, Union, Dict, Any
-from backend.domain.entities.detection import DetectionResult
+from typing import List, Any
 from backend.domain.interfaces.image_detector import IImageDetector
 from backend.domain.interfaces.iot_controller import IIoTController
 from backend.domain.interfaces.http_client import IHttpClient

@@ -6,8 +6,3 @@ class IHttpClient(ABC):
     def post(self, url: str, payload: Dict[str, Any], headers: Dict[str, str] = None) -> bool:
         """Send a POST request and return True if successful."""
         pass
-
-    @abstractmethod
-    def get(self, url: str) -> Dict[str, Any]:
-        """Send a GET request and return the JSON response."""
-        pass
