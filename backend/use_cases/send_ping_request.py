@@ -1,8 +1,8 @@
 from typing import Any
 
 
-class SendLoteRequestUseCase:
-    """Envía el cierre de un lote firmado (DeviceProof) al servidor central."""
+class SendPingRequestUseCase:
+    """Envía telemetría periódica firmada (DeviceProof) al servidor central."""
 
     def __init__(self, transport, api_base_url: str):
         self.transport = transport
@@ -10,10 +10,13 @@ class SendLoteRequestUseCase:
 
     @property
     def target(self) -> str:
-        return f"{self.api_base_url}/lotes"
+        return f"{self.api_base_url}/dispositivos/ping"
 
     def execute(self, payload: dict) -> bool:
-        return self.transport.post("/lotes", payload)
+        if not payload.get("dispositivoId"):
+            raise ValueError("El payload de ping requiere 'dispositivoId'.")
+
+        return self.transport.post("/dispositivos/ping", payload)
 
     def get_last_error(self):
         return getattr(self.transport, "last_error", None)

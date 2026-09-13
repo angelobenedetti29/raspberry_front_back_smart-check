@@ -48,7 +48,7 @@ def make_payload(**overrides):
     return payload
 
 
-def make_use_case(success=True, base_url="http://central:9000", **kwargs):
+def make_use_case(success=True, base_url="http://central:9000/api/v1", **kwargs):
     send = FakeSendLoteUseCase(success=success, **kwargs)
     return FinalizeLoteUseCase(send, base_url), send
 
@@ -94,7 +94,7 @@ def test_send_failure_raises_lote_delivery_error():
 
 
 def test_success_returns_exact_payload_and_forwards():
-    use_case, send = make_use_case(base_url="http://central:9000/")
+    use_case, send = make_use_case(base_url="http://central:9000/api/v1/")
     payload = make_payload()
 
     result = use_case.execute(payload)

@@ -9,7 +9,9 @@ Este paquete no depende de la GUI, FastAPI ni del backend central. El flujo es
 Se puede usar CLI o variables `STREAMING_*`. Por defecto usa cámara `0`,
 `1280x720`, 30 fps, bitrate `2M`, almacenamiento
 `streaming/data/detections.jsonl`, `ffmpeg` y encoder `libx264`. Los fps
-admitidos son 20 y 30. La simulación local no activa inferencia:
+admitidos son 20 y 30. La salida por defecto es el MediaMTX central,
+`rtsp://smartcheck.duckdns.org:8554/entrada`. La simulación local no activa
+inferencia y puede redirigir la salida al MediaMTX local si se levanta:
 
 ```bash
 python -m streaming.main --source multimedia/videos/test1.mp4 --no-inference \
@@ -77,7 +79,8 @@ STREAMING_ENCODER=libx264 python -m streaming.main --source 0
 ```
 
 Verificar el resultado con `ffprobe -rtsp_transport tcp
-rtsp://127.0.0.1:8554/horno` en la propia Raspberry y después con un cliente
+rtsp://smartcheck.duckdns.org:8554/entrada` desde la Raspberry (o contra el
+destino configurado en `STREAMING_OUTPUT_URL`) y después con un cliente
 WHEP/browser. `FFmpegPublisher.health()` informa estado real del proceso,
 worker, cola, último progreso y reinicios.
 
@@ -92,19 +95,22 @@ se intentan en su cola prioritaria. El archivo rota por tamaño con
 `STREAMING_STORAGE_MAX_FILES` archivos. El apagado espera el drenaje limpio
 de las colas dentro de un timeout.
 
-## MediaMTX
+## MediaMTX y destino de publicación
 
-`../mediamtx/mediamtx.yml` define el path `horno`. El ingest RTSP está enlazado
-a `127.0.0.1:8554`, porque Python publica localmente; no debe abrirse ni
-exponerse ese puerto en red. WHEP/WebRTC permanece en el host configurable,
-normalmente TCP 8889 y UDP 8189. Sustituir `https://frontend.example.com` por
-el origen exacto del frontend y `mediamtx.example.com` por el host/IP real en
-`webrtcAdditionalHosts`. CORS no es `*` por defecto.
+Por defecto el pipeline publica en el MediaMTX central:
+`rtsp://smartcheck.duckdns.org:8554/entrada`. El ingest RTSP del central debe
+aceptar publicación en el path `entrada`; el frontend lo consume por WHEP en
+`https://smartcheck.duckdns.org:8889/entrada/whep` (usar el `whepUrl` del
+dispositivo en el panel central). Ajustar el host si el despliegue cambia.
 
-El endpoint WHEP será normalmente
-`http(s)://<host>:8889/horno/whep`. Comprobar RTSP solo desde el host local
-con `ffplay rtsp://127.0.0.1:8554/horno`; no documentar ese URL como endpoint
-remoto.
+`STREAMING_OUTPUT_URL` (o `--output-url`) permite apuntar a otro destino. Para
+desarrollo local sin central, `../mediamtx/mediamtx.yml` levanta un MediaMTX
+local con el path `horno`; en ese caso publicar con
+`STREAMING_OUTPUT_URL=rtsp://127.0.0.1:8554/horno` y consumir WHEP en
+`http(s)://<host>:8889/horno/whep`. El ingest local está enlazado a
+`127.0.0.1:8554`; no exponer ese puerto en red. WHEP/WebRTC usa normalmente TCP
+8889 y UDP 8189; ajustar `webrtcAdditionalHosts` y los orígenes permitidos
+(nunca CORS `*`) al host real.
 
 ## Pruebas sin hardware
 

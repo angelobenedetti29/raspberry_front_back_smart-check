@@ -1,10 +1,9 @@
-"""Tests for SendLoteRequestUseCase (network-free)."""
+"""Tests for SendLoteRequestUseCase using the signed transport (network-free)."""
 
-from backend.domain.interfaces.http_client import IHttpClient
 from backend.use_cases.send_lote_request import SendLoteRequestUseCase
 
 
-class FakeHttpClient(IHttpClient):
+class FakeTransport:
     def __init__(self, result=True):
         self.result = result
         self.calls = []
@@ -12,42 +11,49 @@ class FakeHttpClient(IHttpClient):
         self.last_status_code = 503
         self.last_response_text = "service unavailable"
 
-    def post(self, url, payload, headers=None):
-        self.calls.append((url, payload, headers))
+    def post(self, path, payload, **kwargs):
+        self.calls.append((path, payload, kwargs))
         return self.result
 
 
-class BareHttpClient(IHttpClient):
-    def post(self, url, payload, headers=None):
+class BareTransport:
+    def post(self, path, payload, **kwargs):
         return True
 
 
 def test_url_strips_trailing_slash_and_appends_endpoint():
-    client = FakeHttpClient()
-    use_case = SendLoteRequestUseCase(client, "http://central:9000/", "key-123")
+    transport = FakeTransport()
+    use_case = SendLoteRequestUseCase(transport, "http://central:9000/api/v1/")
 
     assert use_case.execute({"totalUnidades": 1}) is True
 
-    url, payload, headers = client.calls[0]
-    assert url == "http://central:9000/api/v1/lotes"
+    path, payload, _ = transport.calls[0]
+    assert path == "/lotes"
     assert payload == {"totalUnidades": 1}
-    assert headers == {
-        "Content-Type": "application/json",
-        "X-API-Key": "key-123",
-    }
+    assert use_case.target == "http://central:9000/api/v1/lotes"
 
 
 def test_url_without_trailing_slash_and_failure_result():
-    client = FakeHttpClient(result=False)
-    use_case = SendLoteRequestUseCase(client, "http://central:9000", "key-123")
+    transport = FakeTransport(result=False)
+    use_case = SendLoteRequestUseCase(transport, "http://central:9000/api/v1")
 
     assert use_case.execute({}) is False
-    assert client.calls[0][0] == "http://central:9000/api/v1/lotes"
+    assert transport.calls[0][0] == "/lotes"
+
+
+def test_no_shared_api_key_header_is_used():
+    transport = FakeTransport()
+    use_case = SendLoteRequestUseCase(transport, "http://central:9000/api/v1")
+    use_case.execute({"totalUnidades": 1})
+
+    _, _, kwargs = transport.calls[0]
+    assert "X-API-Key" not in kwargs
+    assert "headers" not in kwargs
 
 
 def test_get_last_accessors_proxy_through():
-    client = FakeHttpClient()
-    use_case = SendLoteRequestUseCase(client, "http://central:9000", "key-123")
+    transport = FakeTransport()
+    use_case = SendLoteRequestUseCase(transport, "http://central:9000/api/v1")
 
     assert use_case.get_last_error() == "last error"
     assert use_case.get_last_status_code() == 503
@@ -55,7 +61,7 @@ def test_get_last_accessors_proxy_through():
 
 
 def test_get_last_accessors_default_to_none_when_missing():
-    use_case = SendLoteRequestUseCase(BareHttpClient(), "http://central:9000", "key-123")
+    use_case = SendLoteRequestUseCase(BareTransport(), "http://central:9000/api/v1")
 
     assert use_case.get_last_error() is None
     assert use_case.get_last_status_code() is None
