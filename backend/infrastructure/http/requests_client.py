@@ -1,8 +1,28 @@
+import logging
+import time
+from typing import Any, Dict
+from urllib.parse import urlsplit
+
 import requests
-from typing import Dict, Any
+
 from backend.domain.interfaces.http_client import IHttpClient
 
+logger = logging.getLogger(__name__)
+
+_MAX_RESPONSE_CHARS = 4096
+
+
+def _safe_path(url: str) -> str:
+    """Ruta sin query para logs; nunca expone credenciales de la URL."""
+    try:
+        return urlsplit(url).path or "/"
+    except ValueError:
+        return "/"
+
+
 class RequestsHttpClient(IHttpClient):
+    """Cliente HTTP genérico con logging allowlisted (sin payloads ni headers)."""
+
     def __init__(self, timeout: int = 5):
         self.timeout = timeout
         self.last_error = None
@@ -14,17 +34,28 @@ class RequestsHttpClient(IHttpClient):
             self.last_error = None
             self.last_status_code = None
             self.last_response_text = None
-            print(f"[HTTP Client] Enviando POST a {url} con carga útil: {payload}")
+            started = time.monotonic()
             response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             self.last_status_code = response.status_code
-            self.last_response_text = response.text
-            print(f"[HTTP Client] Respuesta recibida ({response.status_code}): {response.text}")
+            body = response.text or ""
+            if len(body) > _MAX_RESPONSE_CHARS:
+                body = body[:_MAX_RESPONSE_CHARS]
+            self.last_response_text = body
+            logger.info(
+                "http_post path=%s status=%s duration_ms=%d",
+                _safe_path(url),
+                response.status_code,
+                elapsed_ms,
+            )
             if response.status_code in [200, 201, 202, 204]:
                 return True
 
-            self.last_error = f"HTTP {response.status_code}: {response.text}"
+            self.last_error = f"http_{response.status_code}"
             return False
-        except Exception as e:
-            self.last_error = str(e)
-            print(f"[HTTP Client] Error al enviar POST a {url}: {e}")
+        except requests.RequestException as exc:
+            # Solo el tipo de excepción: nunca el mensaje, que puede contener
+            # URLs con credenciales o fragmentos del payload.
+            self.last_error = type(exc).__name__
+            logger.warning("http_post path=%s status=error error=%s", _safe_path(url), self.last_error)
             return False

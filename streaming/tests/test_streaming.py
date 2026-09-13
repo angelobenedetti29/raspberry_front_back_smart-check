@@ -34,9 +34,9 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.inference_enabled)
         self.assertEqual(config.encoder, "h264_v4l2m2m")
 
-    def test_default_output_is_horno(self):
+    def test_default_output_is_central_entrada(self):
         config = StreamConfig()
-        self.assertEqual(config.output_url, "rtsp://127.0.0.1:8554/horno")
+        self.assertEqual(config.output_url, "rtsp://smartcheck.duckdns.org:8554/entrada")
         self.assertEqual((config.width, config.height), (1280, 720))
 
     def test_require_hailo_rejects_missing_hef_before_loading_cpu_model(self):

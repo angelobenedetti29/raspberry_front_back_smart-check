@@ -56,7 +56,7 @@ class FinalizeLoteUseCase:
 
     @property
     def target(self) -> str:
-        return f"{self.base_url.rstrip('/')}/api/v1/lotes"
+        return f"{self.base_url.rstrip('/')}/lotes"
 
     def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         missing_fields = [field for field in REQUIRED_FIELDS if field not in payload]

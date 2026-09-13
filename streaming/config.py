@@ -31,7 +31,7 @@ class StreamConfig:
     width: int = 1280
     height: int = 720
     fps: int = 30
-    output_url: str = "rtsp://127.0.0.1:8554/horno"
+    output_url: str = "rtsp://smartcheck.duckdns.org:8554/entrada"
     bitrate: str = "2M"
     inference_enabled: bool = False
     require_hailo: bool = False
@@ -170,7 +170,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--width", type=int, default=int(_env("STREAMING_WIDTH", "1280")))
     parser.add_argument("--height", type=int, default=int(_env("STREAMING_HEIGHT", "720")))
     parser.add_argument("--fps", type=int, choices=(20, 30), default=int(_env("STREAMING_FPS", "30")))
-    parser.add_argument("--output-url", default=_env("STREAMING_OUTPUT_URL", "rtsp://127.0.0.1:8554/horno"))
+    parser.add_argument("--output-url", default=_env("STREAMING_OUTPUT_URL", "rtsp://smartcheck.duckdns.org:8554/entrada"))
     parser.add_argument("--bitrate", default=_env("STREAMING_BITRATE", "2M"))
     parser.add_argument("--inference", action=argparse.BooleanOptionalAction, default=_env_bool("STREAMING_INFERENCE", False))
     parser.add_argument("--require-hailo", action=argparse.BooleanOptionalAction, default=_env_bool("STREAMING_REQUIRE_HAILO", False))

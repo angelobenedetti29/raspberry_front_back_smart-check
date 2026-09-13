@@ -19,7 +19,7 @@ la instalación de la Raspberry Pi.
 
    ```text
    STREAMING_SOURCE=0
-   STREAMING_OUTPUT_URL=rtsp://127.0.0.1:8554/horno
+   STREAMING_OUTPUT_URL=rtsp://smartcheck.duckdns.org:8554/entrada
    STREAMING_STORAGE=/var/lib/tesis-streaming/detections.jsonl
    STREAMING_INFERENCE=true
    STREAMING_REQUIRE_HAILO=true
@@ -46,8 +46,13 @@ la instalación de la Raspberry Pi.
    sudo systemctl status mediamtx.service streaming.service
    ```
 
-6. Abrir solo 8889/TCP y 8189/UDP para WHEP/WebRTC. 8554/TCP es localhost y
-   no debe exponerse. WHEP usa
-   `http://<webrtcAdditionalHosts>:8889/horno/whep`; RTSP solo desde la Pi usa
-   `rtsp://127.0.0.1:8554/horno`. En despliegues HTTPS, configurar también el
-   proxy TLS y usar el origen HTTPS exacto del frontend, nunca CORS `*`.
+6. Con el destino central por defecto
+   (`STREAMING_OUTPUT_URL=rtsp://smartcheck.duckdns.org:8554/entrada`), el WHEP
+   que consume el frontend es
+   `https://smartcheck.duckdns.org:8889/entrada/whep` (el `whepUrl` del
+   dispositivo en el panel central). El MediaMTX local de los pasos 1-2 solo es
+   necesario si se publica localmente
+   (`STREAMING_OUTPUT_URL=rtsp://127.0.0.1:8554/horno`); en ese caso abrir solo
+   8889/TCP y 8189/UDP para WHEP/WebRTC, sin exponer 8554/TCP. En despliegues
+   HTTPS, configurar el proxy TLS y usar el origen HTTPS exacto del frontend,
+   nunca CORS `*`.

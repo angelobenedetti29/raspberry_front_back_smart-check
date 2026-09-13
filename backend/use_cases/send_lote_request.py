@@ -1,26 +1,25 @@
-from backend.domain.interfaces.http_client import IHttpClient
+from typing import Any
 
 
 class SendLoteRequestUseCase:
-    def __init__(self, http_client: IHttpClient, central_server_url: str, api_key: str):
-        self.http_client = http_client
-        self.central_server_url = central_server_url.rstrip("/")
-        self.api_key = api_key
+    """Envía el cierre de un lote firmado (DeviceProof) al servidor central."""
+
+    def __init__(self, transport, api_base_url: str):
+        self.transport = transport
+        self.api_base_url = api_base_url.rstrip("/")
+
+    @property
+    def target(self) -> str:
+        return f"{self.api_base_url}/lotes"
 
     def execute(self, payload: dict) -> bool:
-        headers = {
-            "Content-Type": "application/json",
-            "X-API-Key": self.api_key,
-        }
-        url = f"{self.central_server_url}/api/v1/lotes"
-        print(f"[SendLoteRequestUseCase] Enviando lote request a {url} con payload: {payload}")
-        return self.http_client.post(url, payload, headers=headers)
+        return self.transport.post("/lotes", payload)
 
     def get_last_error(self):
-        return getattr(self.http_client, "last_error", None)
+        return getattr(self.transport, "last_error", None)
 
     def get_last_status_code(self):
-        return getattr(self.http_client, "last_status_code", None)
+        return getattr(self.transport, "last_status_code", None)
 
     def get_last_response_text(self):
-        return getattr(self.http_client, "last_response_text", None)
+        return getattr(self.transport, "last_response_text", None)

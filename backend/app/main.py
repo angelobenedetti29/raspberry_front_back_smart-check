@@ -3,13 +3,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.dependencies import get_detector
+from backend.app.dependencies import get_detector, get_telemetry_loop
 from backend.app.routers import detection, devices, lotes, status
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    get_telemetry_loop().start()
     yield
+    get_telemetry_loop().stop()
     # Release a lazily-loaded Hailo device (no-op if the detector never loaded).
     get_detector().release_hailo()
 

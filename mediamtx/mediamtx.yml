@@ -21,5 +21,7 @@ webrtcLocalUDPAddress: :8189
 
 paths:
   horno:
-    # The Python process publishes rtsp://127.0.0.1:8554/horno.
+    # Solo desarrollo local: el pipeline publica aquí únicamente si
+    # STREAMING_OUTPUT_URL apunta a este MediaMTX (rtsp://127.0.0.1:8554/horno).
+    # El destino por defecto es el MediaMTX central (...:8554/entrada).
     source: publisher
