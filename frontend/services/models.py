@@ -10,11 +10,14 @@ from frontend.config import (
     NPU_MODEL_INDEX,
 )
 
+""" Path para detectar si estamos corriendo en una Raspberry Pi.
+ Se utiliza para determinar si se debe usar el modelo YOLOv8s HEF 
+ (para Raspberry Pi con NPU) o el modelo YOLOv11 ONNX (para PC o simulador). """
 RASPBERRY_PI_MODEL_FILE = "/sys/firmware/devicetree/base/model"
 
 
 def is_raspberry_pi() -> bool:
-    """Return True when running on a Raspberry Pi single-board computer."""
+    """Revisa el path y determina si estamos corriendo en una Raspberry Pi."""
     is_pi = False
     try:
         if os.path.exists(RASPBERRY_PI_MODEL_FILE):
@@ -32,7 +35,7 @@ class PlatformInfo:
 
 
 def detect_platform() -> PlatformInfo:
-    """Detect the host platform and log the default model that will be used."""
+    """Detecta la plataforma en la que se está ejecutando la aplicación y devuelve un objeto PlatformInfo."""
     pi = is_raspberry_pi()
     npu = pi and HAILO_AVAILABLE
 
@@ -45,15 +48,12 @@ def detect_platform() -> PlatformInfo:
 
 
 def default_model_index(is_npu: bool) -> int:
-    """Index of the model selected by default for the given platform."""
+    """Devuelve el índice del modelo por defecto según la plataforma detectada."""
     return NPU_MODEL_INDEX if is_npu else DEFAULT_MODEL_INDEX
 
 
 def model_for_index(index: int) -> tuple[str, str]:
-    """Return (model_path, names_path) for a catalog index.
-
-    Negative or out-of-range indices fall back to ``DEFAULT_MODEL_INDEX``
-    explicitly (Python's negative indexing is intentionally not used).
+    """Devuelve la ruta del modelo y la ruta de los nombres de clases para un índice dado en el catálogo de modelos.
     """
     if not isinstance(index, int) or not 0 <= index < len(MODEL_CATALOG):
         index = DEFAULT_MODEL_INDEX

@@ -3,10 +3,13 @@ import os
 
 def resolve_path(relative_path):
     """
-    Resolves paths to make sure they work when executed from either:
-    1. The project root (yolov11-python / raspberry_front_back_smart-check)
-    2. The frontend or frontend/services directory
-    3. Anywhere else, by checking alternative directory structures.
+    Dada una ruta relativa, intenta resolverla a una ruta absoluta válida.
+    La función busca la ruta en varios lugares:
+    1. Comprobar si la ruta existe tal cual relativa al directorio de trabajo actual (CWD).
+    2. Comprobar si la ruta existe relativa al directorio raíz del proyecto (padre del directorio frontend/).
+    3. Normalizar separadores y probar con o sin el prefijo "yolov11-python/".
+    4. Mapeo específico para diferentes distribuciones de carpetas, buscando en CWD y en el directorio raíz del proyecto.
+    Si no se encuentra ninguna coincidencia, devuelve la ruta relativa original.
     """
     if not relative_path:
         return relative_path
