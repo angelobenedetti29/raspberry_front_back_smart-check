@@ -60,7 +60,9 @@ MIN_WINDOW_HEIGHT = 420
 
 
 class _FallbackDetector:
-    """Hardware-free detector used when ``YoloDetector`` cannot be initialized."""
+    """ESTA CLASE SIMULA UN DETECTOR DE OBJETOS CUANDO NO SE PUEDE CARGAR EL MODELO YOLO REAL.
+    Se utiliza para permitir que la aplicación siga funcionando incluso si el modelo YOLO no se puede inicializar correctamente.
+    """
 
     def __init__(self, error=None):
         self.error = "" if error is None else str(error)
@@ -74,7 +76,7 @@ class _FallbackDetector:
 
 
 def _detector_pill_state(detector):
-    """Return the ``(text, tone)`` shown in the sidebar detector pill."""
+    """Le pasamos el detector y nos devuelve si es hailo, """
     if getattr(detector, "use_hailo", False):
         return "Hailo NPU Activo", "on"
     if isinstance(detector, _FallbackDetector):
@@ -83,6 +85,8 @@ def _detector_pill_state(detector):
 
 
 class FactoryControlApp(QMainWindow):
+
+    # CONSTRUCTOR
     def __init__(self, default_source=DEFAULT_SOURCE):
         super().__init__()
         self.setWindowTitle(WINDOW_TITLE)
@@ -90,9 +94,10 @@ class FactoryControlApp(QMainWindow):
         self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         self.setStyleSheet(build_stylesheet())
 
-        # Inicializar componentes del Backend (Clean Architecture)
+        # Inicializar componentes del Backend 
         self.iot_controller = MockIoTController()
         self.http_client = RequestsHttpClient()
+
         # Detección automática de plataforma (Raspberry Pi con chip Hailo)
         platform = detect_platform()
         self.is_running_on_npu = platform.is_npu
@@ -165,7 +170,7 @@ class FactoryControlApp(QMainWindow):
             [entry[0] for entry in MODEL_CATALOG],
             current_index=default_model_index(self.is_running_on_npu),
         )
-        self.sidebar.set_detector_pill(*_detector_pill_state(self.detector))
+        #self.sidebar.set_detector_pill(*_detector_pill_state(self.detector))
         self.sidebar.camera_toggled.connect(self.toggle_camera)
         self.sidebar.model_changed.connect(self.change_model)
 

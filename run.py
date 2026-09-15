@@ -30,6 +30,13 @@ HOST = "0.0.0.0"
 PORT = 8000
 STATUS_URL = f"http://localhost:{PORT}/api/status"
 
+# Módulos mínimos por componente. Deben reflejar los imports reales del stack:
+# el backend importa `jwt` (PyJWT) vía device_enrollment, no solo FastAPI.
+REQUIRED = (
+    ("backend", ("fastapi", "uvicorn", "jwt"), "backend/requirements.txt"),
+    ("frontend", ("PySide6", "cv2"), "requirements.txt"),
+)
+
 
 def _has_module(name: str) -> bool:
     try:
@@ -38,13 +45,17 @@ def _has_module(name: str) -> bool:
         return False
 
 
+def _missing_modules(modules: tuple[str, ...]) -> list[str]:
+    return [module for module in modules if not _has_module(module)]
+
+
 def _reuse_venv_if_needed() -> None:
     """Re-ejecuta el script con `.venv/bin/python` si el intérprete actual no sirve."""
     if not VENV_PYTHON.exists():
         return
     if Path(sys.executable).resolve() == VENV_PYTHON.resolve():
         return
-    if _has_module("fastapi") and _has_module("uvicorn"):
+    if not any(_missing_modules(modules) for _, modules, _ in REQUIRED):
         return
     os.execv(
         str(VENV_PYTHON),
@@ -53,13 +64,9 @@ def _reuse_venv_if_needed() -> None:
 
 
 def _check_dependencies() -> None:
-    requirements = (
-        ("backend", ("fastapi", "uvicorn"), "backend/requirements.txt"),
-        ("frontend", ("PySide6", "cv2"), "requirements.txt"),
-    )
     missing = False
-    for name, modules, req_file in requirements:
-        absent = [module for module in modules if not _has_module(module)]
+    for name, modules, req_file in REQUIRED:
+        absent = _missing_modules(modules)
         if absent:
             missing = True
             print(
