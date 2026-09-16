@@ -1,9 +1,12 @@
+import logging
 import os
 import shutil
 import time
 
 from backend.domain.entities.device_metrics import DeviceMetrics
 from backend.domain.interfaces.system_metrics import ISystemMetricsProvider
+
+logger = logging.getLogger(__name__)
 
 _CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
 _CPU_STAT_PATH = "/proc/stat"
@@ -111,7 +114,7 @@ class LinuxSystemMetricsProvider(ISystemMetricsProvider):
                 ai_processor_pct=self._read_ai_processor_pct(),
             )
         except Exception as exc:  # pragma: no cover - salvaguarda defensiva
-            print(f"[LinuxSystemMetricsProvider] Error al muestrear: {exc}")
+            logger.warning("Error al muestrear métricas: %s", exc)
             return DeviceMetrics(cpu_pct=0.0, mem_ram_disponible_mb=0.0)
 
     def _read_cpu_stats(self) -> dict:

@@ -1,3 +1,4 @@
+import logging
 import threading
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from backend.use_cases.finalize_lote import FinalizeLoteUseCase
 from backend.use_cases.send_lote_inicio import SendLoteInicioUseCase
 from backend.use_cases.send_lote_request import SendLoteRequestUseCase
 from backend.use_cases.send_ping_request import SendPingRequestUseCase
+
+logger = logging.getLogger(__name__)
 
 
 class LazyYoloDetector(IImageDetector):
@@ -38,9 +41,9 @@ class LazyYoloDetector(IImageDetector):
                 if self._detector is None:
                     try:
                         self._detector = YoloDetector()
-                        print("[Backend] Detector YOLO NPU/ONNX cargado perezosamente con éxito.")
+                        logger.info("Detector YOLO NPU/ONNX cargado perezosamente con éxito.")
                     except Exception as e:
-                        print(f"[Backend] Error al cargar YOLO en inicialización diferida: {e}")
+                        logger.error("Error al cargar YOLO en inicialización diferida: %s", e)
                         self._detector = FallbackDetector(e)
         return self._detector
 

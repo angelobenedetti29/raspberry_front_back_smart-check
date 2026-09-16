@@ -1,9 +1,12 @@
 import cv2
+import logging
 import os
 import numpy as np
 from typing import List
 from backend.domain.entities.detection import DetectionResult
 from backend.domain.interfaces.image_detector import IImageDetector
+
+logger = logging.getLogger(__name__)
 
 # Intentar importar la librería oficial de Hailo de forma segura
 try:
@@ -29,7 +32,11 @@ class YoloDetector(IImageDetector):
         if HAILO_AVAILABLE and model_path is not None and model_path.endswith('.onnx'):
             hef_candidate = model_path[:-5] + '.hef'
             if os.path.exists(hef_candidate):
-                print(f"[YoloDetector] NPU detectada. Redirigiendo {os.path.basename(model_path)} -> {os.path.basename(hef_candidate)}")
+                logger.info(
+                    "NPU detectada. Redirigiendo %s -> %s",
+                    os.path.basename(model_path),
+                    os.path.basename(hef_candidate),
+                )
                 model_path = hef_candidate
 
         if names_path is None:
@@ -75,7 +82,7 @@ class YoloDetector(IImageDetector):
             if not HAILO_AVAILABLE:
                 raise RuntimeError("Especificaste un modelo .hef, pero la librería 'hailo_platform' no está disponible o instalada en este sistema.")
             
-            print(f"[YoloDetector] Inicializando modelo en NPU Hailo-8L: {self.model_path}")
+            logger.info("Inicializando modelo en NPU Hailo-8L: %s", self.model_path)
             self.hef = HEF(self.model_path)
             self.vdevice = VDevice().__enter__()
             
@@ -103,7 +110,7 @@ class YoloDetector(IImageDetector):
                 self.release_hailo()
                 raise e
         else:
-            print(f"[YoloDetector] Inicializando modelo en CPU con OpenCV DNN: {self.model_path}")
+            logger.info("Inicializando modelo en CPU con OpenCV DNN: %s", self.model_path)
             self.net = cv2.dnn.readNet(self.model_path)
 
     def get_class_names(self) -> List[str]:
