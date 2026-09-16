@@ -4,25 +4,31 @@ from backend.domain.interfaces.image_detector import IImageDetector
 from backend.use_cases.toast_tracker import ToastTracker, TrackedToast
 
 class DetectAndNotifyUseCase:
+    """Detecta objetos en un frame y mantiene el tracker de tostadas.
+
+    Encapsula un detector y un ``ToastTracker`` propios; expone solo las tostadas
+    visibles para que quien llama las renderice y cuente.
+    """
+
     def __init__(self, detector: IImageDetector):
         self.detector = detector
         self.tracker = ToastTracker()
 
     def reset_tracker(self):
-        """Resets the state of the internal toast tracker."""
+        """Reinicia el estado del tracker de tostadas interno."""
         self.tracker.reset()
 
     def execute(self, frame: np.ndarray) -> List[TrackedToast]:
-        """
-        Executes the detection on a frame and updates the toast tracker.
+        """Ejecuta la detección sobre un frame y actualiza el tracker.
 
-        Returns every toast currently visible, which is what callers render and
-        count.
+        Devuelve las tostadas actualmente visibles, que son las que quien llama
+        renderiza y cuenta.
         """
         detections = self.detector.detect_frame(frame)
 
         # El tracker devuelve además las tostadas recién confirmadas como
-        # quemadas; ya no hay consumidor para ese segundo valor.
-        active_toasts, _newly_burnt_toasts = self.tracker.update(detections)
+        # quemadas; ya no hay consumidor para ese segundo valor. El contrato del
+        # tracker (y sus tests directos) se conservan.
+        active_toasts, _ = self.tracker.update(detections)
 
         return active_toasts
