@@ -13,7 +13,7 @@ Debes copiar los siguientes tres archivos desde esta computadora hacia la PC don
 1. **El Modelo ONNX:**
    `ai_training/models/tostadas_v2.onnx`
 2. **El Dataset de Calibración pre-procesado:**
-   `ai_training/models/calib_dataset.npy` (Ya lo generamos en tu carpeta local con éxito).
+   `ai_training/models/calib_dataset.npy`. No se versiona en el repo (`.gitignore` cubre `*.npy`), así que hay que generarlo localmente con `prepare_calibration.py --images-dir <carpeta>` antes de copiarlo.
 3. **El Script de Compilación:**
    `ai_training/scripts/compile_hailo.py`
 
