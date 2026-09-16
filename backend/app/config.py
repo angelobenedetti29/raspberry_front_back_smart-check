@@ -1,29 +1,42 @@
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from device_enrollment.envfile import load_env_values
 from device_enrollment.errors import ConfigurationError
 from device_enrollment.urls import normalize_api_base_url
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_IDENTITY_DIR = "/var/lib/smart-check/device"
 
+# Ruta del .env del backend. Se resuelve en cada llamada a load_env_file para
+# que los tests puedan redirigirla con monkeypatch.
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
-def load_env_file(env_path: Path) -> None:
-    if not env_path.exists():
+
+def load_env_file(env_path: Path | None = None) -> None:
+    """Aplica las asignaciones de ``env_path`` a ``os.environ``.
+
+    Usa el parser compartido con la CLI (``load_env_values``) y nunca pisa una
+    variable ya definida: el entorno explícito (systemd, shell) tiene prioridad
+    sobre ``backend/.env``. No hace nada si el archivo no existe; si no se puede
+    leer, loguea un warning y continúa.
+    """
+    path = ENV_FILE if env_path is None else env_path
+    if path is None or not path.exists():
         return
 
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
+    try:
+        values = load_env_values(path)
+    except OSError as exc:
+        logger.warning("No se pudo leer %s: %s", path, exc)
+        return
 
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-# Load backend/.env as early as possible so every consumer sees the values.
-load_env_file(Path(__file__).resolve().parents[1] / ".env")
+    for key, value in values.items():
+        os.environ.setdefault(key, value)
 
 
 def _parse_ping_interval(raw: str | None, default: float = 10.0) -> float:
@@ -38,18 +51,16 @@ def _parse_ping_interval(raw: str | None, default: float = 10.0) -> float:
 
 
 def _normalize_base_url(raw: str | None) -> str:
-    """Normaliza la URL base del dispositivo; vacía si no está configurada."""
+    """Normaliza DEVICE_API_BASE_URL; devuelve "" si está ausente.
+
+    Lanza ``ConfigurationError`` si el valor está presente pero no es una URL
+    http(s) válida. Los valores sin esquema (p. ej. "central.example.com") ya no
+    se toleran: antes se devolvían tal cual y fallaban en runtime con
+    ``MissingSchema``. ``get_settings`` captura el error y degrada.
+    """
     if not raw:
         return ""
-    try:
-        return normalize_api_base_url(raw)
-    except ConfigurationError:
-        # Tolerate legacy scheme-less values (a bare host), but never downgrade
-        # an http(s) URL that failed policy — e.g. plaintext http:// to a
-        # non-loopback host — into a usable base URL.
-        if raw.strip().lower().startswith(("http://", "https://")):
-            raise
-        return raw.strip().rstrip("/")
+    return normalize_api_base_url(raw)
 
 
 @dataclass(frozen=True)
@@ -64,8 +75,26 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
+    """Construye los Settings una vez por proceso (``lru_cache``).
+
+    Carga ``backend/.env`` (sin pisar el entorno) y degrada a "" si la URL base
+    está presente pero es inválida: la app arranca con transporte firmado y
+    telemetría deshabilitados en lugar de fallar durante el import.
+    """
+    load_env_file(ENV_FILE)
+
+    try:
+        base_url = _normalize_base_url(os.getenv("DEVICE_API_BASE_URL"))
+    except ConfigurationError as exc:
+        logger.warning(
+            "DEVICE_API_BASE_URL inválida: %s. "
+            "El envío firmado y la telemetría quedan deshabilitados.",
+            exc,
+        )
+        base_url = ""
+
     return Settings(
-        device_api_base_url=_normalize_base_url(os.getenv("DEVICE_API_BASE_URL")),
+        device_api_base_url=base_url,
         device_auth_audience=os.getenv("DEVICE_AUTH_AUDIENCE") or "",
         device_identity_dir=os.getenv("DEVICE_IDENTITY_DIR") or DEFAULT_IDENTITY_DIR,
         horno_id=os.getenv("HORNO_ID") or "",
