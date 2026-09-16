@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
 
+from backend.domain.entities.detection import is_burnt
+
 @dataclass
 class TrackedToast:
     id: int
@@ -97,7 +99,7 @@ class ToastTracker:
             tracked_toast.frames_since_seen = 0
 
             # Lógica de máquina de estados de tostada
-            is_burnt_detection = "quemada" in det.label.lower() or det.label.lower() == "tcq"
+            is_burnt_detection = is_burnt(det.label)
             
             if tracked_toast.state == "burnt":
                 # La tostada quemada no puede des-quemarse
@@ -122,7 +124,7 @@ class ToastTracker:
         # 4. Manejo de nuevas detecciones no emparejadas (nuevas tostadas que entran)
         for det_idx, det in enumerate(new_detections):
             if det_idx not in matched_det_indices:
-                is_burnt_detection = "quemada" in det.label.lower() or det.label.lower() == "tcq"
+                is_burnt_detection = is_burnt(det.label)
                 
                 # Inicialmente asumimos estado "ok" y dejamos que la histéresis confirme si está quemada
                 # A menos que min_burnt_confirm_frames sea 0 o 1
