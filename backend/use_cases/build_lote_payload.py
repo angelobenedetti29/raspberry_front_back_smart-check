@@ -1,4 +1,3 @@
-import random
 from datetime import datetime
 from typing import Mapping, Sequence
 
@@ -21,11 +20,7 @@ def build_lote_payload(
     seen_toasts: Mapping[int, str],
     sensor_samples: Sequence[SensorReadings],
     producto_id: str = DEFAULT_PRODUCT_ID,
-    rng: random.Random | None = None,
 ) -> dict:
-    if rng is None:
-        rng = random.Random()
-
     quemados_count = 0
     correctos_count = 0
     for state in seen_toasts.values():
@@ -34,11 +29,7 @@ def build_lote_payload(
         else:
             correctos_count += 1
 
-    # Simulate a small amount of raw toasts out of the correct ones.
     crudas_count = 0
-    if correctos_count > 0:
-        crudas_count = rng.randint(0, min(3, correctos_count // 10 + 1))
-        correctos_count -= crudas_count
 
     total_unidades = correctos_count + quemados_count + crudas_count
 

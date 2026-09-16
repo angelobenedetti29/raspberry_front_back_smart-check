@@ -1,4 +1,3 @@
-import random
 from datetime import datetime, timedelta, timezone
 
 from backend.domain.entities.sensor_readings import SensorReadings
@@ -25,7 +24,7 @@ def _parse_utc(value: str) -> datetime:
 
 def test_counts_and_total():
     seen = {1: "ok", 2: "ok", 3: "burnt", 4: "ok", 5: "burnt"}
-    payload = build_lote_payload(INICIO, FIN, seen, _samples(), rng=random.Random(0))
+    payload = build_lote_payload(INICIO, FIN, seen, _samples())
 
     assert payload["quemados"] == 2
     assert payload["correctos"] + payload["crudas"] == 3
@@ -37,7 +36,7 @@ def test_counts_and_total():
 
 def test_weights_use_0025_kg_and_two_decimals():
     seen = {1: "ok", 2: "ok", 3: "burnt"}
-    payload = build_lote_payload(INICIO, FIN, seen, _samples(), rng=random.Random(3))
+    payload = build_lote_payload(INICIO, FIN, seen, _samples())
 
     assert TOAST_WEIGHT_KG == 0.025
     assert payload["correctosKg"] == round(payload["correctos"] * 0.025, 2)
@@ -49,9 +48,9 @@ def test_weights_use_0025_kg_and_two_decimals():
 
 
 def _turno_at(hour: int) -> str:
-    seen = {1: "burnt"}  # no correctos -> no simulated crudas
+    seen = {1: "burnt"}  # un solo burnt: sin correctos
     inicio = datetime(2024, 1, 1, hour, 0, 0)
-    payload = build_lote_payload(inicio, FIN, seen, [], rng=random.Random(0))
+    payload = build_lote_payload(inicio, FIN, seen, [])
     return payload["turno"]
 
 
@@ -66,7 +65,7 @@ def test_turno_boundaries():
 
 def test_sensor_averages_and_iso_dates():
     seen = {1: "ok"}
-    payload = build_lote_payload(INICIO, FIN, seen, _samples(), rng=random.Random(0))
+    payload = build_lote_payload(INICIO, FIN, seen, _samples())
 
     assert payload["tempHorno1"] == 220.5
     assert payload["tempCombHorno1"] == 316.0
@@ -85,7 +84,7 @@ def test_aware_datetimes_are_converted_to_utc():
     offset = timezone(timedelta(hours=-3))
     inicio = datetime(2024, 1, 1, 8, 0, 0, tzinfo=offset)
     fin = datetime(2024, 1, 1, 9, 0, 0, tzinfo=offset)
-    payload = build_lote_payload(inicio, fin, seen, [], rng=random.Random(0))
+    payload = build_lote_payload(inicio, fin, seen, [])
 
     assert payload["inicioAt"] == "2024-01-01T11:00:00Z"
     assert payload["finAt"] == "2024-01-01T12:00:00Z"
@@ -93,7 +92,7 @@ def test_aware_datetimes_are_converted_to_utc():
 
 def test_sensor_fallback_defaults_without_samples():
     seen = {1: "ok"}
-    payload = build_lote_payload(INICIO, FIN, seen, [], rng=random.Random(0))
+    payload = build_lote_payload(INICIO, FIN, seen, [])
 
     assert payload["tempHorno1"] == 220.0
     assert payload["tempCombHorno1"] == 315.0
@@ -102,16 +101,16 @@ def test_sensor_fallback_defaults_without_samples():
     assert payload["velocidadCinta"] == 1.10
 
 
-def test_seeded_random_makes_crudas_deterministic():
+def test_crudas_are_always_zero():
     seen = {i: "ok" for i in range(15)}
-    first = build_lote_payload(INICIO, FIN, seen, _samples(), rng=random.Random(42))
-    second = build_lote_payload(INICIO, FIN, seen, _samples(), rng=random.Random(42))
-    assert first["crudas"] == second["crudas"]
-    assert first == second
+    payload = build_lote_payload(INICIO, FIN, seen, _samples())
+    assert payload["crudas"] == 0
+    assert payload["crudosKg"] == 0.0
+    assert payload["correctos"] == 15
 
 
 def test_no_crudas_when_no_correctos():
     seen = {1: "burnt", 2: "burnt"}
-    payload = build_lote_payload(INICIO, FIN, seen, [], rng=random.Random(0))
+    payload = build_lote_payload(INICIO, FIN, seen, [])
     assert payload["correctos"] == 0
     assert payload["crudas"] == 0

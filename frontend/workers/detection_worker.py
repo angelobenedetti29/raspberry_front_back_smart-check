@@ -23,9 +23,10 @@ from PySide6.QtGui import QImage
 from streaming.config import StreamConfig
 from streaming.publisher import FFmpegPublisher
 
+from backend.app.config import get_settings
 from backend.domain.entities.sensor_readings import SensorReadings
 from backend.infrastructure.sensors.simulated_sensors import SimulatedSensorProvider
-from backend.use_cases.build_lote_payload import build_lote_payload
+from backend.use_cases.build_lote_payload import DEFAULT_PRODUCT_ID, build_lote_payload
 
 from frontend.services.streaming import validate_stream_config
 
@@ -73,7 +74,8 @@ class YOLODetectionThread(QThread):
     lote_completed_signal = Signal(dict)
 
     def __init__(self, source_file, detect_use_case, stream_config=None,
-                 capture_factory=None, publisher_factory=None, sensor_provider=None):
+                 capture_factory=None, publisher_factory=None, sensor_provider=None,
+                 producto_id=None):
         super().__init__()
         # La app entrega la ruta ya resuelta: absoluta, o "0" para la cámara.
         self.source_file = source_file
@@ -85,6 +87,11 @@ class YOLODetectionThread(QThread):
         self.publisher_factory = publisher_factory or FFmpegPublisher
         self.sensor_provider = (
             sensor_provider if sensor_provider is not None else SimulatedSensorProvider()
+        )
+        self.producto_id = (
+            producto_id
+            if producto_id is not None
+            else (get_settings().default_producto_id or DEFAULT_PRODUCT_ID)
         )
 
         # Recursos que posee el hilo; se crean dentro de run().
@@ -309,7 +316,11 @@ class YOLODetectionThread(QThread):
 
         fin_at = datetime.now()
         payload = build_lote_payload(
-            self.inicio_at, fin_at, self.seen_toasts, self.sensor_samples
+            self.inicio_at,
+            fin_at,
+            self.seen_toasts,
+            self.sensor_samples,
+            producto_id=self.producto_id,
         )
 
         self.lote_completed_signal.emit(payload)
