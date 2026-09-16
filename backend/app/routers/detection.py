@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend.app.dependencies import get_detect_use_case, get_finalize_lote_use_case
 from backend.app.errors import finalize_lote_http_exception
+from backend.app.serializers import detection_to_dict
 from backend.domain.entities.detection import is_burnt
 from backend.use_cases.finalize_lote import LoteDeliveryError
 
@@ -40,22 +41,7 @@ def detect_toast(
         detections = detect_use_case.execute(img)
 
         # Format response
-        results = []
-        for det in detections:
-            res_item = {
-                "label": det.label,
-                "confidence": float(det.confidence),
-                "bbox": {
-                    "x": det.bbox[0],
-                    "y": det.bbox[1],
-                    "width": det.bbox[2],
-                    "height": det.bbox[3],
-                },
-            }
-            if hasattr(det, "id"):
-                res_item["id"] = det.id
-                res_item["state"] = det.state
-            results.append(res_item)
+        results = [detection_to_dict(det) for det in detections]
 
         has_burned = any(
             is_burnt(det.label, getattr(det, "state", None)) for det in detections

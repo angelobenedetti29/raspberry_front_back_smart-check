@@ -59,6 +59,13 @@ def _parse_float(value: Any, field: str) -> float:
 
 @dataclass
 class LoteRequest:
+    """DTO explícito del contrato del central (campos camelCase).
+
+    Decisión Y2: se mantiene como DTO de dominio a propósito; ``from_payload`` y
+    ``to_payload`` viven aquí porque el esquema y el contrato HTTP son el mismo
+    artefacto.
+    """
+
     productoId: UUID
     turno: str
     inicioAt: datetime
