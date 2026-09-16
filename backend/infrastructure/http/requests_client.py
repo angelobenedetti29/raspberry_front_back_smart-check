@@ -5,8 +5,6 @@ from urllib.parse import urlsplit
 
 import requests
 
-from backend.domain.interfaces.http_client import IHttpClient
-
 logger = logging.getLogger(__name__)
 
 
@@ -18,7 +16,7 @@ def _safe_path(url: str) -> str:
         return "/"
 
 
-class RequestsHttpClient(IHttpClient):
+class RequestsHttpClient:
     """Cliente HTTP genérico con logging allowlisted (sin payloads ni headers)."""
 
     def __init__(self, timeout: int = 5):

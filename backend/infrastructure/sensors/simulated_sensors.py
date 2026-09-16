@@ -1,10 +1,9 @@
 import random
 
 from backend.domain.entities.sensor_readings import SensorReadings
-from backend.domain.interfaces.sensor_provider import ISensorProvider
 
 
-class SimulatedSensorProvider(ISensorProvider):
+class SimulatedSensorProvider:
     """Genera lecturas simuladas con los rangos nominales del horno.
 
     Es el proveedor de sensores por defecto del worker del frontend cuando no

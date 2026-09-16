@@ -4,7 +4,6 @@ import shutil
 import time
 
 from backend.domain.entities.device_metrics import DeviceMetrics
-from backend.domain.interfaces.system_metrics import ISystemMetricsProvider
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +94,7 @@ def _parse_temperature(raw: str) -> float | None:
     return _clamp(value, -40.0, 120.0)
 
 
-class LinuxSystemMetricsProvider(ISystemMetricsProvider):
+class LinuxSystemMetricsProvider:
     """Métricas reales de Linux/Raspberry. Nunca lanza: usa fallbacks a 0/None."""
 
     def sample(self) -> DeviceMetrics:
