@@ -6,7 +6,11 @@ class SendPingRequestUseCase(SignedSenderUseCase):
 
     PATH = "/dispositivos/ping"
 
-    def execute(self, payload: dict) -> bool:
+    def execute(self, payload: dict):
+        """Envía telemetría firmada y devuelve el ``SendResult``.
+
+        Exige ``dispositivoId`` en el payload.
+        """
         if not payload.get("dispositivoId"):
             raise ValueError("El payload de ping requiere 'dispositivoId'.")
 

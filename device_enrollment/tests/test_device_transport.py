@@ -11,6 +11,7 @@ from device_enrollment.tests.fakes import FakeResponse, make_enrolled_identity
 from device_enrollment.proof import decode_claims, decode_header
 from device_enrollment.transport import (
     PreparedRequest,
+    SendResult,
     SignedTransport,
     prepare,
     send_prepared,
@@ -172,7 +173,7 @@ def test_shared_session_is_serialised_across_threads(tmp_path):
         t.join()
 
     assert not errors
-    assert all(results)
+    assert all(result.ok for result in results)
     assert session.calls == 8
     assert session.max_active == 1
 
@@ -190,8 +191,8 @@ def test_redirect_response_is_reported_as_failure(tmp_path):
 
 def test_transport_without_identity_fails_closed(tmp_path):
     transport = SignedTransport(lambda: None, API, AUD, session=FakeSession(FakeResponse()))
-    assert transport.post("/dispositivos/ping", {"dispositivoId": DEVICE_ID}) is False
-    assert transport.last_error == "device_not_enrolled"
+    result = transport.post("/dispositivos/ping", {"dispositivoId": DEVICE_ID})
+    assert result == SendResult(ok=False, error="device_not_enrolled")
 
 
 def test_transport_success_and_error_code(tmp_path):
@@ -200,7 +201,10 @@ def test_transport_success_and_error_code(tmp_path):
     ok_transport = SignedTransport(
         lambda: identity, API, AUD, session=FakeSession(FakeResponse(200, "{}"))
     )
-    assert ok_transport.post("/lotes/inicio", {"hornoId": "h", "productoId": "p"}) is True
+    result = ok_transport.post("/lotes/inicio", {"hornoId": "h", "productoId": "p"})
+    assert result.ok is True
+    assert result.status_code == 200
+    assert result.error is None
 
     error_body = json.dumps(
         {"success": False, "message": "no", "errors": {"code": "device_identity_mismatch"}}
@@ -208,8 +212,10 @@ def test_transport_success_and_error_code(tmp_path):
     err_transport = SignedTransport(
         lambda: identity, API, AUD, session=FakeSession(FakeResponse(403, error_body))
     )
-    assert err_transport.post("/dispositivos/ping", {"dispositivoId": DEVICE_ID}) is False
-    assert err_transport.last_error == "device_identity_mismatch"
+    result = err_transport.post("/dispositivos/ping", {"dispositivoId": DEVICE_ID})
+    assert result.ok is False
+    assert result.status_code == 403
+    assert result.error == "device_identity_mismatch"
 
 
 def test_transport_redirect_is_not_followed(tmp_path):
@@ -217,8 +223,10 @@ def test_transport_redirect_is_not_followed(tmp_path):
     transport = SignedTransport(
         lambda: identity, API, AUD, session=FakeSession(FakeResponse(302, is_redirect=True))
     )
-    assert transport.post("/lotes", {}) is False
-    assert transport.last_error == "unexpected_redirect"
+    result = transport.post("/lotes", {})
+    assert result.ok is False
+    assert result.is_redirect is True
+    assert result.error == "unexpected_redirect"
 
 
 def test_transport_timeout_is_ambiguous_and_safe(tmp_path):
@@ -229,8 +237,60 @@ def test_transport_timeout_is_ambiguous_and_safe(tmp_path):
         AUD,
         session=FakeSession(exc=requests.Timeout("secret url http://user:pw@host?token=x")),
     )
-    assert transport.post("/lotes", {}) is False
-    assert transport.last_error == "Timeout"
+    result = transport.post("/lotes", {})
+    assert result.ok is False
+    assert result.transport_error == "Timeout"
+    assert result.error == "Timeout"
+
+
+def test_injected_clock_controls_proof_iat(tmp_path):
+    identity = make_enrolled_identity(tmp_path)
+    session = FakeSession(FakeResponse(status_code=200, text="{}"))
+    clock_value = 1_700_000_000
+    transport = SignedTransport(
+        lambda: identity, API, AUD, session=session, clock=lambda: clock_value
+    )
+
+    result = transport.post("/dispositivos/ping", {"dispositivoId": DEVICE_ID})
+
+    assert result.ok is True
+    token = session.calls[0]["headers"]["Authorization"].split(" ", 1)[1]
+    claims = decode_claims(token)
+    assert claims["iat"] == clock_value
+    assert claims["exp"] == clock_value + 60
+
+
+def test_device_identity_mismatch_fails_closed_without_sending(tmp_path):
+    identity = make_enrolled_identity(tmp_path)
+    session = FakeSession(FakeResponse(status_code=200, text="{}"))
+    transport = SignedTransport(lambda: identity, API, AUD, session=session)
+
+    result = transport.post("/dispositivos/ping", {"dispositivoId": "otro-dispositivo"})
+
+    assert result == SendResult(ok=False, error="device_identity_mismatch")
+    assert session.calls == []
+
+
+def test_unserializable_payload_fails_closed(tmp_path):
+    identity = make_enrolled_identity(tmp_path)
+    session = FakeSession(FakeResponse(status_code=200, text="{}"))
+    transport = SignedTransport(lambda: identity, API, AUD, session=session)
+
+    result = transport.post("/lotes", {"bad": object()})
+
+    assert result == SendResult(ok=False, error="device_proof_unavailable")
+    assert session.calls == []
+
+
+def test_malformed_url_fails_closed(tmp_path):
+    identity = make_enrolled_identity(tmp_path)
+    session = FakeSession(FakeResponse(status_code=200, text="{}"))
+    transport = SignedTransport(lambda: identity, "http://[::1", AUD, session=session)
+
+    result = transport.post("/lotes", {})
+
+    assert result == SendResult(ok=False, error="device_proof_unavailable")
+    assert session.calls == []
 
 
 def test_logging_is_allowlisted_and_never_contains_secrets(tmp_path, caplog):

@@ -20,7 +20,6 @@ from typing import Any, Callable
 import requests
 
 from .errors import (
-    AlreadyEnrolledError,
     CodeRequiredError,
     CredentialRevokedError,
     DeviceEnrollmentError,
@@ -32,10 +31,13 @@ from .errors import (
 from .identity import DeviceIdentity, IdentityStore, PHASE_ENROLLED, PHASE_PENDING
 from .proof import ENROLLMENT_SUBJECT_PREFIX, ENROLLMENT_TYP
 from .transport import HttpResult, prepare, send_prepared
+from .urls import validate_secure_base_url
 
 PROVISION_PATH = "/dispositivos/provision"
 RECOVER_PATH = "/dispositivos/enrollments/recover"
-MAX_AMBIGUOUS_RETRIES = 2
+# Total ``recover`` attempts performed by ``_retry_recover``: one initial call
+# plus one retry. Kept at the historical one-retry volume on purpose.
+MAX_AMBIGUOUS_ATTEMPTS = 2
 
 
 @dataclass
@@ -57,13 +59,19 @@ class EnrollmentClient:
         session: requests.Session | None = None,
         timeout: float = 10.0,
         clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self.store = store
         self.api_base_url = (api_base_url or "").rstrip("/")
+        # A directly-constructed client must not silently talk cleartext http://
+        # to a non-loopback host; the CLI normalizes beforehand, this is a second
+        # choke point.
+        validate_secure_base_url(self.api_base_url)
         self.audience = audience or ""
         self.session = session if session is not None else requests.Session()
         self.timeout = timeout
         self.clock = clock
+        self.sleep = sleep
 
     # -- primitives -----------------------------------------------------------------
     def _send(
@@ -94,11 +102,19 @@ class EnrollmentClient:
         )
 
     def _retry_recover(self, identity: DeviceIdentity) -> HttpResult:
+        """Retry an ambiguous recover with bounded backoff.
+
+        ``MAX_AMBIGUOUS_ATTEMPTS`` is the total number of ``recover`` calls made
+        here: the initial attempt plus one retry. The caller has already observed
+        an ambiguous outcome, so keys are never rotated by this helper. The sleep
+        is injected to keep tests fast and to make the backoff observable.
+        """
         result = self._recover(identity)
-        attempts = 1
-        while result.ambiguous and attempts < MAX_AMBIGUOUS_RETRIES:
+        for attempt in range(1, MAX_AMBIGUOUS_ATTEMPTS):
+            if not result.ambiguous:
+                break
+            self.sleep(0.5 * attempt)
             result = self._recover(identity)
-            attempts += 1
         return result
 
     def _device_from(self, result: HttpResult, identity: DeviceIdentity) -> dict[str, Any]:
@@ -110,7 +126,7 @@ class EnrollmentClient:
                 status=result.status_code,
             )
         server_fingerprint = device.get("keyFingerprint")
-        if server_fingerprint and server_fingerprint != identity.fingerprint:
+        if not server_fingerprint or server_fingerprint != identity.fingerprint:
             raise IdentityCorruptError("server returned a mismatched key fingerprint")
         return device
 
@@ -122,8 +138,6 @@ class EnrollmentClient:
         return EnrollOutcome("enrolled", enrolled, device)
 
     def _pending_identity(self, metadata: dict[str, Any] | None) -> DeviceIdentity:
-        if metadata and metadata.get("phase") == PHASE_ENROLLED:
-            raise AlreadyEnrolledError("device identity is already enrolled")
         if metadata and metadata.get("phase") == PHASE_PENDING:
             return self.store.load_identity()
         return self.store.initialize_pending(self.api_base_url, self.audience)

@@ -42,6 +42,8 @@ def finalize_lote_http_exception(exc: Exception) -> HTTPException:
         )
 
     if isinstance(exc, ValueError):
+        # Error de validación del payload de lote.
         return HTTPException(status_code=400, detail=str(exc))
 
+    # Cualquier otro fallo es inesperado para el cliente.
     return HTTPException(status_code=500, detail=str(exc))

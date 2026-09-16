@@ -2,8 +2,9 @@
 
 import pytest
 
-from backend.tests.fakes import BareTransport, FakeTransport
+from backend.tests.fakes import FakeTransport
 from backend.use_cases.send_ping_request import SendPingRequestUseCase
+from device_enrollment.transport import SendResult
 
 PING_PAYLOAD = {
     "dispositivoId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
@@ -15,8 +16,9 @@ def test_url_strips_trailing_slash_and_appends_endpoint():
     transport = FakeTransport()
     use_case = SendPingRequestUseCase(transport, "http://central:9000/api/v1/")
 
-    assert use_case.execute(PING_PAYLOAD) is True
+    result = use_case.execute(PING_PAYLOAD)
 
+    assert result.ok is True
     path, payload, _ = transport.calls[0]
     assert path == "/dispositivos/ping"
     assert payload == PING_PAYLOAD
@@ -24,10 +26,13 @@ def test_url_strips_trailing_slash_and_appends_endpoint():
 
 
 def test_url_without_trailing_slash_and_failure_result():
-    transport = FakeTransport(result=False)
+    transport = FakeTransport(SendResult(ok=False, error="Timeout"))
     use_case = SendPingRequestUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.execute(PING_PAYLOAD) is False
+    result = use_case.execute(PING_PAYLOAD)
+
+    assert result.ok is False
+    assert result.error == "Timeout"
     assert transport.calls[0][0] == "/dispositivos/ping"
 
 
@@ -55,14 +60,20 @@ def test_missing_dispositivo_id_raises_value_error():
     assert transport.calls == []
 
 
-def test_get_last_error_proxies_through():
-    transport = FakeTransport()
+def test_execute_returns_the_transport_result_unchanged():
+    result = SendResult(ok=False, error="device_not_enrolled")
+    transport = FakeTransport(result)
     use_case = SendPingRequestUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.get_last_error() == "last error"
+    assert use_case.execute(PING_PAYLOAD) is result
 
 
-def test_get_last_error_defaults_to_none_when_missing():
-    use_case = SendPingRequestUseCase(BareTransport(), "http://central:9000/api/v1")
+def test_execute_surfaces_error_detail_from_transport():
+    transport = FakeTransport(SendResult(ok=False, status_code=403, error="unexpected_redirect"))
+    use_case = SendPingRequestUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.get_last_error() is None
+    result = use_case.execute(PING_PAYLOAD)
+
+    assert result.ok is False
+    assert result.status_code == 403
+    assert result.error == "unexpected_redirect"

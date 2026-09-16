@@ -54,7 +54,7 @@ class Sidebar(QFrame):
         layout.addSpacing(SP_XS)
 
         layout.addWidget(self._group_label("OPERACIÓN"))
-        self.camera_btn = ActionButton("Cámara en vivo", variant="nav")
+        self.camera_btn = ActionButton("Cámara en vivo")
         self.camera_btn.setCheckable(True)
         self.camera_btn.setToolTip("Encender o apagar la cámara en vivo")
         self.camera_btn.clicked.connect(self.camera_toggled)

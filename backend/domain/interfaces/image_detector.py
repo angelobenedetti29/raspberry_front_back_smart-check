@@ -3,6 +3,12 @@ from typing import List
 from backend.domain.entities.detection import DetectionResult
 
 class IImageDetector(ABC):
+    """Contrato de los detectores de imágenes del backend.
+
+    Define la inferencia sobre archivos o frames y la liberación explícita de la
+    NPU. Cada implementación decide el modelo y el backend de cómputo concretos.
+    """
+
     # Metadata de estado del detector. No forma parte de la inferencia y no
     # debe forzar la carga del modelo; los detectores perezosos la sobreescriben.
     loaded: bool = True
@@ -10,25 +16,25 @@ class IImageDetector(ABC):
 
     @abstractmethod
     def detect(self, image_path: str) -> List[DetectionResult]:
-        """Detect objects in an image file by path."""
+        """Detecta objetos en un archivo de imagen a partir de su ruta."""
         pass
 
     @abstractmethod
     def detect_frame(self, frame) -> List[DetectionResult]:
-        """Detect objects in a raw OpenCV frame (numpy array)."""
+        """Detecta objetos en un frame crudo de OpenCV (arreglo de numpy)."""
         pass
 
     @abstractmethod
     def get_class_names(self) -> List[str]:
-        """Get names of all classes the model can detect."""
+        """Devuelve los nombres de todas las clases que el modelo puede detectar."""
         pass
 
     @abstractmethod
     def release_hailo(self) -> None:
-        """Release the Hailo NPU if this detector is currently holding it.
+        """Libera la NPU de Hailo si este detector la está reteniendo.
 
-        Part of the required contract because callers release the detector
-        unconditionally. Detectors that never take the NPU implement it as a
-        no-op.
+        Forma parte del contrato obligatorio porque quien llama libera el
+        detector incondicionalmente. Los detectores que nunca toman la NPU lo
+        implementan como no-op.
         """
         pass

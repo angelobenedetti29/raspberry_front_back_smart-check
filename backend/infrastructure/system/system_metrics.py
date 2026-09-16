@@ -14,11 +14,18 @@ _HWMON_TEMP_PATH = "/sys/class/hwmon/hwmon0/temp1_input"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
+    """Limita ``value`` al intervalo cerrado ``[low, high]``."""
     return max(low, min(high, value))
 
 
 def _parse_cpu_stat(line: str) -> dict:
-    """Convierte la línea ``cpu ...`` de /proc/stat en un dict de contadores."""
+    """Convierte la línea ``cpu ...`` de /proc/stat en un dict de contadores.
+
+    La línea tiene la forma ``cpu user nice system idle iowait irq softirq steal ...``.
+    Se leen solo los campos de ``_CPU_FIELDS`` (uno por columna tras ``cpu``) y se
+    ignoran los restantes. Devuelve ``{}`` si la línea no es de CPU o si algún campo
+    no es un entero, para que el llamador lo trate como "sin datos".
+    """
     parts = line.split()
     if not parts or parts[0] != "cpu":
         return {}
@@ -48,6 +55,8 @@ def _cpu_pct_from_stats(prev: dict, curr: dict) -> float | None:
     prev_total = sum(prev.get(field, 0) for field in _CPU_FIELDS)
     curr_total = sum(curr.get(field, 0) for field in _CPU_FIELDS)
     delta_total = curr_total - prev_total
+    # Los contadores de /proc/stat son monótonos; un delta <= 0 delata una muestra
+    # inválida (o un reinicio del contador) y evita además la división por cero.
     if delta_total <= 0:
         return None
 
@@ -103,9 +112,20 @@ class LinuxSystemMetricsProvider:
     """Métricas reales de Linux/Raspberry. Nunca lanza: usa fallbacks a 0/None."""
 
     def __init__(self):
+        """Inicializa el proveedor sin muestra previa de CPU.
+
+        ``_last_cpu_stats`` guarda la lectura anterior de /proc/stat para poder
+        calcular el porcentaje por diferencia entre dos muestras.
+        """
         self._last_cpu_stats: dict | None = None
 
     def sample(self) -> DeviceMetrics:
+        """Toma una muestra completa de CPU, RAM, disco y temperatura.
+
+        Nunca propaga excepciones: ante cualquier error devuelve un
+        ``DeviceMetrics`` con ceros. Los campos opcionales (RAM, disco) pueden
+        quedar en ``None`` si su fuente no está disponible.
+        """
         try:
             mem_available, mem_total = self._read_ram_mb()
             disk_available, disk_total = self._read_disk_mb()
@@ -125,6 +145,11 @@ class LinuxSystemMetricsProvider:
             return DeviceMetrics(cpu_pct=0.0, mem_ram_disponible_mb=0.0)
 
     def _read_cpu_stats(self) -> dict:
+        """Lee solo la primera línea ``cpu ...`` de /proc/stat.
+
+        La primera línea contiene los contadores globales agregados de todos los
+        núcleos. Devuelve ``{}`` si el archivo no se puede abrir.
+        """
         try:
             with open(_CPU_STAT_PATH, "r", encoding="utf-8") as handle:
                 first_line = handle.readline()
@@ -133,6 +158,11 @@ class LinuxSystemMetricsProvider:
             return {}
 
     def _read_cpu_pct(self) -> float:
+        """Calcula el porcentaje de CPU entre la muestra actual y la anterior.
+
+        Actualiza ``_last_cpu_stats`` con la lectura actual. Si no hay contadores
+        o no existe una muestra previa, degrada al promedio de carga del sistema.
+        """
         try:
             curr = self._read_cpu_stats()
             if not curr:
@@ -146,6 +176,11 @@ class LinuxSystemMetricsProvider:
             return self._load_avg_pct()
 
     def _load_avg_pct(self) -> float:
+        """Estima el uso de CPU como ``load_avg / núcleos``, limitado a [0, 100].
+
+        Es el valor de respaldo cuando no hay deltas válidos de /proc/stat. Usa al
+        menos un núcleo para evitar la división por cero.
+        """
         try:
             load_1min = os.getloadavg()[0]
             cpus = os.cpu_count() or 1
@@ -154,6 +189,7 @@ class LinuxSystemMetricsProvider:
             return 0.0
 
     def _read_ram_mb(self) -> tuple[float | None, float | None]:
+        """Devuelve (disponible, total) de RAM en MB leyendo /proc/meminfo."""
         try:
             with open(_MEMINFO_PATH, "r", encoding="utf-8") as handle:
                 return _ram_mb_from_meminfo(_parse_meminfo(handle.read()))
@@ -161,6 +197,7 @@ class LinuxSystemMetricsProvider:
             return None, None
 
     def _read_disk_mb(self) -> tuple[float | None, float | None]:
+        """Devuelve (libre, total) del disco raíz en MB usando ``shutil``."""
         try:
             usage = shutil.disk_usage("/")
             return usage.free / (1024 * 1024), usage.total / (1024 * 1024)
@@ -168,6 +205,10 @@ class LinuxSystemMetricsProvider:
             return None, None
 
     def _read_temp_chip(self) -> float:
+        """Lee la temperatura del chip, probando la zona térmica y luego hwmon.
+
+        Devuelve 0.0 si ninguna de las rutas devuelve un valor válido.
+        """
         for path in (_THERMAL_ZONE_PATH, _HWMON_TEMP_PATH):
             try:
                 with open(path, "r", encoding="utf-8") as handle:
@@ -179,5 +220,6 @@ class LinuxSystemMetricsProvider:
         return 0.0
 
     def _read_ai_processor_pct(self) -> float:
+        """Devuelve el uso del acelerador de IA; por ahora siempre 0.0."""
         # TODO(Hailo): integrar el uso real del NPU Hailo cuando esté disponible.
         return 0.0

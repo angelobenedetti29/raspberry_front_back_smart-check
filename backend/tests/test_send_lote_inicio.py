@@ -2,16 +2,18 @@
 
 import pytest
 
-from backend.tests.fakes import BareTransport, FakeTransport
+from backend.tests.fakes import FakeTransport
 from backend.use_cases.send_lote_inicio import SendLoteInicioUseCase
+from device_enrollment.transport import SendResult
 
 
 def test_url_strips_trailing_slash_and_sends_payload():
     transport = FakeTransport()
     use_case = SendLoteInicioUseCase(transport, "http://central:9000/api/v1/")
 
-    assert use_case.execute("horno-1", "producto-1") is True
+    result = use_case.execute("horno-1", "producto-1")
 
+    assert result.ok is True
     path, payload, _ = transport.calls[0]
     assert path == "/lotes/inicio"
     assert payload == {"hornoId": "horno-1", "productoId": "producto-1"}
@@ -19,10 +21,13 @@ def test_url_strips_trailing_slash_and_sends_payload():
 
 
 def test_url_without_trailing_slash_and_failure_result():
-    transport = FakeTransport(result=False)
+    transport = FakeTransport(SendResult(ok=False, status_code=502, error="bad gateway"))
     use_case = SendLoteInicioUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.execute("horno-1", "producto-1") is False
+    result = use_case.execute("horno-1", "producto-1")
+
+    assert result.ok is False
+    assert result.error == "bad gateway"
     assert transport.calls[0][0] == "/lotes/inicio"
 
 
@@ -54,18 +59,23 @@ def test_empty_ids_raise_value_error(horno_id, producto_id):
     assert transport.calls == []
 
 
-def test_get_last_accessors_proxy_through():
-    transport = FakeTransport(last_status_code=422, last_response_text="unprocessable")
+def test_execute_returns_the_transport_result_unchanged():
+    result = SendResult(ok=False, status_code=422, error="invalid", response_text="nope")
+    transport = FakeTransport(result)
     use_case = SendLoteInicioUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.get_last_error() == "last error"
-    assert use_case.get_last_status_code() == 422
-    assert use_case.get_last_response_text() == "unprocessable"
+    assert use_case.execute("horno-1", "producto-1") is result
 
 
-def test_get_last_accessors_default_to_none_when_missing():
-    use_case = SendLoteInicioUseCase(BareTransport(), "http://central:9000/api/v1")
+def test_execute_surfaces_failure_detail_from_transport():
+    transport = FakeTransport(
+        SendResult(ok=False, status_code=422, error="invalid", response_text="nope")
+    )
+    use_case = SendLoteInicioUseCase(transport, "http://central:9000/api/v1")
 
-    assert use_case.get_last_error() is None
-    assert use_case.get_last_status_code() is None
-    assert use_case.get_last_response_text() is None
+    result = use_case.execute("horno-1", "producto-1")
+
+    assert result.ok is False
+    assert result.status_code == 422
+    assert result.error == "invalid"
+    assert result.response_text == "nope"

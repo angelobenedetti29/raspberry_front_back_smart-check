@@ -73,6 +73,23 @@ class HttpResult:
         return None
 
 
+@dataclass(frozen=True)
+class SendResult:
+    """Immutable outcome of a single ``SignedTransport.post`` call.
+
+    Unlike the previous mutable ``last_*`` attributes, each result is built
+    locally and returned once, so concurrent sends can never overwrite each
+    other's status, error or response body.
+    """
+
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+    response_text: str | None = None
+    is_redirect: bool = False
+    transport_error: str | None = None
+
+
 def prepare(
     identity: DeviceIdentity,
     method: str,
@@ -82,8 +99,13 @@ def prepare(
     subject: str,
     *,
     audience: str | None = None,
+    issued_at: int | None = None,
 ) -> PreparedRequest:
-    """Serialize the body once, sign those exact bytes and build the request."""
+    """Serialize the body once, sign those exact bytes and build the request.
+
+    ``issued_at`` overrides the proof's ``iat`` (and, by extension, ``exp``),
+    which lets callers inject a clock for deterministic token lifetimes.
+    """
     split = urlsplit(url)
     if split.query:
         raise DeviceEnrollmentError("signed targets must not include a query string")
@@ -98,6 +120,7 @@ def prepare(
         body,
         typ,
         subject,
+        issued_at=issued_at,
     )
     headers = {
         "Content-Type": "application/json",
@@ -192,9 +215,6 @@ class SignedTransport:
         # ``requests.Session`` is not thread-safe. Telemetry and the lote senders
         # share one transport/session instance, so serialise sends.
         self._lock = lock if lock is not None else threading.Lock()
-        self.last_error: str | None = None
-        self.last_status_code: int | None = None
-        self.last_response_text: str | None = None
 
     def url_for(self, path: str) -> str:
         return f"{self.api_base_url}{path}"
@@ -206,22 +226,25 @@ class SignedTransport:
         *,
         typ: str = DEVICE_TYP,
         subject: str | None = None,
-    ) -> bool:
-        self.last_error = None
-        self.last_status_code = None
-        self.last_response_text = None
+    ) -> SendResult:
+        """Sign and send one request, returning an immutable per-call outcome.
 
+        The result is built locally and returned exactly once, so two concurrent
+        sends can never clobber each other's status/error/response body.
+        """
         identity = self._identity_provider()
         if identity is None:
-            self.last_error = "device_not_enrolled"
-            return False
+            return SendResult(ok=False, error="device_not_enrolled")
         if not self.api_base_url or not self.audience:
-            self.last_error = "device_transport_not_configured"
-            return False
+            return SendResult(ok=False, error="device_transport_not_configured")
         resolved_subject = subject if subject is not None else identity.dispositivo_id
         if not resolved_subject:
-            self.last_error = "device_identity_incomplete"
-            return False
+            return SendResult(ok=False, error="device_identity_incomplete")
+        # Fail closed without signing if the body targets another device: the
+        # central's verifier enforces ``sub == dispositivoId`` (403 otherwise).
+        device_id = payload.get("dispositivoId")
+        if device_id and device_id != resolved_subject:
+            return SendResult(ok=False, error="device_identity_mismatch")
 
         try:
             prepared = prepare(
@@ -232,23 +255,30 @@ class SignedTransport:
                 typ,
                 resolved_subject,
                 audience=self.audience,
+                issued_at=int(self.clock()),
             )
-        except DeviceEnrollmentError:
-            self.last_error = "device_proof_unavailable"
-            return False
+        except (DeviceEnrollmentError, TypeError, ValueError):
+            # Non-JSON payloads (TypeError) and malformed URLs (ValueError) must
+            # fail closed instead of escaping without a result.
+            return SendResult(ok=False, error="device_proof_unavailable")
 
         # Serialise access to the shared ``requests.Session`` (not thread-safe).
         with self._lock:
             result = send_prepared(prepared, self.session, self.timeout)
-        self.last_status_code = result.status_code
-        if result.body_text:
-            self.last_response_text = result.body_text
+
         if result.ok:
-            return True
-        if result.is_redirect:
-            self.last_error = "unexpected_redirect"
+            error = None
+        elif result.is_redirect:
+            error = "unexpected_redirect"
         elif result.transport_error is not None:
-            self.last_error = result.transport_error
+            error = result.transport_error
         else:
-            self.last_error = result.error_code() or f"http_{result.status_code}"
-        return False
+            error = result.error_code() or f"http_{result.status_code}"
+        return SendResult(
+            ok=result.ok,
+            status_code=result.status_code,
+            error=error,
+            response_text=result.body_text or None,
+            is_redirect=result.is_redirect,
+            transport_error=result.transport_error,
+        )
