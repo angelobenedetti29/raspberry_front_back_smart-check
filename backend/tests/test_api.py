@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from device_enrollment.transport import SendResult
+
 from backend.app.config import Settings, get_settings
 from backend.app.dependencies import (
     get_detect_use_case,
@@ -56,11 +58,14 @@ class FakeSendLoteInicioUseCase:
         target="http://central:9000/api/v1/lotes/inicio",
     ):
         self.success = success
-        self.status_code = status_code
-        self.error = error
-        self.response_text = response_text
         self.target = target
         self.calls = []
+        self.result = SendResult(
+            ok=success,
+            status_code=status_code,
+            error=error,
+            response_text=response_text,
+        )
 
     def execute(self, horno_id, producto_id):
         if not horno_id or not producto_id:
@@ -68,16 +73,16 @@ class FakeSendLoteInicioUseCase:
                 "Se requieren 'hornoId' y 'productoId' para iniciar el lote."
             )
         self.calls.append((horno_id, producto_id))
-        return self.success
+        return self.result
 
-    def get_last_status_code(self):
-        return self.status_code
 
-    def get_last_error(self):
-        return self.error
+class ExplodingUseCase:
+    """Caso de uso que falla con un error inesperado (no ValueError/entrega)."""
 
-    def get_last_response_text(self):
-        return self.response_text
+    target = "http://central:9000/api/v1/lotes"
+
+    def execute(self, *args, **kwargs):
+        raise RuntimeError("boom inesperado")
 
 
 def make_empty_settings() -> Settings:
@@ -170,6 +175,13 @@ def test_finalizar_lote_delivery_failure_returns_502(client):
         "error": "boom",
         "response": "server error",
     }
+
+
+def test_finalizar_lote_unexpected_error_returns_500(client):
+    app.dependency_overrides[get_finalize_lote_use_case] = lambda: ExplodingUseCase()
+    response = client.post("/api/lotes/finalizar", json=make_lote_payload())
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Error interno al finalizar el lote."
 
 
 def test_detect_with_valid_image(client, detect_use_case):
@@ -376,3 +388,13 @@ def test_iniciar_lote_delivery_failure_returns_502(client):
         "error": "invalid",
         "response": "nope",
     }
+
+
+def test_iniciar_lote_unexpected_error_returns_500(client):
+    app.dependency_overrides[get_send_lote_inicio_use_case] = lambda: ExplodingUseCase()
+    response = client.post(
+        "/api/lotes/iniciar",
+        json={"hornoId": "horno-1", "productoId": "prod-1"},
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Error interno al iniciar el lote."

@@ -1,9 +1,13 @@
 """Tests for TelemetryLoop (fakes, no network)."""
 
+import threading
 import time
+from types import SimpleNamespace
 
+from backend.app import telemetry as telemetry_module
 from backend.app.telemetry import TelemetryLoop
 from backend.domain.entities.device_metrics import DeviceMetrics
+from device_enrollment.transport import SendResult
 
 
 class FakeMetricsProvider:
@@ -20,7 +24,7 @@ class FakeMetricsProvider:
 
 class FakePingUseCase:
     def __init__(self, result=True, raise_error=False):
-        self.result = result
+        self.result = SendResult(ok=bool(result), error=None if result else "last error")
         self.raise_error = raise_error
         self.payloads = []
 
@@ -29,9 +33,6 @@ class FakePingUseCase:
         if self.raise_error:
             raise RuntimeError("ping boom")
         return self.result
-
-    def get_last_error(self):
-        return "last error"
 
 
 def wait_until(predicate, timeout=2.0):
@@ -111,3 +112,39 @@ def test_use_case_exception_does_not_break_loop():
     loop.stop()
 
     assert loop.running is False
+
+
+def test_start_is_idempotent_under_concurrent_calls(monkeypatch):
+    """``start`` debe crear un solo hilo aunque se llame en paralelo."""
+    loop = _make_loop()
+    created = []
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+            created.append(self)
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+    barrier = threading.Barrier(8)
+
+    def worker():
+        barrier.wait()
+        loop.start()
+
+    # Los hilos trabajadores se crean con el ``threading`` real; el parche solo
+    # reemplaza el ``threading`` que ve ``TelemetryLoop.start``.
+    workers = [threading.Thread(target=worker) for _ in range(8)]
+    monkeypatch.setattr(
+        telemetry_module, "threading", SimpleNamespace(Thread=FakeThread)
+    )
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join()
+
+    assert len(created) == 1
