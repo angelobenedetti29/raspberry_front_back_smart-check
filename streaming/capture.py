@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import queue
 import threading
@@ -10,6 +11,9 @@ from typing import Any
 import cv2
 
 from .config import StreamConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CaptureWatchdogError(RuntimeError):
@@ -68,13 +72,20 @@ class OpenCVFrameCapture:
                 continue
             try:
                 capture.set(property_id, requested)
-            except Exception:
+            except Exception as exc:
                 # Drivers differ in which properties they accept. The effective
                 # values below remain the source of truth for observability.
-                pass
+                LOGGER.debug(
+                    "No se pudo fijar %s=%s en la captura de %s: %s",
+                    name, requested, self.config.source, exc,
+                )
             try:
                 self.effective_properties[name] = capture.get(property_id)
-            except Exception:
+            except Exception as exc:
+                LOGGER.debug(
+                    "No se pudo leer la propiedad efectiva %s de la captura de %s: %s",
+                    name, self.config.source, exc,
+                )
                 self.effective_properties[name] = requested
 
     def _open(self) -> bool:
@@ -95,12 +106,16 @@ class OpenCVFrameCapture:
             self._next_retry = 0.0
             self._start_reader(capture)
             return True
-        except Exception:
+        except Exception as exc:
+            LOGGER.warning("No se pudo abrir la fuente de captura %s: %s", self.config.source, exc)
             if capture is not None:
                 try:
                     capture.release()
-                except Exception:
-                    pass
+                except Exception as release_exc:
+                    LOGGER.debug(
+                        "Fallo liberando la captura de %s tras error de apertura: %s",
+                        self.config.source, release_exc,
+                    )
             self._schedule_retry()
             return False
 
@@ -191,8 +206,8 @@ class OpenCVFrameCapture:
         self._reader_stop.set()
         try:
             capture.release()
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.debug("Fallo liberando la captura de %s tras fallo de lectura: %s", self.config.source, exc)
         self._capture = None
         self._stable_frames = 0
         self._schedule_retry()
@@ -203,13 +218,17 @@ class OpenCVFrameCapture:
         if self._watchdog_tripped:
             # A native read is still blocked in the daemon reader. It cannot be
             # cancelled safely; process exit is the resource boundary.
+            LOGGER.warning(
+                "Watchdog de captura activado para %s; se omite release porque una lectura nativa sigue bloqueada",
+                self.config.source,
+            )
             self._capture = None
             return
         if self._capture is not None:
             try:
                 self._capture.release()
-            except Exception:
-                pass
+            except Exception as exc:
+                LOGGER.debug("Fallo liberando la captura de %s: %s", self.config.source, exc)
             self._capture = None
 
     close = release

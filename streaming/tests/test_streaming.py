@@ -225,6 +225,22 @@ class PersistenceTests(unittest.TestCase):
             self.assertTrue(store.append("now", [{"label": "x"}], {}))
             store.close()
 
+    def test_health_surfaces_dropped_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonlDetectionStore(os.path.join(directory, "detections.jsonl"))
+            try:
+                initial = store.health()
+                store.dropped_detections = 3
+                store.dropped_samples = 2
+                current = store.health()
+            finally:
+                store.close()
+            self.assertIn("worker_alive", initial)
+            self.assertEqual(initial["dropped_detections"], 0)
+            self.assertEqual(initial["dropped_samples"], 0)
+            self.assertEqual(current["dropped_detections"], 3)
+            self.assertEqual(current["dropped_samples"], 2)
+
 
 class _FakeStdin:
     def __init__(self):
@@ -312,6 +328,25 @@ class _Processor:
         return frame, []
 
 
+class _DetectorWithRelease:
+    def __init__(self):
+        self.released = False
+
+    def detect_frame(self, _frame):
+        return []
+
+    def release_hailo(self):
+        self.released = True
+
+
+class _ProcessorWithDetector:
+    def __init__(self, detector):
+        self.detector = detector
+
+    def process(self, frame):
+        return frame, []
+
+
 class OrchestrationTests(unittest.TestCase):
     def test_run_releases_capture_and_uses_fake_publisher(self):
         capture = _Capture()
@@ -322,6 +357,31 @@ class OrchestrationTests(unittest.TestCase):
         self.assertTrue(capture.released)
         self.assertFalse(publisher.started)
         self.assertEqual(len(publisher.frames), 2)
+
+    def test_run_does_not_release_detector_of_injected_processor(self):
+        detector = _DetectorWithRelease()
+        processor = _ProcessorWithDetector(detector)
+        run(
+            StreamConfig(),
+            capture=_Capture(),
+            processor=processor,
+            publisher=FakePublisher(),
+            max_frames=2,
+        )
+        self.assertFalse(detector.released)
+
+    def test_run_releases_detector_it_created(self):
+        with tempfile.TemporaryDirectory() as directory:
+            detector = _DetectorWithRelease()
+            with patch("streaming.main.create_detector", return_value=detector):
+                run(
+                    StreamConfig(storage_path=os.path.join(directory, "detections.jsonl")),
+                    capture=_Capture(),
+                    processor=None,
+                    publisher=FakePublisher(),
+                    max_frames=2,
+                )
+            self.assertTrue(detector.released)
 
 
 if __name__ == "__main__":
