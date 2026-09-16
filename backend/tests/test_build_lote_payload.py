@@ -1,5 +1,5 @@
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from backend.domain.entities.sensor_readings import SensorReadings
 from backend.use_cases.build_lote_payload import (
@@ -17,6 +17,10 @@ def _samples():
         SensorReadings(220.0, 315.0, 218.0, 312.0, 1.10),
         SensorReadings(221.0, 317.0, 220.0, 314.0, 1.20),
     ]
+
+
+def _parse_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def test_counts_and_total():
@@ -69,9 +73,22 @@ def test_sensor_averages_and_iso_dates():
     assert payload["tempHorno2"] == 219.0
     assert payload["tempCombHorno2"] == 313.0
     assert payload["velocidadCinta"] == 1.15
-    assert payload["inicioAt"] == "2024-01-01T08:00:00Z"
-    assert payload["finAt"] == "2024-01-01T09:00:00Z"
+    # El naive se interpreta como hora local y se serializa en UTC; el instante
+    # debe conservarse sea cual sea la zona del equipo que corre el test.
+    assert _parse_utc(payload["inicioAt"]) == INICIO.astimezone(timezone.utc)
+    assert _parse_utc(payload["finAt"]) == FIN.astimezone(timezone.utc)
     assert payload["productoId"] == DEFAULT_PRODUCT_ID
+
+
+def test_aware_datetimes_are_converted_to_utc():
+    seen = {1: "ok"}
+    offset = timezone(timedelta(hours=-3))
+    inicio = datetime(2024, 1, 1, 8, 0, 0, tzinfo=offset)
+    fin = datetime(2024, 1, 1, 9, 0, 0, tzinfo=offset)
+    payload = build_lote_payload(inicio, fin, seen, [], rng=random.Random(0))
+
+    assert payload["inicioAt"] == "2024-01-01T11:00:00Z"
+    assert payload["finAt"] == "2024-01-01T12:00:00Z"
 
 
 def test_sensor_fallback_defaults_without_samples():

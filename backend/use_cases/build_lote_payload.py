@@ -1,5 +1,5 @@
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
 from backend.domain.entities.sensor_readings import SensorReadings
@@ -12,6 +12,19 @@ def _average(values: Sequence[float], fallback: float) -> float:
     if not values:
         return fallback
     return round(sum(values) / len(values), 2)
+
+
+def _to_utc_iso(value: datetime) -> str:
+    """Serializa un datetime como ISO-8601 en UTC terminado en ``Z``.
+
+    Un datetime sin zona se interpreta como hora local (es lo que entrega el
+    worker con ``datetime.now()``); uno con zona se convierte a UTC. Así el
+    sufijo ``Z`` deja de ser una etiqueta falsa: siempre representa el instante
+    correcto.
+    """
+    if value.tzinfo is None:
+        value = value.astimezone()
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def build_lote_payload(
@@ -63,8 +76,8 @@ def build_lote_payload(
     return {
         "productoId": producto_id,
         "turno": turno,
-        "inicioAt": inicio_at.isoformat() + "Z",
-        "finAt": fin_at.isoformat() + "Z",
+        "inicioAt": _to_utc_iso(inicio_at),
+        "finAt": _to_utc_iso(fin_at),
         "totalUnidades": total_unidades,
         "correctos": correctos_count,
         "quemados": quemados_count,
