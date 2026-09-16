@@ -1,25 +1,56 @@
-import os
-import cv2
-import numpy as np
+import argparse
 import glob
+import os
+import sys
+from pathlib import Path
 
-def main():
+# Raíz del repositorio derivada de este archivo:
+# <repo>/ai_training/scripts/prepare_calibration.py -> parents[2] == <repo>
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Variable de entorno alternativa para no pasar --images-dir en cada ejecución.
+IMAGES_DIR_ENV = "CALIB_IMAGES_DIR"
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Genera ai_training/models/calib_dataset.npy para la calibración de Hailo."
+    )
+    parser.add_argument(
+        "--images-dir",
+        default=None,
+        help="Carpeta con las imágenes de calibración. Si se omite se usa la "
+             f"variable de entorno {IMAGES_DIR_ENV}.",
+    )
+    return parser.parse_args(argv)
+
+
+def resolve_images_dir(cli_value):
+    value = cli_value or os.environ.get(IMAGES_DIR_ENV)
+    if not value:
+        print("[ERROR] No se especificó el directorio de imágenes de calibración.")
+        print(f"        Pasá --images-dir /ruta/a/train/images o definí la variable de entorno {IMAGES_DIR_ENV}.")
+        sys.exit(1)
+    if not os.path.isdir(value):
+        print(f"[ERROR] La carpeta de imágenes no existe: {value}")
+        sys.exit(1)
+    return value
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
     print("=" * 60)
     print("        CREACIÓN DEL DATASET DE CALIBRACIÓN HAILO")
     print("=" * 60)
 
-    # 1. Definir la ruta de las imágenes
-    default_path = r"C:\Users\angel\Downloads\Deteccion de tostadas normales.v4-tostada_normal-1.0.2.yolov11\train\images"
-    
-    if not os.path.exists(default_path):
-        print(f"[WARN] No se encontró la ruta por defecto: {default_path}")
-        img_dir = input("Introduce la ruta de la carpeta de imágenes: ").strip()
-    else:
-        img_dir = default_path
+    # Dependencias pesadas importadas recién después de parsear los argumentos para
+    # que `--help` funcione aunque OpenCV/NumPy no estén instalados.
+    import cv2
+    import numpy as np
 
-    if not os.path.exists(img_dir):
-        print(f"[ERROR] La carpeta de imágenes no existe: {img_dir}")
-        return
+    # 1. Definir la ruta de las imágenes (CLI o variable de entorno, nunca interactivo)
+    img_dir = resolve_images_dir(args.images_dir)
 
     # Buscar imágenes JPG, JPEG y PNG
     search_patterns = [os.path.join(img_dir, "*.jpg"), os.path.join(img_dir, "*.jpeg"), os.path.join(img_dir, "*.png")]
@@ -28,10 +59,10 @@ def main():
         img_paths.extend(glob.glob(pattern))
 
     print(f"[INFO] Se encontraron {len(img_paths)} imágenes en {img_dir}")
-    
+
     if not img_paths:
         print("[ERROR] No se encontraron imágenes en el directorio especificado.")
-        return
+        sys.exit(1)
 
     # Limitar a un lote óptimo para la calibración (entre 50 y 500 imágenes)
     max_images = min(500, len(img_paths))
@@ -39,7 +70,6 @@ def main():
     print(f"[INFO] Seleccionando {max_images} imágenes para la calibración...")
 
     images = []
-    success_count = 0
 
     for i, path in enumerate(selected_paths):
         img = cv2.imread(path)
@@ -49,7 +79,6 @@ def main():
             # Convertir de BGR (OpenCV) a RGB
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             images.append(img)
-            success_count += 1
             if (i + 1) % 10 == 0 or (i + 1) == max_images:
                 print(f"  Procesadas {i + 1}/{max_images} imágenes...")
         else:
@@ -57,26 +86,26 @@ def main():
 
     if not images:
         print("[ERROR] No se pudo procesar ninguna imagen con éxito.")
-        return
+        sys.exit(1)
 
     # Convertir a NumPy array de tipo uint8
     calib_dataset = np.array(images, dtype=np.uint8)
-    
-    # Directorio de salida
-    output_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # En la raíz de ai_training o en el directorio actual
-    output_path = os.path.join(output_dir, "models", "calib_dataset.npy")
-    
+
+    # Directorio de salida anclado a la raíz del repo (independiente del CWD)
+    output_path = REPO_ROOT / "ai_training" / "models" / "calib_dataset.npy"
+
     # Asegurar que la carpeta de destino existe
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
+    os.makedirs(output_path.parent, exist_ok=True)
+
     # Guardar archivo .npy
-    np.save(output_path, calib_dataset)
-    
+    np.save(str(output_path), calib_dataset)
+
     print("\n" + "=" * 60)
     print(f"[OK] ¡Dataset de calibración creado con éxito!")
     print(f"[OK] Archivo guardado en: {output_path}")
     print(f"[OK] Dimensiones del dataset: {calib_dataset.shape}")
     print("=" * 60)
+
 
 if __name__ == "__main__":
     main()
