@@ -1,7 +1,6 @@
 import logging
 import os
 import shutil
-import time
 
 from backend.domain.entities.device_metrics import DeviceMetrics
 
@@ -35,16 +34,22 @@ def _parse_cpu_stat(line: str) -> dict:
     return result
 
 
-def _cpu_pct_from_stats(prev: dict, curr: dict) -> float:
-    """Calcula el % de CPU entre dos muestras; 0.0 si no hay delta válido."""
+def _cpu_pct_from_stats(prev: dict, curr: dict) -> float | None:
+    """Calcula el % de CPU entre dos muestras, o ``None`` si no hay datos.
+
+    Devuelve ``None`` cuando falta alguna muestra o no hay avance de tiempo de
+    CPU (``delta_total <= 0``), para que el llamador pueda distinguir "sin
+    datos" de un 0.0 realmente ocioso. Con un delta válido, el porcentaje se
+    limita a [0, 100].
+    """
     if not prev or not curr:
-        return 0.0
+        return None
 
     prev_total = sum(prev.get(field, 0) for field in _CPU_FIELDS)
     curr_total = sum(curr.get(field, 0) for field in _CPU_FIELDS)
     delta_total = curr_total - prev_total
     if delta_total <= 0:
-        return 0.0
+        return None
 
     prev_idle = prev.get("idle", 0) + prev.get("iowait", 0)
     curr_idle = curr.get("idle", 0) + curr.get("iowait", 0)
@@ -97,6 +102,9 @@ def _parse_temperature(raw: str) -> float | None:
 class LinuxSystemMetricsProvider:
     """Métricas reales de Linux/Raspberry. Nunca lanza: usa fallbacks a 0/None."""
 
+    def __init__(self):
+        self._last_cpu_stats: dict | None = None
+
     def sample(self) -> DeviceMetrics:
         try:
             mem_available, mem_total = self._read_ram_mb()
@@ -126,13 +134,14 @@ class LinuxSystemMetricsProvider:
 
     def _read_cpu_pct(self) -> float:
         try:
-            prev = self._read_cpu_stats()
-            time.sleep(0.2)
             curr = self._read_cpu_stats()
-            pct = _cpu_pct_from_stats(prev, curr)
-            if pct > 0.0:
-                return pct
-            return self._load_avg_pct()
+            if not curr:
+                return self._load_avg_pct()
+            pct = _cpu_pct_from_stats(self._last_cpu_stats or {}, curr)
+            self._last_cpu_stats = curr
+            if pct is None:
+                return self._load_avg_pct()
+            return pct
         except Exception:
             return self._load_avg_pct()
 

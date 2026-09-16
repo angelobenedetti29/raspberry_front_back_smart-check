@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.dependencies import get_detector, get_telemetry_loop
 from backend.app.routers import detection, lotes, status
@@ -24,15 +23,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS middleware for local frontend communication
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
     app.include_router(status.router)
     app.include_router(lotes.router)
     app.include_router(detection.router)
@@ -41,9 +31,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=True)

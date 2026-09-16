@@ -17,6 +17,7 @@ except ImportError:
 
 class YoloDetector(IImageDetector):
     def __init__(self, model_path: str = None, names_path: str = None, confidence_threshold: float = 0.60, nms_threshold: float = 0.4):
+        self._released = False
         # Default paths relative to workspace root
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         
@@ -126,6 +127,10 @@ class YoloDetector(IImageDetector):
 
     def detect_frame(self, frame) -> List[DetectionResult]:
         if frame is None:
+            return []
+
+        if self._released:
+            logger.warning("Detector liberado; se ignora la inferencia.")
             return []
 
         h_img, w_img, _ = frame.shape
@@ -253,6 +258,7 @@ class YoloDetector(IImageDetector):
             except Exception:
                 pass
             self.vdevice = None
+        self._released = True
 
     def __del__(self):
         if getattr(self, 'use_hailo', False):

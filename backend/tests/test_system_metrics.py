@@ -42,17 +42,17 @@ def test_cpu_pct_from_stats_computes_delta():
     assert _cpu_pct_from_stats(prev, curr) == 50.0
 
 
-def test_cpu_pct_from_stats_returns_zero_without_delta():
+def test_cpu_pct_from_stats_returns_none_without_data():
     stats = _cpu_stat(idle=100)
-    assert _cpu_pct_from_stats(stats, stats) == 0.0
-    assert _cpu_pct_from_stats({}, stats) == 0.0
-    assert _cpu_pct_from_stats(stats, {}) == 0.0
+    assert _cpu_pct_from_stats(stats, stats) is None
+    assert _cpu_pct_from_stats({}, stats) is None
+    assert _cpu_pct_from_stats(stats, {}) is None
 
 
 def test_cpu_pct_from_stats_is_clamped():
-    # idle decrece (dato inválido) no debe superar 0..100.
-    prev = _cpu_stat(idle=200)
-    curr = _cpu_stat(idle=100)
+    # delta_idle > delta_total (dato inválido) no debe superar 0..100.
+    prev = _cpu_stat(user=100, idle=0)
+    curr = _cpu_stat(user=0, idle=150)
     assert _cpu_pct_from_stats(prev, curr) == 0.0
 
 
