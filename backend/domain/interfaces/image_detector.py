@@ -3,6 +3,11 @@ from typing import List
 from backend.domain.entities.detection import DetectionResult
 
 class IImageDetector(ABC):
+    # Metadata de estado del detector. No forma parte de la inferencia y no
+    # debe forzar la carga del modelo; los detectores perezosos la sobreescriben.
+    loaded: bool = True
+    error: str = ""
+
     @abstractmethod
     def detect(self, image_path: str) -> List[DetectionResult]:
         """Detect objects in an image file by path."""

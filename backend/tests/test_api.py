@@ -122,7 +122,12 @@ def test_status(client):
     assert response.status_code == 200
     assert response.json() == {
         "status": "online",
-        "detector": {"model_path": "fake-model", "classes": ["TCOK", "TCQ"]},
+        "detector": {
+            "loaded": True,
+            "model_path": "fake-model",
+            "classes": ["TCOK", "TCQ"],
+            "error": "",
+        },
     }
 
 
