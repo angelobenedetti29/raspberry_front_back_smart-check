@@ -1,7 +1,7 @@
 import numpy as np
-from typing import List, Any
+from typing import List
 from backend.domain.interfaces.image_detector import IImageDetector
-from backend.use_cases.toast_tracker import ToastTracker
+from backend.use_cases.toast_tracker import ToastTracker, TrackedToast
 
 class DetectAndNotifyUseCase:
     def __init__(self, detector: IImageDetector):
@@ -12,7 +12,7 @@ class DetectAndNotifyUseCase:
         """Resets the state of the internal toast tracker."""
         self.tracker.reset()
 
-    def execute(self, frame: np.ndarray) -> List[Any]:
+    def execute(self, frame: np.ndarray) -> List[TrackedToast]:
         """
         Executes the detection on a frame and updates the toast tracker.
 

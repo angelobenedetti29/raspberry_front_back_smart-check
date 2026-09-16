@@ -3,7 +3,11 @@ from dataclasses import dataclass
 
 @dataclass
 class DeviceMetrics:
-    """Métricas de sistema que la Raspberry reporta al servidor central."""
+    """Métricas de sistema que la Raspberry reporta al servidor central.
+
+    DTO explícito del contrato HTTP (decisión Y2): ``to_ping_payload`` vive aquí
+    a propósito, junto a los campos que mapea.
+    """
 
     cpu_pct: float
     mem_ram_disponible_mb: float
