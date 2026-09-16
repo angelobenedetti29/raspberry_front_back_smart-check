@@ -37,6 +37,7 @@ def create_detector(config: StreamConfig):
 def run(config: StreamConfig, capture=None, processor=None, publisher=None, max_frames: int | None = None) -> int:
     capture = OpenCVFrameCapture(config) if capture is None else capture
     owns_processor = processor is None
+    detector = None
     if processor is None:
         detector = create_detector(config)
         store = JsonlDetectionStore(
@@ -84,7 +85,8 @@ def run(config: StreamConfig, capture=None, processor=None, publisher=None, max_
                     if owns_processor:
                         processor.close()
                 finally:
-                    detector = getattr(processor, "detector", None)
+                    # Only release a detector created by this run. An injected
+                    # processor owns its detector and is responsible for it.
                     try:
                         if detector is not None and hasattr(detector, "release_hailo"):
                             detector.release_hailo()

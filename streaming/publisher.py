@@ -220,7 +220,8 @@ class FFmpegPublisher:
         }
 
     def is_running(self) -> bool:
-        return bool(self.health()["process_alive"] and self.health()["worker_alive"])
+        health = self.health()
+        return bool(health["process_alive"] and health["worker_alive"])
 
     def stop(self) -> None:
         self._stop.set()
