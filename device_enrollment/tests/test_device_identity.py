@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import threading
 
 import pytest
 
@@ -184,3 +185,141 @@ def test_reset_removes_key_and_metadata(tmp_path):
     assert not store.identity_path.exists()
     # A fresh enroll after reset generates a brand-new key.
     assert IdentityStore(tmp_path / "identity").load_private_key() is None
+
+
+# -- re-entrant locking ---------------------------------------------------------
+
+
+def test_lock_is_reentrant_for_nested_mutators(tmp_path):
+    """Nested lock() + guarded mutators must not self-deadlock (hard timeout)."""
+    store = make_identity_store(tmp_path)
+    results: dict[str, str] = {}
+
+    def worker() -> None:
+        with store.lock():
+            pending = store.initialize_pending(API, AUD)
+            enrolled = store.persist_enrolled(
+                pending, device_descriptor(pending.fingerprint)
+            )
+            results["fingerprint"] = enrolled.fingerprint
+
+    # Daemon so a regression can never keep the interpreter (or suite) alive.
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive(), "nested store.lock() deadlocked"
+    assert results.get("fingerprint") == store.load_identity().fingerprint
+
+
+def test_reset_acquires_the_store_lock(tmp_path, monkeypatch):
+    store = make_identity_store(tmp_path)
+    store.initialize_pending(API, AUD)
+    original_lock = store.lock
+    events: list[str] = []
+
+    class RecordingLock:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            events.append("enter")
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc_info):
+            events.append("exit")
+            return self._inner.__exit__(*exc_info)
+
+    monkeypatch.setattr(store, "lock", lambda: RecordingLock(original_lock()))
+
+    store.reset()
+
+    assert events == ["enter", "exit"]
+
+
+def test_reset_on_missing_directory_is_a_noop(tmp_path):
+    # No ensure_directory(): reset must not fail trying to open the lock file.
+    store = IdentityStore(tmp_path / "missing")
+    assert store.reset() == []
+
+
+def test_reset_removes_identity_from_a_permissive_directory(tmp_path):
+    store = make_identity_store(tmp_path)
+    store.initialize_pending(API, AUD)
+    # Un directorio comprometido (permisos demasiado laxos) no debe bloquear el
+    # reset: hay que poder borrar la clave igual.
+    os.chmod(store.identity_dir, 0o777)
+
+    removed = store.reset()
+
+    assert len(removed) == 2
+    assert not store.private_key_path.exists()
+    assert not store.identity_path.exists()
+
+
+def test_reset_refuses_a_symlinked_identity_directory(tmp_path):
+    real_dir = tmp_path / "real"
+    store = IdentityStore(real_dir)
+    store.ensure_directory()
+    store.initialize_pending(API, AUD)
+
+    link = tmp_path / "identity-link"
+    link.symlink_to(real_dir)
+
+    with pytest.raises(IdentityError):
+        IdentityStore(link).reset()
+
+    # La identidad real queda intacta: no se borró a través del symlink.
+    assert store.private_key_path.exists()
+    assert store.identity_path.exists()
+
+
+def test_read_private_key_pem_rejects_symlink(tmp_path):
+    store = make_identity_store(tmp_path)
+    store.initialize_pending(API, AUD)
+    target = tmp_path / "elsewhere.pem"
+    target.write_bytes(store.private_key_path.read_bytes())
+    store.private_key_path.unlink()
+    store.private_key_path.symlink_to(target)
+
+    with pytest.raises(IdentityCorruptError):
+        store.read_private_key_pem()
+
+
+def test_read_private_key_pem_rejects_permissive_mode(tmp_path):
+    store = make_identity_store(tmp_path)
+    store.initialize_pending(API, AUD)
+    os.chmod(store.private_key_path, 0o644)
+
+    with pytest.raises(IdentityCorruptError):
+        store.read_private_key_pem()
+
+
+def test_read_private_key_pem_rejects_hardlink(tmp_path):
+    store = make_identity_store(tmp_path)
+    store.initialize_pending(API, AUD)
+    os.link(store.private_key_path, tmp_path / "hardlink.pem")
+
+    with pytest.raises(IdentityCorruptError):
+        store.read_private_key_pem()
+
+
+def test_persist_enrolled_rejects_missing_fingerprint(tmp_path):
+    store = make_identity_store(tmp_path)
+    pending = store.initialize_pending(API, AUD)
+    descriptor = device_descriptor(pending.fingerprint)
+    del descriptor["keyFingerprint"]
+
+    with pytest.raises(IdentityCorruptError):
+        store.persist_enrolled(pending, descriptor)
+
+
+def test_persist_enrolled_rejects_blank_fingerprint(tmp_path):
+    store = make_identity_store(tmp_path)
+    pending = store.initialize_pending(API, AUD)
+    descriptor = device_descriptor(pending.fingerprint)
+    descriptor["keyFingerprint"] = ""
+
+    with pytest.raises(IdentityCorruptError):
+        store.persist_enrolled(pending, descriptor)
+
