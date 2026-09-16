@@ -111,10 +111,6 @@ def get_finalize_lote_use_case():
     return _finalize_lote_use_case
 
 
-def get_send_ping_use_case():
-    return _send_ping_use_case
-
-
 def get_send_lote_inicio_use_case():
     return _send_lote_inicio_use_case
 

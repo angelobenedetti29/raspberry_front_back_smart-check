@@ -9,8 +9,6 @@ from backend.domain.interfaces.http_client import IHttpClient
 
 logger = logging.getLogger(__name__)
 
-_MAX_RESPONSE_CHARS = 4096
-
 
 def _safe_path(url: str) -> str:
     """Ruta sin query para logs; nunca expone credenciales de la URL."""
@@ -26,22 +24,13 @@ class RequestsHttpClient(IHttpClient):
     def __init__(self, timeout: int = 5):
         self.timeout = timeout
         self.last_error = None
-        self.last_status_code = None
-        self.last_response_text = None
 
     def post(self, url: str, payload: Dict[str, Any], headers: Dict[str, str] = None) -> bool:
         try:
             self.last_error = None
-            self.last_status_code = None
-            self.last_response_text = None
             started = time.monotonic()
             response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            self.last_status_code = response.status_code
-            body = response.text or ""
-            if len(body) > _MAX_RESPONSE_CHARS:
-                body = body[:_MAX_RESPONSE_CHARS]
-            self.last_response_text = body
             logger.info(
                 "http_post path=%s status=%s duration_ms=%d",
                 _safe_path(url),

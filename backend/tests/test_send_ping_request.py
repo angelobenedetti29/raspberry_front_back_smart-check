@@ -72,18 +72,14 @@ def test_missing_dispositivo_id_raises_value_error():
     assert transport.calls == []
 
 
-def test_get_last_accessors_proxy_through():
+def test_get_last_error_proxies_through():
     transport = FakeTransport()
     use_case = SendPingRequestUseCase(transport, "http://central:9000/api/v1")
 
     assert use_case.get_last_error() == "last error"
-    assert use_case.get_last_status_code() == 503
-    assert use_case.get_last_response_text() == "service unavailable"
 
 
-def test_get_last_accessors_default_to_none_when_missing():
+def test_get_last_error_defaults_to_none_when_missing():
     use_case = SendPingRequestUseCase(BareTransport(), "http://central:9000/api/v1")
 
     assert use_case.get_last_error() is None
-    assert use_case.get_last_status_code() is None
-    assert use_case.get_last_response_text() is None

@@ -1,4 +1,4 @@
-"""Config normalization and legacy-alias tests (no API key fallback)."""
+"""Config normalization tests (no API key fallback)."""
 
 import pytest
 
@@ -67,28 +67,26 @@ def test_settings_normalizer_does_not_downgrade_insecure_http():
 
 
 
-def test_settings_accept_legacy_central_base_url(monkeypatch):
+def test_settings_use_device_api_base_url_and_ignore_legacy_alias(monkeypatch):
     from backend.app import config
 
     for name in (
         "DEVICE_API_BASE_URL",
         "DEVICE_AUTH_AUDIENCE",
         "DEVICE_IDENTITY_DIR",
-        "DISPOSITIVO_ID",
-        "CENTRAL_DISPOSITIVO_ID",
         "CENTRAL_BASE_URL",
         "CENTRAL_LOTE_BASE_URL",
         "CENTRAL_LOTES_BASE_URL",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DEVICE_API_BASE_URL", "https://central.example")
+    # El alias legacy ya no debe influir en la URL del dispositivo.
     monkeypatch.setenv("CENTRAL_BASE_URL", "https://legacy.example")
-    monkeypatch.setenv("DEVICE_AUTH_AUDIENCE", "https://legacy.example/api/v1")
     config.get_settings.cache_clear()
     try:
         settings = config.get_settings()
-        assert settings.device_api_base_url == "https://legacy.example/api/v1"
-        assert settings.central_base_url == "https://legacy.example/api/v1"
-        assert settings.device_auth_audience == "https://legacy.example/api/v1"
+        assert settings.device_api_base_url == "https://central.example/api/v1"
+        assert not hasattr(settings, "central_base_url")
     finally:
         config.get_settings.cache_clear()
 
