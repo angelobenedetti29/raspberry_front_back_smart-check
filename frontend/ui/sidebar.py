@@ -1,4 +1,4 @@
-"""Left navigation sidebar: brand, camera toggle, model selector and status."""
+"""Barra lateral de navegación: marca, cámara, selector de modelo y estado."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -21,12 +21,16 @@ from frontend.ui.theme import (
 
 
 class Sidebar(QFrame):
-    """Functional navigation for the live camera plus the model selector.
+    """Navegación funcional de la cámara en vivo más el selector de modelo.
+
+    Si no se le pasan etiquetas, las toma del catálogo ``MODEL_CATALOG``. Los
+    botones de navegación quedan expuestos en :attr:`nav_buttons` para que la
+    aplicación pueda consultarlos o reflejar el estado activo.
 
     Signals
     -------
-    camera_toggled(bool): emitted when the camera navigation button changes.
-    model_changed(int): emitted with the new catalog index.
+    camera_toggled(bool): cambió el botón de cámara (encendido o apagado).
+    model_changed(int): nueva posición del catálogo elegida en el selector.
     """
 
     camera_toggled = Signal(bool)
@@ -39,7 +43,7 @@ class Sidebar(QFrame):
         self.setMaximumWidth(SIDEBAR_MAX_WIDTH)
 
         labels = list(model_labels) if model_labels is not None else [
-            entry[0] for entry in MODEL_CATALOG
+            entry.label for entry in MODEL_CATALOG
         ]
 
         layout = QVBoxLayout(self)
@@ -83,15 +87,17 @@ class Sidebar(QFrame):
 
     # ------------------------------------------------------------------ api
     def set_camera_checked(self, checked):
-        """Reflect the camera state without re-emitting ``camera_toggled``."""
+        """Refleja el estado de la cámara sin reemitir ``camera_toggled``."""
         self.camera_btn.setChecked(checked)
 
     def set_detector_pill(self, text, tone="info"):
+        """Actualiza texto y tono de la píldora del estado del detector."""
         self.detector_pill.setText(text)
         self.detector_pill.set_tone(tone)
 
     # ------------------------------------------------------------- internals
     def _build_brand(self):
+        """Construye el bloque de marca: título grande y subtítulo."""
         brand = QWidget(self)
         box = QVBoxLayout(brand)
         box.setContentsMargins(2, 0, 2, 0)
@@ -109,6 +115,7 @@ class Sidebar(QFrame):
         return brand
 
     def _group_label(self, text):
+        """Crea una etiqueta de grupo (cabecera de sección de la barra)."""
         label = QLabel(text)
         label.setObjectName("SidebarGroup")
         return label

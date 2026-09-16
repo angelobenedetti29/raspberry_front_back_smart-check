@@ -1,4 +1,4 @@
-"""Central live-video surface with explicit idle/loading/error states."""
+"""Superficie central de vídeo en vivo con estados explícitos."""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
@@ -9,11 +9,22 @@ from frontend.ui.theme import SP_MD, set_dynamic_property
 
 
 class VideoPanel(Card):
-    """Renders detection frames and communicates capture state.
+    """Dibuja los frames de detección y comunica el estado de la captura.
 
-    The render target is :attr:`video_label` so the application can keep
-    feeding frames through ``update_image`` while this panel owns how the
-    surface looks in every state.
+    El destino de render es :attr:`video_label`, de modo que la aplicación sigue
+    enviando frames con ``update_image`` mientras este panel decide cómo se ve la
+    superficie. La máquina de estados es ``off`` → ``connecting`` → ``live``, con
+    ``error`` y ``recovery`` como estados de fallo:
+
+    - ``off``: no hay fuente activa ("Cámara apagada").
+    - ``connecting``: se lanzó una fuente y se espera el primer frame.
+    - ``live``: llegan frames de forma continua.
+    - ``error``: falló la configuración de vídeo o la fuente.
+    - ``recovery``: no se pudo detener el worker anterior y hace falta que el
+      operador intervenga.
+
+    Cada estado se refleja en el QSS con la propiedad dinámica ``state`` (ver
+    ``QLabel#VideoSurface[state=...]`` en ``frontend.ui.theme``).
     """
 
     def __init__(self, parent=None):
@@ -41,7 +52,7 @@ class VideoPanel(Card):
 
     # ------------------------------------------------------------------ api
     def show_image(self, qt_image):
-        """Scale and display a frame delivered by the detection worker."""
+        """Escala y muestra un frame entregado por el worker de detección."""
         pixmap = QPixmap.fromImage(qt_image).scaled(
             self.video_label.size(),
             Qt.KeepAspectRatio,
@@ -52,40 +63,47 @@ class VideoPanel(Card):
         self._set_status("on", "En vivo")
 
     def show_connecting(self, message="Conectando con la fuente de vídeo..."):
+        """Pasa al estado ``connecting`` mientras se espera el primer frame."""
         self.video_label.clear()
         self.video_label.setText(message)
         self._apply_state("connecting")
         self._set_status("info", "Conectando")
 
     def show_off(self, message="Cámara apagada"):
+        """Vuelve al estado ``off`` (sin fuente activa)."""
         self.video_label.clear()
         self.video_label.setText(message)
         self._apply_state("off")
         self._set_status("off", "Detenida")
 
     def show_error(self, message):
+        """Muestra un fallo de vídeo o de fuente en el estado ``error``."""
         self.video_label.clear()
         self.video_label.setText(message)
         self._apply_state("error")
         self._set_status("danger", "Error")
 
     def show_recovery(self, message):
+        """Muestra que hace falta intervención del operador (``recovery``)."""
         self.video_label.clear()
         self.video_label.setText(message)
         self._apply_state("recovery")
         self._set_status("warning", "Recuperación")
 
     def set_session_meta(self, text):
+        """Actualiza el texto de contexto de la cabecera (fuente activa)."""
         self.session_meta.setText(text)
 
     # ------------------------------------------------------------- internals
     def _apply_state(self, state):
+        """Aplica el estado, sin repolish si no cambió respecto al actual."""
         if state == self._state:
             return
         self._state = state
         set_dynamic_property(self.video_label, "state", state)
 
     def _set_status(self, tone, text):
+        """Actualiza la píldora de estado de la cabecera si ya existe."""
         pill = getattr(self, "status_pill", None)
         if pill is not None:
             pill.set_status(tone, text)
