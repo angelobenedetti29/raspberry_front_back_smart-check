@@ -57,31 +57,17 @@ class Settings:
     device_api_base_url: str = ""
     device_auth_audience: str = ""
     device_identity_dir: str = DEFAULT_IDENTITY_DIR
-    dispositivo_id: str = ""
     horno_id: str = ""
     default_producto_id: str = ""
     ping_interval_seconds: float = 10.0
-
-    @property
-    def central_base_url(self) -> str:
-        """Alias legacy: el servidor central es único para lotes y telemetría."""
-        return self.device_api_base_url
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings(
-        device_api_base_url=_normalize_base_url(
-            os.getenv("DEVICE_API_BASE_URL")
-            or os.getenv("CENTRAL_BASE_URL")
-            or os.getenv("CENTRAL_LOTE_BASE_URL")
-            or os.getenv("CENTRAL_LOTES_BASE_URL")
-        ),
+        device_api_base_url=_normalize_base_url(os.getenv("DEVICE_API_BASE_URL")),
         device_auth_audience=os.getenv("DEVICE_AUTH_AUDIENCE") or "",
         device_identity_dir=os.getenv("DEVICE_IDENTITY_DIR") or DEFAULT_IDENTITY_DIR,
-        dispositivo_id=(
-            os.getenv("DISPOSITIVO_ID") or os.getenv("CENTRAL_DISPOSITIVO_ID") or ""
-        ),
         horno_id=os.getenv("HORNO_ID") or os.getenv("CENTRAL_HORNO_ID") or "",
         default_producto_id=(
             os.getenv("PRODUCTO_ID") or os.getenv("CENTRAL_PRODUCTO_ID") or ""

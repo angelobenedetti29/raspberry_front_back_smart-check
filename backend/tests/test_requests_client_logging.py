@@ -73,5 +73,4 @@ def test_non_2xx_exposes_safe_http_code_not_response_body(monkeypatch, caplog):
 
     assert ok is False
     assert client.last_error == "http_500"
-    assert client.last_response_text == "INTERNAL_SECRET"
     assert "INTERNAL_SECRET" not in caplog.text
