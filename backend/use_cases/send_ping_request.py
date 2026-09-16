@@ -1,6 +1,3 @@
-from typing import Any
-
-
 class SendPingRequestUseCase:
     """Envía telemetría periódica firmada (DeviceProof) al servidor central."""
 

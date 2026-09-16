@@ -1,6 +1,3 @@
-from typing import Any
-
-
 class SendLoteRequestUseCase:
     """Envía el cierre de un lote firmado (DeviceProof) al servidor central."""
 

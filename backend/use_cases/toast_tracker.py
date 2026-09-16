@@ -150,7 +150,7 @@ class ToastTracker:
         for t_id in to_delete:
             del self.tracked_toasts[t_id]
 
-        # OPCIÓN B: Reiniciar el contador si la escena queda completamente limpia de tostadas
+        # Reinicia el contador si la escena queda completamente limpia de tostadas.
         if not self.tracked_toasts:
             self.next_id = 1
 
