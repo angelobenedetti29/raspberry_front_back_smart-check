@@ -59,8 +59,29 @@ class LazyYoloDetector(IImageDetector):
             self._detector.release_hailo()
 
     @property
-    def model_path(self):
-        return self.detector.model_path
+    def loaded(self) -> bool:
+        """True si la carga perezosa ya se resolvió (modelo real o fallback).
+
+        No dispara la carga del modelo.
+        """
+        return self._detector is not None
+
+    @property
+    def model_path(self) -> str | None:
+        """Ruta del modelo cargado, o None si todavía no se cargó.
+
+        No dispara la carga perezosa (a diferencia de la version anterior).
+        """
+        if self._detector is None:
+            return None
+        return getattr(self._detector, "model_path", None)
+
+    @property
+    def error(self) -> str:
+        """Motivo de degradación si la carga derivó en FallbackDetector."""
+        if self._detector is None:
+            return ""
+        return str(getattr(self._detector, "error", "") or "")
 
 
 _settings = get_settings()
