@@ -8,6 +8,7 @@ señales, mantiene el estado de la sesión y coordina el ciclo de vida del hilo.
 """
 
 import os
+import logging
 
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -17,7 +18,15 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QFrame,
 )
-from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtCore import (
+    Qt,
+    QObject,
+    QRunnable,
+    QThreadPool,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QImage
 
 from streaming.config import StreamConfig
@@ -25,7 +34,10 @@ from streaming.config import StreamConfig
 # Componentes del backend (Arquitectura Limpia).
 from backend.infrastructure.ai.fallback_detector import FallbackDetector
 from backend.infrastructure.ai.yolo_detector import YoloDetector
-from backend.infrastructure.http.requests_client import RequestsHttpClient
+from backend.infrastructure.http.requests_client import (
+    TIMEOUT_UNCERTAIN,
+    RequestsHttpClient,
+)
 from backend.use_cases.detect_and_notify import DetectAndNotifyUseCase
 
 from frontend.config import (
@@ -58,12 +70,25 @@ from frontend.ui.theme import (
 from frontend.ui.video_panel import VideoPanel
 from frontend.workers.detection_worker import YOLODetectionThread
 
+logger = logging.getLogger(__name__)
+
 
 # Por debajo de este ancho, el layout de tres columnas se reordena en una sola
 # columna apilada y desplazable (pensado para el panel 800x480 de la Raspberry).
 COMPACT_BREAKPOINT = 1024
 MIN_WINDOW_WIDTH = 640
 MIN_WINDOW_HEIGHT = 420
+
+# Cota de espera al cerrar para drenar los POST de lote en vuelo: no debe
+# bloquear el apagado indefinidamente si el backend no responde.
+LOTE_POST_DRAIN_MS = 3000
+
+# Tiempo máximo que se espera a que el QThread de vídeo termine antes de darlo
+# por abandonado y pedir recuperación manual.
+WORKER_SHUTDOWN_TIMEOUT_MS = 5000
+
+# Ancho máximo de Qt (QWIDGETSIZE_MAX) usado para "sin límite" en modo compacto.
+SIDEBAR_UNCONSTRAINED_MAX_WIDTH = 16777215
 
 
 def _detector_pill_state(detector):
@@ -73,6 +98,41 @@ def _detector_pill_state(detector):
     if isinstance(detector, FallbackDetector):
         return f"Simulado (Error: {detector.error[:25]})", "warning"
     return "ONNX Activo", "info"
+
+
+class _LotePostSignals(QObject):
+    """Portador de señales del POST de lote; vive en el hilo de la GUI.
+
+    El ``QRunnable`` emite desde el pool y Qt encola la entrega en el hilo de la
+    GUI, así que el slot que actualiza las alertas nunca corre en segundo plano.
+    """
+
+    completed = Signal(dict, bool, str)
+
+
+class _LotePostTask(QRunnable):
+    """Envía un lote al backend fuera del hilo de la GUI.
+
+    ``RequestsHttpClient.post`` bloquea hasta el timeout; ejecutarlo aquí evita
+    que la ventana se congele mientras se registra el lote.
+    """
+
+    def __init__(self, client, url, payload, signals):
+        super().__init__()
+        self._client = client
+        self._url = url
+        self._payload = payload
+        self._signals = signals
+
+    @Slot()
+    def run(self):
+        success = self._client.post(self._url, self._payload)
+        # Captura el error aquí, en el hilo del pool, inmediatamente después del
+        # POST: ``last_error`` pertenece al request que acaba de terminar y otro
+        # POST podría sobrescribirlo, así que se envía con la señal en vez de
+        # que el slot lea estado compartido del cliente.
+        error = getattr(self._client, "last_error", None)
+        self._signals.completed.emit(self._payload, success, error)
 
 
 class FactoryControlApp(QMainWindow):
@@ -87,6 +147,17 @@ class FactoryControlApp(QMainWindow):
 
         # Componentes del backend.
         self.http_client = RequestsHttpClient()
+
+        # POST de lotes en segundo plano: el pool y su emisor se conservan en la
+        # app para que las señales sigan vivas hasta que se entreguen.
+        self._lote_post_signals = _LotePostSignals(self)
+        self._lote_post_signals.completed.connect(self._on_lote_post_finished)
+        self._lote_pool = QThreadPool(self)
+        # Un solo hilo serializa los POST de lote: ``RequestsHttpClient`` guarda
+        # ``last_error`` en estado compartido y cada POST puede tardar hasta su
+        # timeout, así que dos POST solapados reportarían el error ajeno. También
+        # conserva el orden FIFO de registro de lotes.
+        self._lote_pool.setMaxThreadCount(1)
 
         # Detección automática de plataforma (Raspberry Pi con chip Hailo).
         platform = detect_platform()
@@ -104,7 +175,7 @@ class FactoryControlApp(QMainWindow):
                 names_path=resolve_project_path(self.current_names),
             )
         except Exception as e:
-            print(f"[GUI App] Error al inicializar detector YOLO: {e}")
+            logger.error("[GUI App] Error al inicializar detector YOLO: %s", e)
             self.detector = FallbackDetector(e)
 
         # Casos de uso.
@@ -220,7 +291,7 @@ class FactoryControlApp(QMainWindow):
 
         if compact:
             self.sidebar.setMinimumWidth(0)
-            self.sidebar.setMaximumWidth(16777215)
+            self.sidebar.setMaximumWidth(SIDEBAR_UNCONSTRAINED_MAX_WIDTH)
             grid.addWidget(self.sidebar, 0, 0, 1, 1)
             grid.addWidget(self.center_column, 1, 0, 1, 1)
             grid.addWidget(self.right_column, 2, 0, 1, 1)
@@ -264,14 +335,14 @@ class FactoryControlApp(QMainWindow):
             )
 
     # -------------------------------------------------------------- filters
-    def toggle_filter_ok(self, checked=None):
+    def toggle_filter_ok(self):
         """Alterna la visibilidad de las etiquetas de tostadas OK."""
         self.show_ok_toasts = not self.show_ok_toasts
         self.update_filter_button_styles()
         if self.yolo_thread is not None:
             self.yolo_thread.show_ok_toasts = self.show_ok_toasts
 
-    def toggle_filter_burnt(self, checked=None):
+    def toggle_filter_burnt(self):
         """Alterna la visibilidad de las etiquetas de tostadas quemadas."""
         self.show_burnt_toasts = not self.show_burnt_toasts
         self.update_filter_button_styles()
@@ -310,7 +381,9 @@ class FactoryControlApp(QMainWindow):
 
         if 0 <= index < len(MODEL_CATALOG):
             self.current_model, self.current_names = model_for_index(index)
-            print(f"[INFO] Modelo cambiado a: {MODEL_CATALOG[index].label}")
+            logger.info(
+                "[INFO] Modelo cambiado a: %s", MODEL_CATALOG[index].label
+            )
 
         model_path = resolve_project_path(self.current_model)
         names_path = resolve_project_path(self.current_names)
@@ -346,17 +419,17 @@ class FactoryControlApp(QMainWindow):
         que esta liberación no puede competir con una captura viva.
         """
         if self.detector is not None:
-            print("[GUI App] Liberando recursos del detector anterior...")
+            logger.info("[GUI App] Liberando recursos del detector anterior...")
             try:
                 self.detector.release_hailo()
             except Exception as e:
-                print(f"[GUI App] Error al liberar NPU: {e}")
+                logger.error("[GUI App] Error al liberar NPU: %s", e)
             self.detector = None
 
         try:
             self.detector = YoloDetector(model_path=model_path, names_path=names_path)
         except Exception as e:
-            print(f"[GUI App] Error al cambiar detector YOLO: {e}")
+            logger.error("[GUI App] Error al cambiar detector YOLO: %s", e)
             self.detector = FallbackDetector(e)
 
         self.detect_use_case = DetectAndNotifyUseCase(self.detector)
@@ -389,7 +462,7 @@ class FactoryControlApp(QMainWindow):
         """Deja la app en un estado seguro que exige intervención del operador."""
         self._recovery_required = True
         message = "Se requiere recuperación: no se pudo detener el vídeo anterior"
-        print(f"[GUI App] {message}")
+        logger.error("[GUI App] %s", message)
         self.video_panel.show_recovery(message)
         self.add_alert_log(message)
 
@@ -410,6 +483,10 @@ class FactoryControlApp(QMainWindow):
             thread.finished.disconnect(self._on_worker_finished)
         except (TypeError, RuntimeError):
             pass
+        # Un worker que superó el timeout nunca emitirá ``finished``, así que sus
+        # señales se desconectan aquí para que no siga enviando frames, alertas
+        # ni lotes al backend desde un hilo abandonado.
+        self._disconnect_worker_signals(thread)
         self._pending_action = None
         self._shutdown_thread = None
         self._show_recovery_required()
@@ -458,20 +535,25 @@ class FactoryControlApp(QMainWindow):
                 pending_action()
             return True
 
-        self._disconnect_worker_signals(thread)
         if not thread.isRunning():
+            # Ya terminó: no queda lote residual, así que aquí sí se pueden
+            # soltar los consumidores de UI.
+            self._disconnect_worker_signals(thread)
             if self.yolo_thread is thread:
                 self.yolo_thread = None
             if pending_action is not None and not closing:
                 pending_action()
             return True
 
+        # Las señales siguen conectadas hasta que QThread emita ``finished``:
+        # ``run()`` emite el lote residual justo antes de terminar y debe
+        # llegar al backend. ``_on_worker_finished`` las desconecta después.
         self._shutdown_thread = thread
         self._pending_action = pending_action
         self._closing_requested = closing
         thread.finished.connect(self._on_worker_finished)
         thread.stop()  # No bloquea; capture.release sigue en worker.run().
-        self._shutdown_timer.start(5000)
+        self._shutdown_timer.start(WORKER_SHUTDOWN_TIMEOUT_MS)
         return False
 
     # ----------------------------------------------------------------- vídeo
@@ -511,7 +593,7 @@ class FactoryControlApp(QMainWindow):
 
     def _show_video_start_error(self, message):
         """Registra y muestra en el panel de vídeo un error de arranque."""
-        print(f"[GUI App] {message}")
+        logger.error("[GUI App] %s", message)
         self.video_panel.show_error(message)
 
     def _show_streaming_disabled(self, error, preview_only):
@@ -526,7 +608,7 @@ class FactoryControlApp(QMainWindow):
                 "Streaming deshabilitado: configuración inválida; "
                 "se conserva la fuente activa"
             )
-        print(f"[GUI App] {message}: {error}")
+        logger.warning("[GUI App] %s: %s", message, error)
         if preview_only:
             self._show_video_start_error(message)
         self.add_alert_log(message, tone="warning")
@@ -621,21 +703,45 @@ class FactoryControlApp(QMainWindow):
 
     @Slot(dict)
     def handle_lote_completed(self, payload):
-        """Envía el lote al backend local y refleja el resultado en las alertas."""
-        print(f"[GUI App] Lote completado. Enviando POST con payload: {payload}")
+        """Encola el POST del lote sin bloquear el hilo de la GUI."""
+        logger.info("[GUI App] Lote completado. Enviando POST con payload: %s", payload)
 
-        success = self.http_client.post(LOCAL_LOTE_ENDPOINT, payload)
+        task = _LotePostTask(
+            self.http_client,
+            LOCAL_LOTE_ENDPOINT,
+            payload,
+            self._lote_post_signals,
+        )
+        self._lote_pool.start(task)
+
+    @Slot(dict, bool, str)
+    def _on_lote_post_finished(self, payload, success, error):
+        """Refleja en las alertas el resultado del POST ya resuelto."""
         if success:
-            print("[GUI App] Lote registrado exitosamente en el servidor central a través del backend.")
+            logger.info(
+                "[GUI App] Lote registrado exitosamente en el servidor central "
+                "a través del backend."
+            )
             self.add_alert_log(
                 "¡LOTE REGISTRADO! "
                 f"Unidades: {payload['totalUnidades']} "
                 f"(OK: {payload['correctos']}, Q: {payload['quemados']}, C: {payload['crudas']})",
                 tone="info",
             )
+            return
+
+        # ``error`` viaja con la señal desde el propio request; ya no se lee
+        # ``self.http_client.last_error``, que otro POST pudo sobrescribir.
+        logger.error("[GUI App] Error al registrar el lote: %s", error)
+        if error == TIMEOUT_UNCERTAIN:
+            # El central pudo registrar el lote: se avisa sin afirmar un fallo.
+            self.add_alert_log(
+                "Envío de lote sin confirmar: no se pudo confirmar; "
+                "el lote pudo haberse registrado",
+                tone="warning",
+            )
         else:
-            print(f"[GUI App] Error al registrar el lote: {self.http_client.last_error}")
-            self.add_alert_log(f"Error al enviar lote: {str(self.http_client.last_error)[:50]}")
+            self.add_alert_log(f"Error al enviar lote: {str(error)[:50]}")
 
     @Slot(QImage)
     def update_image(self, qt_image):
@@ -651,4 +757,13 @@ class FactoryControlApp(QMainWindow):
             event.ignore()
             return
         self._request_thread_shutdown(closing=True)
+        # Drena los POST de lote en vuelo antes de aceptar el cierre: el
+        # QThreadPool se destruye al cerrar y descartaría una tarea pendiente sin
+        # procesar su señal. La espera es acotada para que el apagado nunca se
+        # cuelgue si el backend no responde.
+        if not self._lote_pool.waitForDone(LOTE_POST_DRAIN_MS):
+            logger.warning(
+                "[GUI App] El lote en vuelo no pudo confirmarse antes de "
+                "cerrar; se descarta su resultado."
+            )
         event.accept()
