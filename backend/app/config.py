@@ -68,9 +68,7 @@ def get_settings() -> Settings:
         device_api_base_url=_normalize_base_url(os.getenv("DEVICE_API_BASE_URL")),
         device_auth_audience=os.getenv("DEVICE_AUTH_AUDIENCE") or "",
         device_identity_dir=os.getenv("DEVICE_IDENTITY_DIR") or DEFAULT_IDENTITY_DIR,
-        horno_id=os.getenv("HORNO_ID") or os.getenv("CENTRAL_HORNO_ID") or "",
-        default_producto_id=(
-            os.getenv("PRODUCTO_ID") or os.getenv("CENTRAL_PRODUCTO_ID") or ""
-        ),
+        horno_id=os.getenv("HORNO_ID") or "",
+        default_producto_id=os.getenv("PRODUCTO_ID") or "",
         ping_interval_seconds=_parse_ping_interval(os.getenv("PING_INTERVAL_SECONDS")),
     )
