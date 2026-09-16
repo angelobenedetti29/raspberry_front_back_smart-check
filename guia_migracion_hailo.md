@@ -10,7 +10,7 @@ El compilador de Hailo (Dataflow Compiler - DFC) requiere un sistema operativo L
 
 ### A. Entorno de WSL2
 * **WSL2 instalado** con la distribución Ubuntu.
-* **Python 3.10:** Instalado mediante el repositorio PPA deadsnakes (ya que versiones más nuevas como Python 3.12 o 3.14 tienen conflictos con librerías requeridas como SciPy 1.12).
+* **Python 3.10 (solo para el compilador DFC):** Instalado mediante el repositorio PPA deadsnakes (ya que versiones más nuevas como Python 3.12 o 3.14 tienen conflictos con librerías requeridas como SciPy 1.12). El runtime del proyecto (backend/frontend/streaming) usa Python 3.11+ (probado con 3.14); este 3.10 es exclusivo del toolchain Hailo y no reemplaza al del proyecto.
 * **Entorno Virtual:** Creado en la ruta de WSL `~/hailo_env_3.10` para aislar las librerías.
 * **Variable Temporal para Pip:** WSL2 limita la memoria de `/tmp` a 3.9 GB. Para evitar errores de falta de espacio (`No space left on device`) al descargar TensorFlow o PyTorch, se crea una carpeta física `~/pip_tmp` en el disco principal y se antepone la variable `TMPDIR=~/pip_tmp` al instalar paquetes.
 
@@ -99,8 +99,15 @@ El archivo `.alls` contiene las directivas que se inyectan en el compilador:
   ```text
   normalization1 = normalization([0.0, 0.0, 0.0], [255.0, 255.0, 255.0])
   nms_postprocess("/mnt/c/Users/angel/OneDrive/Desktop/tesis/raspberry_front_back_smart-check/ai_training/models/tostadas_v2_nms.json", meta_arch=yolov8, engine=cpu)
+  performance_param(compiler_optimization_level=max)
   ```
-  Esto aplica la normalización de píxeles correcta y adjunta la capa NMS final al archivo HEF para que la salida coincida con la que espera la aplicación PySide6.
+  Esto aplica la normalización de píxeles correcta, adjunta la capa NMS final al archivo HEF para que la salida coincida con la que espera la aplicación PySide6 y pide el nivel máximo de optimización del compilador.
+
+  > ⚠️ El archivo real `ai_training/models/tostadas_v2.alls` contiene una ruta
+  > absoluta de Windows (`/mnt/c/Users/angel/...`) en `nms_postprocess`, que
+  > debe editarse en el host de compilación para apuntar al `tostadas_v2_nms.json`
+  > local. No modifiques esa ruta en el repositorio: es un artefacto de la
+  > máquina de compilación original.
 
 ### Paso 6: Compilar usando el Script Automatizado
 * **Archivo:** `ai_training/scripts/compile_hailo.py`

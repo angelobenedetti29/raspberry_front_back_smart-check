@@ -62,9 +62,11 @@ Para cuantizar el modelo a INT8 sin perder precisión, genera un archivo de cali
 ### TAREA 4: Parsear y Compilar los Modelos ONNX a HEF
 Ejecuta la conversión para tostadas_v1 y tostadas_v2:
 
-1. **Parsear el archivo ONNX a HAR:**
+1. **Parsear el archivo ONNX a HAR:** el flujo real usa el parser ONNX
+   (`hailo parser onnx`), no `hailo parser yolo`; la fuente de verdad es
+   `ai_training/scripts/compile_hailo.py`.
    ```bash
-   hailo parser yolo --hw-arch hailo8l --model-name tostadas_v2 tostadas_v2.onnx
+   hailo parser onnx tostadas_v2.onnx --hw-arch hailo8l --net-name tostadas_v2 --har-path tostadas_v2.har
    ```
 2. **Generar y correr el Script de Cuantización (Python):**
    ```python

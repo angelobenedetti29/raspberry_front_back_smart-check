@@ -1,0 +1,3 @@
+[tool.pytest.ini_options]
+testpaths = ["backend/tests", "device_enrollment/tests", "streaming/tests", "test_frontend.py"]
+pythonpath = ["."]
