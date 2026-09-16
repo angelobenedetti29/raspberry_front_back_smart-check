@@ -100,7 +100,7 @@ def test_signature_verifies_and_tampering_is_rejected():
     key, _, token = make_proof()
     assert verify_signature(token, key.public_key())
 
-    header, payload, signature = token.split(".")
+    header, _payload, signature = token.split(".")
     tampered_payload = base64.urlsafe_b64encode(
         b'{"sub":"attacker"}'
     ).rstrip(b"=").decode()

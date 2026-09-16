@@ -172,6 +172,22 @@ class JsonlDetectionStore:
         if self._worker_thread.is_alive():
             LOGGER.error("El worker de persistencia no terminó dentro del timeout")
 
+    def health(self) -> dict[str, Any]:
+        """Estado observable del store, al estilo de ``FFmpegPublisher.health``.
+
+        Expone los contadores de descartes para que la pérdida de registros por
+        cola llena deje de ser un dato escribible pero no inspeccionable.
+        """
+        worker_alive = self._worker_thread.is_alive()
+        return {
+            "state": "stopped" if self._closed else ("running" if worker_alive else "stopped"),
+            "worker_alive": worker_alive,
+            "detection_queue_depth": self._detections.qsize(),
+            "sample_queue_depth": self._samples.qsize(),
+            "dropped_detections": self.dropped_detections,
+            "dropped_samples": self.dropped_samples,
+        }
+
     def __enter__(self):
         return self
 

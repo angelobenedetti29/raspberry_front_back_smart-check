@@ -29,6 +29,7 @@ class LazyYoloDetector(IImageDetector):
     """
 
     def __init__(self):
+        """Inicializa el proxy sin construir el detector real."""
         self._detector = None
         # Evita que dos requests concurrentes (el endpoint corre en el
         # threadpool) construyan el detector dos veces y reserven la NPU de más.
@@ -36,6 +37,10 @@ class LazyYoloDetector(IImageDetector):
 
     @property
     def detector(self):
+        """Devuelve el detector real, construyéndolo en la primera llamada.
+
+        Usa double-checked locking: el lock solo se toma si aún no está resuelto.
+        """
         if self._detector is None:
             with self._lock:
                 if self._detector is None:
@@ -48,15 +53,19 @@ class LazyYoloDetector(IImageDetector):
         return self._detector
 
     def detect(self, image_path: str):
+        """Delega en el detector subyacente la inferencia sobre una imagen."""
         return self.detector.detect(image_path)
 
     def detect_frame(self, frame):
+        """Delega en el detector subyacente la inferencia sobre un frame."""
         return self.detector.detect_frame(frame)
 
     def get_class_names(self):
+        """Devuelve los nombres de clase del modelo subyacente."""
         return self.detector.get_class_names()
 
     def release_hailo(self):
+        """Libera la NPU Hailo solo si el detector ya se había cargado."""
         # No se fuerza la carga perezosa solo para liberar la NPU.
         if self._detector is not None:
             self._detector.release_hailo()
@@ -87,18 +96,21 @@ class LazyYoloDetector(IImageDetector):
         return str(getattr(self._detector, "error", "") or "")
 
 
+# Composición de dependencias del proceso: se resuelven una sola vez al
+# importar el módulo y los routers las consumen vía ``Depends``.
 _settings = get_settings()
 
 _detector = LazyYoloDetector()
 
-# Load the persisted enrolled identity (if any) once at startup. Telemetry and
-# all signed senders are only enabled for an enrolled identity; the legacy
-# shared API key is gone.
+# Carga la identidad enrolada persistida (si existe) una sola vez al arranque.
+# La telemetría y todos los emisores firmados solo se habilitan para una
+# identidad enrolada; la antigua API key compartida ya no existe.
 _identity_store = IdentityStore(Path(_settings.device_identity_dir))
 _enrolled_identity = _identity_store.try_load_enrolled()
 
 
 def _identity_provider():
+    """Devuelve la identidad enrolada leída al arranque (o ``None``)."""
     return _enrolled_identity
 
 
@@ -130,20 +142,25 @@ _telemetry_loop = TelemetryLoop(
 
 
 def get_detector():
+    """Dependencia FastAPI: proxy perezoso del detector YOLO."""
     return _detector
 
 
 def get_detect_use_case():
+    """Dependencia FastAPI: caso de uso de detección y notificación."""
     return _detect_use_case
 
 
 def get_finalize_lote_use_case():
+    """Dependencia FastAPI: caso de uso de finalización de lote."""
     return _finalize_lote_use_case
 
 
 def get_send_lote_inicio_use_case():
+    """Dependencia FastAPI: caso de uso de inicio de lote."""
     return _send_lote_inicio_use_case
 
 
 def get_telemetry_loop():
+    """Dependencia FastAPI: hilo de telemetría periódica."""
     return _telemetry_loop

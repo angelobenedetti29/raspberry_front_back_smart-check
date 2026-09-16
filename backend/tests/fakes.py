@@ -5,41 +5,26 @@ define fixtures de pytest. Los dobles específicos de un único archivo (por
 ejemplo las sesiones guionadas de device_enrollment) se quedan junto a sus tests.
 """
 
+from device_enrollment.transport import SendResult
 
 # --------------------------------------------------------------------------
 # Transporte firmado (casos de uso del backend)
 # --------------------------------------------------------------------------
 
 class FakeTransport:
-    """Transporte falso que registra llamadas y expone el estado de error.
+    """Transporte falso que registra llamadas y devuelve un ``SendResult``.
 
-    Los valores por defecto simulan un 503. Los tests que necesiten otro
-    status/texto (por ejemplo 422 "unprocessable") los pasan por constructor.
+    Por defecto devuelve un resultado exitoso; los tests que necesiten otro
+    status/error/texto pasan un ``SendResult`` explícito por constructor.
     """
 
-    def __init__(
-        self,
-        result: bool = True,
-        last_error: str | None = "last error",
-        last_status_code: int | None = 503,
-        last_response_text: str | None = "service unavailable",
-    ):
-        self.result = result
+    def __init__(self, result: SendResult | None = None):
+        self.result = result if result is not None else SendResult(ok=True)
         self.calls: list[tuple[str, dict, dict]] = []
-        self.last_error = last_error
-        self.last_status_code = last_status_code
-        self.last_response_text = last_response_text
 
     def post(self, path, payload, **kwargs):
         self.calls.append((path, payload, kwargs))
         return self.result
-
-
-class BareTransport:
-    """Transporte mínimo sin atributos last_*: los accessors deben dar None."""
-
-    def post(self, path, payload, **kwargs):
-        return True
 
 
 # --------------------------------------------------------------------------
@@ -58,24 +43,18 @@ class FakeSendLoteUseCase:
         target: str = "http://central:9000/api/v1/lotes",
     ):
         self.success = success
-        self.status_code = status_code
-        self.error = error
-        self.response_text = response_text
         self.target = target
         self.sent: list[dict] = []
+        self.result = SendResult(
+            ok=success,
+            status_code=status_code,
+            error=error,
+            response_text=response_text,
+        )
 
     def execute(self, payload):
         self.sent.append(payload)
-        return self.success
-
-    def get_last_status_code(self):
-        return self.status_code
-
-    def get_last_error(self):
-        return self.error
-
-    def get_last_response_text(self):
-        return self.response_text
+        return self.result
 
 
 def make_lote_payload(**overrides) -> dict:

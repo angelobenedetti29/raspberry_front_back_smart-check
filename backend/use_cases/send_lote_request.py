@@ -6,5 +6,6 @@ class SendLoteRequestUseCase(LoteSenderUseCase):
 
     PATH = "/lotes"
 
-    def execute(self, payload: dict) -> bool:
+    def execute(self, payload: dict):
+        """Envía el payload de cierre de lote y devuelve el ``SendResult``."""
         return self._post(payload)

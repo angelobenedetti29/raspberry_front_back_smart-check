@@ -12,13 +12,14 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from device_enrollment.tests.proof_vector_builder import build_vector
 from device_enrollment.proof import (
     ENROLLMENT_SUBJECT_PREFIX,
+    body_hash,
     decode_claims,
     decode_header,
     signing_input,
 )
+from device_enrollment.tests.proof_vector_builder import build_vector
 
 VECTOR_PATH = Path(__file__).resolve().parent / "vectors" / "device_proof_vector.json"
 
@@ -48,7 +49,7 @@ def test_bhash_is_sha256_of_exact_body():
         entry = vector[name]
         expected = _sha256_b64url(entry["body"].encode("utf-8"))
         assert entry["claims"]["bhash"] == expected
-        assert entry["claims"]["bhash"] == entry["claims"]["bhash"]
+        assert entry["claims"]["bhash"] == body_hash(entry["body"].encode("utf-8"))
 
 
 def test_signature_verifies_over_header_payload():

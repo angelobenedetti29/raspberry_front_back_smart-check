@@ -17,6 +17,7 @@ def utc_iso(value: datetime) -> str:
 
 
 def _parse_uuid(value: Any) -> UUID:
+    """Convierte a ``UUID`` un valor que ya lo sea o una cadena válida."""
     if isinstance(value, UUID):
         return value
     if isinstance(value, str):
@@ -28,6 +29,10 @@ def _parse_uuid(value: Any) -> UUID:
 
 
 def _parse_datetime(value: Any) -> datetime:
+    """Convierte a ``datetime`` un valor que ya lo sea o una cadena ISO-8601.
+
+    Acepta el sufijo ``Z`` reemplazándolo por ``+00:00`` antes de parsear.
+    """
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
@@ -39,6 +44,8 @@ def _parse_datetime(value: Any) -> datetime:
 
 
 def _parse_int(value: Any, field: str) -> int:
+    """Convierte a ``int`` un valor entero o un flotante con valor entero."""
+    # Los booleanos son subclase de int: se rechazan para no aceptar True/False.
     if isinstance(value, bool):
         raise ValueError(f"El campo '{field}' debe ser un entero.")
     if isinstance(value, int):
@@ -49,6 +56,7 @@ def _parse_int(value: Any, field: str) -> int:
 
 
 def _parse_float(value: Any, field: str) -> float:
+    """Convierte a ``float`` un número finito, rechazando booleanos."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"El campo '{field}' debe ser un número.")
     number = float(value)
@@ -84,6 +92,7 @@ class LoteRequest:
     velocidadCinta: float
 
     def __post_init__(self):
+        """Valida las invariantes del contrato al construir el DTO."""
         # Sin cambios: mensajes y reglas actuales (total de unidades, negativos, fechas).
         if self.inicioAt >= self.finAt:
             raise ValueError("La fecha de inicio debe ser anterior a la fecha de fin.")

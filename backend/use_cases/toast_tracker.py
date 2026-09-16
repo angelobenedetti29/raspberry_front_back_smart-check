@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from typing import Tuple, List, Dict
 
@@ -14,6 +15,14 @@ VISIBLE_LOST_FRAMES = 3
 
 @dataclass
 class TrackedToast:
+    """Estado de una tostada seguida por el ``ToastTracker``.
+
+    ``id`` se asigna de forma incremental y es estable mientras la tostada siga
+    viva. ``state`` solo transiciona de ``"ok"`` a ``"burnt"`` y nunca vuelve.
+    ``frames_since_seen`` acumula los frames sin detección y ``alert_triggered``
+    marca si ya se emitió la alerta de quemado, para no repetirla.
+    """
+
     id: int
     bbox: Tuple[int, int, int, int]  # (x, y, w, h)
     label: str
@@ -25,17 +34,31 @@ class TrackedToast:
 
 
 class ToastTracker:
+    """Tracker de tostadas por asociación geométrica entre fotogramas.
+
+    Mantiene una entrada por tostada con id estable, asocia cada detección nueva
+    con un track existente por IoU o cercanía de centros, y confirma el estado
+    "quemada" recién tras varios frames consecutivos. Un id no se reutiliza
+    mientras la escena tenga tostadas: ``next_id`` vuelve a 1 solo cuando el
+    tracker queda vacío.
+    """
+
     def __init__(self, iou_threshold: float = 0.3, max_lost_frames: int = 10, min_burnt_confirm_frames: int = 3):
+        """Configura los umbrales de asociación y de confirmación de quemado."""
         self.iou_threshold = iou_threshold
         self.max_lost_frames = max_lost_frames
         self.min_burnt_confirm_frames = min_burnt_confirm_frames
         self.tracked_toasts: Dict[int, TrackedToast] = {}
         self.next_id = 1
+        # Serializa las mutaciones sobre el estado compartido: el tracker es un
+        # singleton y ``update`` se invoca desde varios hilos del threadpool.
+        self._lock = threading.Lock()
 
     def reset(self):
         """Reinicia el estado del tracker por completo."""
-        self.tracked_toasts.clear()
-        self.next_id = 1
+        with self._lock:
+            self.tracked_toasts.clear()
+            self.next_id = 1
 
     # ---------------------------------------------------------------- geometría
     def _calculate_iou(self, boxA: Tuple[int, int, int, int], boxB: Tuple[int, int, int, int]) -> float:
@@ -202,13 +225,14 @@ class ToastTracker:
             - newly_burnt_toasts: Lista de tostadas que acaban de transicionar a quemadas en este fotograma.
         """
         new_detections = list(detections)
-        tracked_ids = list(self.tracked_toasts.keys())
+        with self._lock:
+            tracked_ids = list(self.tracked_toasts.keys())
 
-        matches = self._find_matches(new_detections, tracked_ids)
-        matched_track_ids, matched_det_indices = self._apply_matches(matches, new_detections)
+            matches = self._find_matches(new_detections, tracked_ids)
+            matched_track_ids, matched_det_indices = self._apply_matches(matches, new_detections)
 
-        self._mark_unmatched_as_lost(tracked_ids, matched_track_ids)
-        self._track_new_detections(new_detections, matched_det_indices)
-        self._prune_lost()
+            self._mark_unmatched_as_lost(tracked_ids, matched_track_ids)
+            self._track_new_detections(new_detections, matched_det_indices)
+            self._prune_lost()
 
-        return self._collect_results()
+            return self._collect_results()

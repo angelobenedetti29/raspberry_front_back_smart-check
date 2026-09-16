@@ -8,6 +8,7 @@ import requests
 from device_enrollment.tests.fakes import FakeResponse, device_descriptor, make_identity_store
 from device_enrollment.client import EnrollmentClient
 from device_enrollment.errors import (
+    ConfigurationError,
     CredentialRevokedError,
     IdentityCorruptError,
     NewInvitationRequiredError,
@@ -283,3 +284,106 @@ def test_enrollment_subject_uses_urn_prefix(tmp_path):
 
     token = session.calls[0]["headers"]["Authorization"].split(" ", 1)[1]
     assert decode_claims(token)["sub"] == ENROLLMENT_SUBJECT_PREFIX + pending.fingerprint
+
+
+# -- mandatory server fingerprint -------------------------------------------------
+
+
+def identity_body_without_fingerprint(dispositivo_id=DEVICE_ID, status="active"):
+    body = json.loads(identity_body("ignored", dispositivo_id=dispositivo_id, status=status))
+    del body["data"]["keyFingerprint"]
+    return json.dumps(body)
+
+
+def test_recover_response_without_fingerprint_is_rejected(tmp_path):
+    store = make_identity_store(tmp_path)
+    prepare_pending(store)
+    session = ScriptedSession([(200, identity_body_without_fingerprint())])
+    client = EnrollmentClient(store, API, AUD, session=session)
+
+    with pytest.raises(IdentityCorruptError):
+        client.enroll()
+
+    # The rejected response must not have advanced the phase.
+    assert store.load_metadata()["phase"] == PHASE_PENDING
+
+
+def test_provision_response_without_fingerprint_is_rejected(tmp_path):
+    store = make_identity_store(tmp_path)
+    prepare_pending(store)
+    session = ScriptedSession(
+        [(404, error_body("enrollment_not_found")), (201, identity_body_without_fingerprint())]
+    )
+    client = EnrollmentClient(store, API, AUD, session=session)
+
+    with pytest.raises(IdentityCorruptError):
+        client.enroll(code="CODE123")
+
+    assert store.load_metadata()["phase"] == PHASE_PENDING
+
+
+# -- bounded ambiguous-retry backoff ---------------------------------------------
+
+
+def test_retry_recover_uses_injected_sleep_and_exactly_one_retry(tmp_path):
+    store = make_identity_store(tmp_path)
+    pending = prepare_pending(store)
+    session = ScriptedSession([(503, "service unavailable"), (503, "service unavailable")])
+    slept: list[float] = []
+    client = EnrollmentClient(store, API, AUD, session=session, sleep=slept.append)
+
+    result = client._retry_recover(pending)
+
+    assert result.ambiguous
+    assert len(session.calls) == 2  # initial attempt + exactly one retry
+    assert slept == [0.5]
+
+
+def test_retry_recover_does_not_sleep_or_retry_when_first_attempt_succeeds(tmp_path):
+    store = make_identity_store(tmp_path)
+    pending = prepare_pending(store)
+    session = ScriptedSession([(200, identity_body(pending.fingerprint))])
+    slept: list[float] = []
+    client = EnrollmentClient(store, API, AUD, session=session, sleep=slept.append)
+
+    result = client._retry_recover(pending)
+
+    assert result.ok
+    assert len(session.calls) == 1
+    assert slept == []
+
+
+def test_retry_recover_sleeps_once_then_succeeds(tmp_path):
+    store = make_identity_store(tmp_path)
+    pending = prepare_pending(store)
+    session = ScriptedSession(
+        [(503, "service unavailable"), (200, identity_body(pending.fingerprint))]
+    )
+    slept: list[float] = []
+    client = EnrollmentClient(store, API, AUD, session=session, sleep=slept.append)
+
+    result = client._retry_recover(pending)
+
+    assert result.ok
+    assert len(session.calls) == 2
+    assert slept == [0.5]
+
+
+# -- client-level TLS policy ------------------------------------------------------
+
+
+def test_client_rejects_cleartext_http_to_non_loopback(tmp_path):
+    store = make_identity_store(tmp_path)
+
+    with pytest.raises(ConfigurationError):
+        EnrollmentClient(store, "http://central.example.com/api/v1", AUD)
+
+
+def test_client_allows_http_on_literal_loopback(tmp_path):
+    store = make_identity_store(tmp_path)
+    client = EnrollmentClient(
+        store, "http://localhost:9000/api/v1", AUD, session=ScriptedSession([])
+    )
+
+    assert client.api_base_url == "http://localhost:9000/api/v1"
+

@@ -2,6 +2,8 @@ import os
 import sys
 import math
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -69,10 +71,11 @@ def test_emit_batch_metrics_is_a_real_test(qt_app):
         stream_config=StreamConfig(width=4, height=4, fps=20),
     )
     thread.seen_toasts.update({1: "ok", 2: "ok", 3: "burnt", 4: "ok", 5: "burnt"})
-    thread.sensor_samples.extend([
+    for sample in (
         SensorReadings(220.0, 315.0, 218.0, 312.0, 1.05),
         SensorReadings(220.0, 315.0, 218.0, 312.0, 1.15),
-    ])
+    ):
+        thread.sensor_accumulator.add(sample)
     received = []
     thread.lote_completed_signal.connect(received.append)
 
@@ -490,6 +493,25 @@ class _ExplodingSensorProvider:
         raise RuntimeError("sensor offline")
 
 
+class _LoopingCapture:
+    """Captura sin fin: el worker solo termina cuando se le pide parar."""
+
+    def __init__(self):
+        self.released = False
+        self._stop = threading.Event()
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        self._stop.wait(0.005)
+        return True, np.zeros((2, 2, 3), dtype=np.uint8)
+
+    def release(self):
+        self.released = True
+        self._stop.set()
+
+
 def _run_thread_until_done(qt_app, detections, sensor_provider, frame_count=2):
     capture = _OneShotCapture(
         [np.zeros((2, 2, 3), dtype=np.uint8) for _ in range(frame_count)]
@@ -524,7 +546,7 @@ def test_worker_uses_injected_sensor_provider_and_averages(qt_app):
     )
 
     assert capture.released is True
-    assert thread.sensor_samples == [sample1, sample2]
+    assert thread.sensor_accumulator.count == 2
     assert received, "the worker must emit a lote once toasts were seen"
     payload = received[0]
     assert payload["tempHorno1"] == round((sample1.tempHorno1 + sample2.tempHorno1) / 2, 2)
@@ -541,7 +563,7 @@ def test_sensor_read_failure_does_not_abort_loop_or_emit_nan(qt_app):
     )
 
     assert capture.released is True
-    assert thread.sensor_samples == []
+    assert thread.sensor_accumulator.count == 0
     assert received, "the worker must still emit a lote after the loop completes"
     payload = received[0]
     assert not any(
@@ -549,6 +571,93 @@ def test_sensor_read_failure_does_not_abort_loop_or_emit_nan(qt_app):
     )
     # Fallback sensor values are used when no samples could be read.
     assert payload["tempHorno1"] == 220.0
+
+
+def test_residual_lote_is_delivered_on_stop(qt_app, monkeypatch):
+    # Al detener el worker, ``run()`` emite el lote acumulado justo antes de
+    # terminar; las señales deben seguir conectadas hasta ``finished``.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app.add_alert_log = lambda *args, **kwargs: None
+    app.http_client = _FakeHttpClient(success=True)
+
+    capture = _LoopingCapture()
+    received = []
+    thread = YOLODetectionThread(
+        "0",
+        MockUseCase([Detection(id=7, state="ok", bbox=(0, 0, 2, 2))]),
+        stream_config=StreamConfig(width=4, height=4, fps=20),
+        capture_factory=lambda _source: capture,
+        publisher_factory=_RecordingPublisher,
+    )
+    thread.lote_completed_signal.connect(received.append)
+    app.yolo_thread = thread
+    thread.start()
+
+    for _ in range(400):
+        if thread.seen_toasts:
+            break
+        qt_app.processEvents()
+        time.sleep(0.005)
+    assert thread.seen_toasts, "el worker debió registrar al menos una tostada"
+
+    app._request_thread_shutdown(pending_action=lambda: None)
+
+    assert thread.wait(3000)
+    for _ in range(20):
+        qt_app.processEvents()
+        time.sleep(0.005)
+
+    assert received, "el lote residual debe entregarse al detener el worker"
+    assert received[-1]["totalUnidades"] == 1
+    assert app.yolo_thread is None
+
+    app.close()
+
+
+def test_sensor_accumulator_averages_whole_lote_and_state_stays_constant(qt_app):
+    sample_count = 20
+    provider = _FakeSensorProvider(
+        [
+            SensorReadings(100.0 + i, 315.0, 218.0, 312.0, 1.0 + i)
+            for i in range(sample_count)
+        ]
+    )
+
+    thread, capture, received = _run_thread_until_done(
+        qt_app,
+        [Detection(id=1, state="ok", bbox=(0, 0, 2, 2))],
+        provider,
+        frame_count=sample_count,
+    )
+
+    assert capture.released is True
+    # El conteo crece con los frames, pero el estado solo guarda sumas + conteo:
+    # memoria constante aunque el lote sea largo.
+    assert thread.sensor_accumulator.count == sample_count
+    assert all(
+        not isinstance(value, (list, tuple, dict, set))
+        for value in thread.sensor_accumulator.__dict__.values()
+    )
+    assert received, "el lote se emite con todas las muestras del lote"
+    # Promedio del lote completo, no solo de la cola.
+    expected = round(sum(100.0 + i for i in range(sample_count)) / sample_count, 2)
+    assert received[0]["tempHorno1"] == expected
+
+
+def test_alerted_ids_are_bounded(qt_app, monkeypatch):
+    import frontend.workers.detection_worker as worker_module
+
+    monkeypatch.setattr(worker_module, "MAX_ALERTED_IDS", 2)
+    thread = YOLODetectionThread(
+        "road.mp4", MockUseCase(),
+        stream_config=StreamConfig(width=4, height=4, fps=20),
+    )
+
+    assert thread._remember_alerted_id(1) is True
+    assert thread._remember_alerted_id(2) is True
+    assert thread._remember_alerted_id(3) is True
+    assert list(thread.alerted_ids) == [2, 3]
+    assert thread._remember_alerted_id(3) is False
 
 
 # ---------------------------------------------------------------------------
@@ -712,6 +821,12 @@ class _FakeHttpClient:
         return self.success
 
 
+def _drain_lote_posts(app, qt_app):
+    """Espera el POST en segundo plano y entrega su señal en el hilo de la GUI."""
+    assert app._lote_pool.waitForDone(3000)
+    qt_app.processEvents()
+
+
 def test_handle_lote_completed_success_and_failure(qt_app, monkeypatch):
     app, _calls = _build_hermetic_app(monkeypatch)
     logged = []
@@ -721,6 +836,7 @@ def test_handle_lote_completed_success_and_failure(qt_app, monkeypatch):
 
     app.http_client = _FakeHttpClient(success=True)
     app.handle_lote_completed(payload)
+    _drain_lote_posts(app, qt_app)
 
     assert app.http_client.calls
     assert app.http_client.calls[0][0] == LOCAL_LOTE_ENDPOINT
@@ -731,8 +847,257 @@ def test_handle_lote_completed_success_and_failure(qt_app, monkeypatch):
     logged.clear()
     app.http_client = _FakeHttpClient(success=False, last_error="servidor caido")
     app.handle_lote_completed(payload)
+    _drain_lote_posts(app, qt_app)
 
     assert logged and "Error al enviar lote" in logged[-1][0]
     assert "servidor caido" in logged[-1][0]
 
     app.close()
+
+
+def test_handle_lote_completed_posts_off_gui_thread(qt_app, monkeypatch):
+    # El POST debe correr en el pool: bloquear el hilo de la GUI congela la UI.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app.add_alert_log = lambda *args, **kwargs: None
+    gui_thread = threading.get_ident()
+    seen = {}
+
+    class RecordingClient:
+        last_error = None
+
+        def post(self, url, payload, headers=None):
+            seen["thread"] = threading.get_ident()
+            return True
+
+    app.http_client = RecordingClient()
+    app.handle_lote_completed(
+        {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    )
+    _drain_lote_posts(app, qt_app)
+
+    assert "thread" in seen
+    assert seen["thread"] != gui_thread
+
+    app.close()
+
+
+def test_handle_lote_completed_timeout_reports_uncertain(qt_app, monkeypatch):
+    from backend.infrastructure.http.requests_client import TIMEOUT_UNCERTAIN
+
+    app, _calls = _build_hermetic_app(monkeypatch)
+    logged = []
+    app.add_alert_log = lambda message, tone="danger": logged.append((message, tone))
+    app.http_client = _FakeHttpClient(success=False, last_error=TIMEOUT_UNCERTAIN)
+
+    app.handle_lote_completed(
+        {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    )
+    _drain_lote_posts(app, qt_app)
+
+    assert logged
+    assert "no se pudo confirmar" in logged[-1][0]
+    assert "pudo haberse registrado" in logged[-1][0]
+    assert logged[-1][1] == "warning"
+
+    app.close()
+
+
+class _SequencedHttpClient:
+    """Cliente falso que entrega un ``(success, last_error)`` distinto por POST."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.last_error = None
+        self.calls = []
+
+    def post(self, url, payload, headers=None):
+        success, error = self._responses.pop(0)
+        self.last_error = error
+        self.calls.append((url, payload))
+        return success
+
+
+def test_lote_error_comes_from_own_request_not_shared_client_state(qt_app, monkeypatch):
+    # Dos POST fallan por motivos distintos: cada alerta debe reflejar el error
+    # de su propio request, no el ``last_error`` compartido que dejó el último.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    logged = []
+    app.add_alert_log = lambda message, tone="danger": logged.append((message, tone))
+
+    client = _SequencedHttpClient(
+        [
+            (False, "error_uno"),
+            (False, "error_dos"),
+        ]
+    )
+    app.http_client = client
+
+    payload_a = {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    payload_b = {"totalUnidades": 2, "correctos": 0, "quemados": 2, "crudas": 0}
+    app.handle_lote_completed(payload_a)
+    app.handle_lote_completed(payload_b)
+    _drain_lote_posts(app, qt_app)
+
+    assert len(client.calls) == 2
+    messages = [message for message, _tone in logged]
+    # El primer slot debe conservar SU error aunque el segundo POST ya haya
+    # sobrescrito ``last_error`` con "error_dos".
+    assert "error_uno" in messages[0]
+    assert "error_dos" not in messages[0]
+    assert any("error_dos" in message for message in messages[1:])
+
+    app.close()
+
+
+def test_lote_pool_serializes_posts_and_never_overlaps(qt_app, monkeypatch):
+    # ``setMaxThreadCount(1)`` debe impedir que dos POST se solapen sobre el
+    # estado compartido del cliente.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app.add_alert_log = lambda *args, **kwargs: None
+
+    release = threading.Event()
+    first_started = threading.Event()
+
+    class OverlapDetectingClient:
+        last_error = None
+
+        def __init__(self):
+            self._lock = threading.Lock()
+            self.in_flight = 0
+            self.max_in_flight = 0
+            self.started = 0
+            self.finished = 0
+
+        def post(self, url, payload, headers=None):
+            with self._lock:
+                self.in_flight += 1
+                self.started += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                if self.started == 1:
+                    first_started.set()
+            release.wait(5)
+            with self._lock:
+                self.in_flight -= 1
+                self.finished += 1
+            return True
+
+    client = OverlapDetectingClient()
+    app.http_client = client
+
+    for total in (1, 2):
+        app.handle_lote_completed(
+            {"totalUnidades": total, "correctos": total, "quemados": 0, "crudas": 0}
+        )
+
+    assert first_started.wait(2), "el primer POST debió arrancar"
+    # El primer POST sigue bloqueado: con un solo hilo el segundo no puede
+    # entrar. Si el pool permitiera solape, ``started`` llegaría a 2.
+    time.sleep(0.1)
+    assert client.started == 1
+    assert client.max_in_flight == 1
+
+    release.set()
+    _drain_lote_posts(app, qt_app)
+
+    assert client.started == 2
+    assert client.max_in_flight == 1
+    assert client.finished == 2
+
+    app.close()
+
+
+def test_close_event_waits_for_in_flight_lote_post(qt_app, monkeypatch):
+    # Al cerrar, el POST en vuelo debe drenarse (bounded) antes de aceptar el
+    # cierre para que su resultado no se pierda con el QThreadPool.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    logged = []
+    app.add_alert_log = lambda message, tone="danger": logged.append((message, tone))
+
+    release = threading.Event()
+    started = threading.Event()
+
+    class BlockingClient:
+        last_error = None
+
+        def post(self, url, payload, headers=None):
+            started.set()
+            release.wait(5)
+            return True
+
+    app.http_client = BlockingClient()
+    app.handle_lote_completed(
+        {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    )
+    assert started.wait(2), "el POST debió arrancar"
+
+    # Liberar el POST desde otro hilo mientras closeEvent espera en waitForDone.
+    threading.Thread(
+        target=lambda: (time.sleep(0.05), release.set()), daemon=True
+    ).start()
+
+    start = time.monotonic()
+    assert app.close() is True
+    elapsed = time.monotonic() - start
+
+    qt_app.processEvents()
+    assert elapsed < 2.0
+    assert logged and "LOTE REGISTRADO" in logged[-1][0]
+
+
+def test_close_event_does_not_hang_on_stuck_lote_post(qt_app, monkeypatch):
+    # Un POST atascado no debe colgar el cierre más allá de la cota.
+    monkeypatch.setattr(frontend_app, "LOTE_POST_DRAIN_MS", 150)
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app.add_alert_log = lambda *args, **kwargs: None
+
+    stuck = threading.Event()
+    started = threading.Event()
+
+    class StuckClient:
+        last_error = None
+
+        def post(self, url, payload, headers=None):
+            started.set()
+            stuck.wait(5)
+            return True
+
+    app.http_client = StuckClient()
+    app.handle_lote_completed(
+        {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    )
+    assert started.wait(2), "el POST debió arrancar"
+
+    start = time.monotonic()
+    assert app.close() is True
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.5, "el cierre esperó más que la cota"
+    assert elapsed >= 0.1, "el cierre debió esperar la cota acotada"
+
+    # Liberar para que el pool no cuelgue el teardown del test.
+    stuck.set()
+    assert app._lote_pool.waitForDone(2000)
+
+
+def test_shutdown_timeout_disconnects_abandoned_worker_signals():
+    # Tras el timeout el worker nunca emitirá ``finished``; sus señales deben
+    # desconectarse para que no siga enviando frames/alertas/lotes.
+    old_worker = FakeWorker()
+    app = make_lifecycle_harness(old_worker)
+    app._disconnect_worker_signals = (
+        lambda thread: FactoryControlApp._disconnect_worker_signals(app, thread)
+    )
+    received = []
+    old_worker.change_pixmap_signal.connect(lambda: received.append("frame"))
+    old_worker.lote_completed_signal.connect(lambda: received.append("lote"))
+    old_worker.burned_toast_alert_signal.connect(lambda: received.append("toast"))
+
+    FactoryControlApp._request_thread_shutdown(app)
+    app._on_shutdown_timeout()
+
+    old_worker.change_pixmap_signal.emit()
+    old_worker.lote_completed_signal.emit()
+    old_worker.burned_toast_alert_signal.emit()
+
+    assert received == []
+    assert app._recovery_required is True

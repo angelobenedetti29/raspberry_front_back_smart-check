@@ -10,7 +10,9 @@ import pytest
 
 from device_enrollment import cli
 from device_enrollment.cli import EXIT_CLEANUP_FAILED, EXIT_OK, EXIT_USAGE, build_parser, main
-from device_enrollment.client import EnrollOutcome
+from device_enrollment.client import EnrollmentClient, EnrollOutcome
+from device_enrollment.errors import ConfigurationError
+from device_enrollment.urls import normalize_api_base_url, validate_secure_base_url
 
 CODE = "DEVICE_ENROLLMENT_CODE"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -265,3 +267,53 @@ def test_cli_import_does_not_load_fastapi_gui_or_ai():
     )
     assert completed.returncode == 0, completed.stderr
     assert "ok" in completed.stdout
+
+
+# -- API base URL hardening -----------------------------------------------------
+
+
+def test_normalize_api_base_url_rejects_userinfo_query_and_fragment():
+    for value in (
+        "https://user:pass@h.example",
+        "https://h.example/api/v1?x=1",
+        "https://h.example/api/v1#frag",
+    ):
+        with pytest.raises(ConfigurationError):
+            normalize_api_base_url(value)
+
+
+def test_normalize_api_base_url_suffix_check_is_case_insensitive():
+    assert normalize_api_base_url("https://h.example/API/V1") == "https://h.example/API/V1"
+    assert normalize_api_base_url("https://h.example") == "https://h.example/api/v1"
+
+
+def test_validate_secure_base_url_enforces_tls_policy():
+    assert validate_secure_base_url("https://h.example/api/v1") == (
+        "https://h.example/api/v1"
+    )
+    assert validate_secure_base_url("http://127.0.0.1:8000/api/v1") == (
+        "http://127.0.0.1:8000/api/v1"
+    )
+    with pytest.raises(ConfigurationError):
+        validate_secure_base_url("http://central.example.com/api/v1")
+    with pytest.raises(ConfigurationError):
+        validate_secure_base_url("ftp://h.example")
+
+
+def test_validate_secure_base_url_rejects_userinfo_query_and_fragment():
+    for value in (
+        "https://user:pass@h.example/api/v1",
+        "https://h.example/api/v1?x=1",
+        "https://h.example/api/v1#frag",
+    ):
+        with pytest.raises(ConfigurationError):
+            validate_secure_base_url(value)
+
+
+def test_direct_enrollment_client_rejects_userinfo_base_url(tmp_path):
+    from device_enrollment.identity import IdentityStore
+
+    store = IdentityStore(tmp_path / "identity")
+    with pytest.raises(ConfigurationError):
+        EnrollmentClient(store, "https://user:pass@h.example/api/v1", "aud")
+

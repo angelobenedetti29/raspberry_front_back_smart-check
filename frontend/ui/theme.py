@@ -271,52 +271,6 @@ QPushButton:disabled {
     border: 1px solid $BORDER;
 }
 
-QPushButton[variant="primary"] {
-    background-color: $ACCENT;
-    color: $TEXT_INVERT;
-    border: 1px solid $ACCENT;
-}
-QPushButton[variant="primary"]:hover {
-    background-color: $ACCENT_HOVER;
-    border: 1px solid $ACCENT_HOVER;
-}
-QPushButton[variant="primary"]:pressed {
-    background-color: $ACCENT_PRESS;
-    border: 1px solid $ACCENT_PRESS;
-}
-QPushButton[variant="primary"]:focus {
-    border: 2px solid $TEXT;
-}
-QPushButton[variant="primary"]:disabled {
-    background-color: $SURFACE_3;
-    color: $TEXT_DIM;
-    border: 1px solid $BORDER;
-}
-
-QPushButton[variant="danger"] {
-    background-color: $DANGER_SOFT;
-    color: $DANGER_TEXT;
-    border: 1px solid $DANGER;
-}
-QPushButton[variant="danger"]:hover {
-    background-color: $DANGER;
-    color: $TEXT_ON_DANGER;
-    border: 1px solid $DANGER;
-}
-QPushButton[variant="danger"]:pressed {
-    background-color: $DANGER_PRESS;
-    color: $TEXT_ON_DANGER;
-    border: 1px solid $DANGER_PRESS;
-}
-QPushButton[variant="danger"]:focus {
-    border: 2px solid $ACCENT;
-}
-QPushButton[variant="danger"]:disabled {
-    background-color: $SURFACE;
-    color: $TEXT_DIM;
-    border: 1px solid $BORDER;
-}
-
 /* ------------------------------------------------------- chip de filtro */
 QPushButton#FilterChip {
     text-align: left;

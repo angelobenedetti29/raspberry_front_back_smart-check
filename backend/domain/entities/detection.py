@@ -4,6 +4,12 @@ from typing import Tuple
 
 @dataclass
 class DetectionResult:
+    """Detección cruda emitida por un detector de imágenes.
+
+    ``label`` es la etiqueta tal cual la entrega el modelo y ``bbox`` la caja
+    ``(x, y, width, height)`` en píxeles.
+    """
+
     label: str
     confidence: float
     bbox: Tuple[int, int, int, int]  # x, y, width, height

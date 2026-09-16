@@ -46,7 +46,3 @@ class NewInvitationRequiredError(EnrollmentRejectedError):
 
 class CredentialRevokedError(EnrollmentRejectedError):
     """The credential was revoked/replaced; a deliberate reset is required."""
-
-
-class AlreadyEnrolledError(DeviceEnrollmentError):
-    """The local identity is already durably enrolled."""
