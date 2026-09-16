@@ -1,18 +1,17 @@
-"""Video gallery: scrollable list of local ``.mp4`` files."""
+"""Galería de vídeos: lista desplazable de archivos .mp4 locales."""
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
 
-from frontend.ui.components import Card, EmptyState, ListItem
+from frontend.ui.components import Card, ListItem, ScrollableList
 from frontend.ui.theme import SP_SM
 
 
 class GalleryPanel(Card):
-    """Lists available videos and emits the selected file name.
+    """Lista los vídeos disponibles y emite el nombre del seleccionado.
 
     Signal
     ------
-    video_selected(str): the file name the operator clicked.
+    video_selected(str): nombre del archivo que el operador pulsó.
     """
 
     video_selected = Signal(str)
@@ -23,31 +22,18 @@ class GalleryPanel(Card):
 
         self.set_title("Galería de vídeos")
 
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QScrollArea.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self._content = QWidget()
-        self.list_layout = QVBoxLayout(self._content)
-        self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(SP_SM)
-        self.list_layout.setAlignment(Qt.AlignTop)
-
-        self._empty = EmptyState(
+        self._list = ScrollableList(
             "Sin vídeos",
             "Agrega archivos .mp4 a la carpeta de vídeos",
         )
-        self.list_layout.addWidget(self._empty)
-
-        self._scroll.setWidget(self._content)
-        self.body.addWidget(self._scroll, stretch=1)
+        self.list_layout = self._list.list_layout
+        self.body.addWidget(self._list, stretch=1)
 
         self._items = []
 
     # ------------------------------------------------------------------ api
     def set_videos(self, names):
-        """Replace the gallery contents with *names*."""
+        """Reemplaza el contenido de la galería por *names*."""
         self.clear()
         for name in names:
             self.add_video(name)
@@ -55,27 +41,23 @@ class GalleryPanel(Card):
             self.show_empty()
 
     def add_video(self, name):
-        self._hide_empty()
+        """Agrega una entrada que, al pulsarse, emite ``video_selected``."""
         item = ListItem(name)
         item.setToolTip(f"Reproducir {name}")
         item.clicked.connect(
             lambda _checked=False, name=name: self.video_selected.emit(name)
         )
-        self.list_layout.addWidget(item)
+        self._list.add_widget(item)
         self._items.append(item)
         return item
 
     def clear(self):
+        """Elimina todas las entradas y vuelve al estado vacío."""
         for item in self._items:
-            item.setParent(None)
-            item.deleteLater()
+            self._list.remove_widget(item)
         self._items = []
         self.show_empty()
 
     def show_empty(self, title="Sin vídeos", hint="Agrega archivos .mp4 a la carpeta de vídeos"):
-        self._empty.set_text(title, hint)
-        self._empty.setVisible(True)
-
-    # ------------------------------------------------------------- internals
-    def _hide_empty(self):
-        self._empty.setVisible(False)
+        """Muestra el estado vacío, con textos nuevos si se indican."""
+        self._list.show_empty(title, hint)

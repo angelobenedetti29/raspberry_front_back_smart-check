@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QImage, QResizeEvent
 from PySide6.QtWidgets import QApplication
 
 # Asegurar que el path del proyecto esté en el PYTHONPATH.
@@ -16,7 +17,11 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from frontend.app import FactoryControlApp  # noqa: E402
-from frontend.config import LOCAL_LOTE_ENDPOINT, MODEL_CATALOG  # noqa: E402
+from frontend.config import (  # noqa: E402
+    LOCAL_LOTE_ENDPOINT,
+    MODEL_CATALOG,
+    resolve_project_path,
+)
 from frontend.services.models import DEFAULT_MODEL_INDEX, model_for_index  # noqa: E402
 from frontend.ui.components import ListItem  # noqa: E402
 from frontend.workers.detection_worker import YOLODetectionThread  # noqa: E402
@@ -24,7 +29,6 @@ from frontend.services.streaming import (  # noqa: E402
     PreviewOnlyPublisher,
     validate_stream_config,
 )
-from frontend.services.paths import resolve_path  # noqa: E402
 import frontend.app as frontend_app  # noqa: E402
 from backend.domain.entities.sensor_readings import SensorReadings  # noqa: E402
 from streaming.config import StreamConfig  # noqa: E402
@@ -178,7 +182,6 @@ class FakeWorker:
         self.finished = FakeSignal()
         self.change_pixmap_signal = FakeSignal()
         self.lote_completed_signal = FakeSignal()
-        self.iot_status_changed_signal = FakeSignal()
         self.burned_toast_alert_signal = FakeSignal()
         self.stop_requested = False
 
@@ -361,17 +364,20 @@ def test_factory_control_app_constructs_offscreen(qt_app, monkeypatch):
     assert StubDetector.instances
     assert app.detector is StubDetector.instances[-1]
     assert app.detector.model_path is not None
-    assert app.video_label is not None
-    assert app.model_selector.count() == 4
+    assert app.video_panel.video_label is not None
+    assert app.sidebar.model_selector.count() == 4
     # Only the functional camera toggle remains in navigation.
-    assert len(app.nav_buttons) == 1
-    assert app.nav_buttons[0].isCheckable()
-    assert app.btn_filter_ok is not None
-    assert app.btn_filter_burnt is not None
-    assert app.toaster_btn is not None
-    assert app.alarm_btn is not None
-    assert app.alerts_log_layout is not None
-    assert app.videos_layout is not None
+    assert len(app.sidebar.nav_buttons) == 1
+    assert app.sidebar.nav_buttons[0].isCheckable()
+    assert app.filters_panel.btn_filter_ok is not None
+    assert app.filters_panel.btn_filter_burnt is not None
+    assert app.alerts_panel.list_layout is not None
+    assert app.gallery_panel.list_layout is not None
+
+    # La píldora del detector ya refleja el estado real al arrancar (no se
+    # queda en "Inicializando" hasta el primer cambio de modelo).
+    assert app.sidebar.detector_pill.text() == "ONNX Activo"
+    assert app.sidebar.detector_pill.property("tone") == "info"
 
     # The UI is composed from dedicated panels that own their widgets.
     for panel_name in (
@@ -380,30 +386,19 @@ def test_factory_control_app_constructs_offscreen(qt_app, monkeypatch):
         "gallery_panel",
         "alerts_panel",
         "filters_panel",
-        "iot_panel",
     ):
         assert getattr(app, panel_name) is not None, panel_name
 
-    assert app.video_label is app.video_panel.video_label
-    assert app.alerts_log_layout is app.alerts_panel.list_layout
-    assert app.videos_layout is app.gallery_panel.list_layout
-
     # Control signals are wired to the application handlers.
-    app.nav_buttons[0].setChecked(False)
-    app.nav_buttons[0].click()
-    assert app.nav_buttons[0].isChecked()
+    app.sidebar.nav_buttons[0].setChecked(False)
+    app.sidebar.nav_buttons[0].click()
+    assert app.sidebar.nav_buttons[0].isChecked()
 
     assert app.show_ok_toasts is True
-    app.btn_filter_ok.click()
+    app.filters_panel.btn_filter_ok.click()
     assert app.show_ok_toasts is False
-    app.btn_filter_ok.click()
+    app.filters_panel.btn_filter_ok.click()
     assert app.show_ok_toasts is True
-
-    assert app.iot_controller.get_status("rele_tostadora") is False
-    app.toaster_btn.click()
-    assert app.iot_controller.get_status("rele_tostadora") is True
-    app.toaster_btn.click()
-    assert app.iot_controller.get_status("rele_tostadora") is False
 
     # The layout adapts at the compact breakpoint (800x480 panel support).
     # Resize events are only delivered to a shown widget.
@@ -421,15 +416,34 @@ def test_factory_control_app_constructs_offscreen(qt_app, monkeypatch):
     app.close()
 
 
-def test_resolve_path_maps_repo_assets():
-    model_path = resolve_path("yolov11-python/yolo11n.onnx")
+def test_resize_before_ui_build_does_not_crash(qt_app, monkeypatch):
+    # Qt puede entregar un resize durante __init__, antes de que exista el
+    # stage_layout; resizeEvent debe ignorarlo en vez de reventar.
+    app, _calls = _build_hermetic_app(monkeypatch)
+    del app.stage_layout
+
+    app.resizeEvent(QResizeEvent(QSize(500, 400), QSize(1200, 800)))
+
+    assert not hasattr(app, "stage_layout")
+    app.close()
+
+
+def test_resolve_project_path_maps_repo_assets():
+    model_path = resolve_project_path("ai_training/models/yolo11n.onnx")
+    assert os.path.isabs(model_path)
     assert os.path.exists(model_path)
     assert os.path.basename(model_path) == "yolo11n.onnx"
-    assert "ai_training" in model_path.replace("\\", "/")
 
-    video_path = resolve_path("multimedia/videos/road.mp4")
+    video_path = resolve_project_path("multimedia/videos/road.mp4")
     assert os.path.exists(video_path)
     assert os.path.basename(video_path) == "road.mp4"
+
+
+def test_resolve_project_path_keeps_absolute_and_empty_paths():
+    # El .hef de la NPU Hailo es una ruta absoluta del sistema y no se reescribe.
+    absolute = "/usr/share/hailo-models/yolov8s_h8l.hef"
+    assert resolve_project_path(absolute) == absolute
+    assert resolve_project_path("") == ""
 
 
 class _OneShotCapture:
@@ -561,8 +575,8 @@ def _build_hermetic_app(monkeypatch):
 
 def test_model_for_index_falls_back_for_invalid_indices():
     expected = (
-        MODEL_CATALOG[DEFAULT_MODEL_INDEX][1],
-        MODEL_CATALOG[DEFAULT_MODEL_INDEX][2],
+        MODEL_CATALOG[DEFAULT_MODEL_INDEX].model_path,
+        MODEL_CATALOG[DEFAULT_MODEL_INDEX].names_path,
     )
     assert model_for_index(DEFAULT_MODEL_INDEX) == expected
     # Negative indices must not wrap around via Python indexing.
@@ -603,7 +617,7 @@ def test_update_image_sets_live_state_and_pixmap(qt_app, monkeypatch):
     assert app.video_panel._state == "live"
     assert app.video_panel.status_pill.text() == "En vivo"
     assert app.video_panel.status_pill.property("tone") == "on"
-    pixmap = app.video_label.pixmap()
+    pixmap = app.video_panel.video_label.pixmap()
     assert pixmap is not None and not pixmap.isNull()
 
     app.close()
@@ -612,14 +626,14 @@ def test_update_image_sets_live_state_and_pixmap(qt_app, monkeypatch):
 def test_alerts_empty_state_and_add_alert(qt_app, monkeypatch):
     app, _calls = _build_hermetic_app(monkeypatch)
 
-    assert app.alerts_panel._empty.isHidden() is False
-    initial_count = app.alerts_log_layout.count()
+    assert app.alerts_panel._list.empty.isHidden() is False
+    initial_count = app.alerts_panel.list_layout.count()
 
     app.add_alert_log("x")
 
-    assert app.alerts_panel._empty.isHidden() is True
-    assert app.alerts_log_layout.count() == initial_count + 1
-    first_entry = app.alerts_log_layout.itemAt(0).widget()
+    assert app.alerts_panel._list.empty.isHidden() is True
+    assert app.alerts_panel.list_layout.count() == initial_count + 1
+    first_entry = app.alerts_panel.list_layout.itemAt(0).widget()
     assert first_entry is not None and first_entry.text().endswith("x")
 
     app.close()
@@ -632,12 +646,13 @@ def test_model_selector_matches_catalog_and_invokes_change_model(qt_app, monkeyp
     )
     app, _calls = _build_hermetic_app(monkeypatch)
 
-    assert app.model_selector.count() == 4
+    assert app.sidebar.model_selector.count() == 4
     assert [
-        app.model_selector.itemText(i) for i in range(app.model_selector.count())
-    ] == [entry[0] for entry in MODEL_CATALOG]
+        app.sidebar.model_selector.itemText(i)
+        for i in range(app.sidebar.model_selector.count())
+    ] == [entry.label for entry in MODEL_CATALOG]
 
-    app.model_selector.setCurrentIndex(2)
+    app.sidebar.model_selector.setCurrentIndex(2)
     assert seen == [2]
 
     app.close()

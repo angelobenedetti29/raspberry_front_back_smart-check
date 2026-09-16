@@ -1,4 +1,4 @@
-"""Platform detection and model catalog helpers."""
+"""Detección de plataforma y helpers del catálogo de modelos."""
 
 import os
 from dataclasses import dataclass
@@ -10,14 +10,13 @@ from frontend.config import (
     NPU_MODEL_INDEX,
 )
 
-""" Path para detectar si estamos corriendo en una Raspberry Pi.
- Se utiliza para determinar si se debe usar el modelo YOLOv8s HEF 
- (para Raspberry Pi con NPU) o el modelo YOLOv11 ONNX (para PC o simulador). """
+# Ruta donde el kernel expone el modelo de la placa. Se lee para distinguir una
+# Raspberry Pi (donde puede usarse la NPU Hailo) de un PC o un simulador.
 RASPBERRY_PI_MODEL_FILE = "/sys/firmware/devicetree/base/model"
 
 
 def is_raspberry_pi() -> bool:
-    """Revisa el path y determina si estamos corriendo en una Raspberry Pi."""
+    """Devuelve True si la aplicación corre sobre una Raspberry Pi."""
     is_pi = False
     try:
         if os.path.exists(RASPBERRY_PI_MODEL_FILE):
@@ -30,12 +29,14 @@ def is_raspberry_pi() -> bool:
 
 @dataclass(frozen=True)
 class PlatformInfo:
+    """Plataforma detectada: si es Raspberry Pi y si hay NPU Hailo disponible."""
+
     is_raspberry_pi: bool
     is_npu: bool
 
 
 def detect_platform() -> PlatformInfo:
-    """Detecta la plataforma en la que se está ejecutando la aplicación y devuelve un objeto PlatformInfo."""
+    """Detecta la plataforma y registra el modelo por defecto resultante."""
     pi = is_raspberry_pi()
     npu = pi and HAILO_AVAILABLE
 
@@ -48,14 +49,17 @@ def detect_platform() -> PlatformInfo:
 
 
 def default_model_index(is_npu: bool) -> int:
-    """Devuelve el índice del modelo por defecto según la plataforma detectada."""
+    """Índice del catálogo que se selecciona al arrancar según la plataforma."""
     return NPU_MODEL_INDEX if is_npu else DEFAULT_MODEL_INDEX
 
 
 def model_for_index(index: int) -> tuple[str, str]:
-    """Devuelve la ruta del modelo y la ruta de los nombres de clases para un índice dado en el catálogo de modelos.
+    """Devuelve ``(ruta del modelo, ruta de las etiquetas)`` para un índice.
+
+    Un índice inválido (no entero, o fuera de rango) cae explícitamente en
+    ``DEFAULT_MODEL_INDEX``; no se usa la indexación negativa de Python.
     """
     if not isinstance(index, int) or not 0 <= index < len(MODEL_CATALOG):
         index = DEFAULT_MODEL_INDEX
     entry = MODEL_CATALOG[index]
-    return entry[1], entry[2]
+    return entry.model_path, entry.names_path

@@ -14,14 +14,12 @@ router = APIRouter()
 @router.post("/api/detect")
 async def detect_toast(
     file: UploadFile = File(...),
-    notification_url: str | None = Form(None),
     lote_payload: str | None = Form(None),
     detect_use_case=Depends(get_detect_use_case),
     finalize_lote_use_case=Depends(get_finalize_lote_use_case),
 ):
     """
-    Recibe una imagen a través de HTTP POST, realiza la inferencia con YOLOv11
-    y notifica/actualiza el hardware de IoT si se detecta una tostada quemada.
+    Recibe una imagen a través de HTTP POST y realiza la inferencia con YOLOv11.
     """
     try:
         # Read file bytes
@@ -33,7 +31,7 @@ async def detect_toast(
             raise HTTPException(status_code=400, detail="Formato de imagen inválido.")
 
         # Execute Use Case
-        detections = detect_use_case.execute(img, notification_url=notification_url)
+        detections = detect_use_case.execute(img)
 
         # Format response
         results = []

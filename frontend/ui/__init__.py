@@ -1,1 +1,1 @@
-"""UI helpers for the frontend application."""
+"""Componentes y utilidades de interfaz del frontend."""

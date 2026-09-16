@@ -1,4 +1,4 @@
-"""Detection visibility filters (OK / burnt toasts)."""
+"""Filtros de visibilidad de las detecciones (tostadas OK / quemadas)."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QPushButton
@@ -8,12 +8,16 @@ from frontend.ui.theme import SP_XS, set_dynamic_property
 
 
 class FiltersPanel(Card):
-    """Two stateful chips that control which overlays are drawn.
+    """Dos chips con estado que controlan qué etiquetas se dibujan.
+
+    Las señales no llevan argumento: el panel solo avisa del clic, y es
+    ``frontend/app.py`` quien alterna su estado y vuelve a llamar a
+    :meth:`update_state`. Así el panel no guarda estado propio de filtros.
 
     Signals
     -------
-    filter_ok_toggled: the OK-toast visibility chip was clicked.
-    filter_burnt_toggled: the burnt-toast visibility chip was clicked.
+    filter_ok_toggled: se pulsó el chip de visibilidad de tostadas OK.
+    filter_burnt_toggled: se pulsó el chip de visibilidad de tostadas quemadas.
     """
 
     filter_ok_toggled = Signal()
@@ -45,12 +49,13 @@ class FiltersPanel(Card):
 
     # ------------------------------------------------------------------ api
     def update_state(self, show_ok, show_burnt):
-        """Reflect the application filter state on both chips."""
+        """Refleja en ambos chips el estado de filtros de la aplicación."""
         self._render_chip(self.btn_filter_ok, "Tostadas OK", show_ok)
         self._render_chip(self.btn_filter_burnt, "Tostadas quemadas", show_burnt)
 
     # ------------------------------------------------------------- internals
     def _render_chip(self, button, label, active):
+        """Pinta el chip como visible u oculto según ``active``."""
         if active:
             button.setText(f"{label}: visibles")
             button.setToolTip(

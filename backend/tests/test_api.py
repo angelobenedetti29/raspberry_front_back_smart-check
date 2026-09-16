@@ -8,16 +8,12 @@ from fastapi.testclient import TestClient
 
 from backend.app.config import Settings, get_settings
 from backend.app.dependencies import (
-    get_control_device_use_case,
     get_detect_use_case,
     get_detector,
     get_finalize_lote_use_case,
-    get_iot_controller,
     get_send_lote_inicio_use_case,
 )
 from backend.app.main import app
-from backend.infrastructure.iot.mock_controller import MockIoTController
-from backend.use_cases.control_device import ControlDeviceUseCase
 from backend.use_cases.finalize_lote import FinalizeLoteUseCase, LoteDeliveryError
 
 
@@ -44,8 +40,8 @@ class FakeDetectUseCase:
         self.detections = detections if detections is not None else []
         self.calls = []
 
-    def execute(self, frame, notification_url=None):
-        self.calls.append((frame, notification_url))
+    def execute(self, frame):
+        self.calls.append(frame)
         return self.detections
 
 
@@ -135,11 +131,6 @@ def make_lote_payload(**overrides):
 
 
 @pytest.fixture
-def iot_controller():
-    return MockIoTController()
-
-
-@pytest.fixture
 def detect_use_case():
     return FakeDetectUseCase()
 
@@ -150,13 +141,9 @@ def lote_inicio_use_case():
 
 
 @pytest.fixture
-def client(iot_controller, detect_use_case, lote_inicio_use_case):
+def client(detect_use_case, lote_inicio_use_case):
     app.dependency_overrides[get_detector] = lambda: FakeDetector()
-    app.dependency_overrides[get_iot_controller] = lambda: iot_controller
     app.dependency_overrides[get_detect_use_case] = lambda: detect_use_case
-    app.dependency_overrides[get_control_device_use_case] = lambda: ControlDeviceUseCase(
-        iot_controller
-    )
     app.dependency_overrides[get_finalize_lote_use_case] = lambda: FinalizeLoteUseCase(
         FakeSendLoteUseCase(success=True), "http://central:9000/api/v1"
     )
@@ -176,38 +163,6 @@ def test_status(client):
         "status": "online",
         "detector": {"model_path": "fake-model", "classes": ["TCOK", "TCQ"]},
     }
-
-
-def test_list_devices(client):
-    response = client.get("/api/devices")
-    assert response.status_code == 200
-    devices = {d["id"]: d for d in response.json()}
-    assert set(devices) == {"rele_tostadora", "alarma_buzzer"}
-    assert devices["rele_tostadora"]["is_on"] is False
-
-
-def test_turn_on_off_and_toggle(client):
-    assert client.post("/api/devices/rele_tostadora/turn-on").json() == {
-        "status": "success",
-        "device_id": "rele_tostadora",
-        "is_on": True,
-    }
-    assert client.post("/api/devices/rele_tostadora/turn-off").json() == {
-        "status": "success",
-        "device_id": "rele_tostadora",
-        "is_on": False,
-    }
-    assert client.post("/api/devices/rele_tostadora/toggle").json() == {
-        "status": "success",
-        "device_id": "rele_tostadora",
-        "is_on": True,
-    }
-
-
-def test_unknown_device_returns_404(client):
-    assert client.post("/api/devices/nope/turn-on").status_code == 404
-    assert client.post("/api/devices/nope/turn-off").status_code == 404
-    assert client.post("/api/devices/nope/toggle").status_code == 404
 
 
 def test_finalizar_lote_success(client):
@@ -269,7 +224,6 @@ def test_detect_with_valid_image(client, detect_use_case):
     response = client.post(
         "/api/detect",
         files={"file": ("toast.png", buffer.tobytes(), "image/png")},
-        data={"notification_url": "http://alerts"},
     )
 
     assert response.status_code == 200
@@ -285,7 +239,7 @@ def test_detect_with_valid_image(client, detect_use_case):
         ],
         "summary": {"total_detected": 1, "burned_toast_found": True},
     }
-    assert detect_use_case.calls[0][1] == "http://alerts"
+    assert len(detect_use_case.calls) == 1
 
 
 def test_detect_without_detections(client):

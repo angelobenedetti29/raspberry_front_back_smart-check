@@ -1,1 +1,1 @@
-"""Service helpers consumed by the frontend application."""
+"""Utilidades de servicio que consume la aplicación de frontend."""

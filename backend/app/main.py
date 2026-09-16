@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.dependencies import get_detector, get_telemetry_loop
-from backend.app.routers import detection, devices, lotes, status
+from backend.app.routers import detection, lotes, status
 
 
 @asynccontextmanager
@@ -18,8 +18,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="YOLOv11 IoT Toast Detection API",
-        description="Backend en Arquitectura Limpia para control de IoT e inferencia YOLO",
+        title="YOLOv11 Toast Detection API",
+        description="Backend en Arquitectura Limpia para la inferencia YOLO de tostadas",
         version="1.0.0",
         lifespan=lifespan,
     )
@@ -34,7 +34,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(status.router)
-    app.include_router(devices.router)
     app.include_router(lotes.router)
     app.include_router(detection.router)
 

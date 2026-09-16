@@ -1,21 +1,21 @@
-"""Design system for the Factory Control desktop application.
+"""Sistema de diseño de la aplicación de escritorio Factory Control.
 
-This module defines a small set of design tokens (colors, spacing, radii and
-typography) and builds the application stylesheet from them.  Every widget in
-``frontend.ui`` styles itself through object names / dynamic properties as
-defined here, so no panel hardcodes a raw color value.
+El módulo define los design tokens (colores, espaciados, radios y tipografía) y
+construye a partir de ellos la hoja de estilos de la aplicación. Todos los
+widgets de ``frontend.ui`` se estilan mediante ``objectName`` y propiedades
+dinámicas definidas aquí, de modo que ningún panel escribe un color crudo.
 
-The visual direction is a sober *industrial dark* theme: a charcoal/steel
-base, a single restrained steel-blue accent and a small semantic palette.
+La dirección visual es un *industrial dark* sobrio: base carbón/acero, un único
+acento azul acero contenido y una paleta semántica pequeña.
 """
 
 from string import Template
 import os
 
 # ---------------------------------------------------------------------------
-# Color tokens
+# Tokens de color
 # ---------------------------------------------------------------------------
-# Charcoal / steel base surfaces.
+# Superficies base: carbón y acero.
 BG = "#0E1317"
 SURFACE = "#151B21"
 SURFACE_2 = "#1B242B"
@@ -25,23 +25,23 @@ SURFACE_SUNKEN = "#0B0F13"
 BORDER = "#2A363F"
 BORDER_STRONG = "#3B4B57"
 
-# Typography colors.
+# Colores de tipografía.
 TEXT = "#DCE5EC"
 TEXT_MUTED = "#8A99A6"
-# Raised from #5F6E79 so 11-12px secondary text clears WCAG AA (>= 4.5:1)
-# against the card surfaces while staying visually muted.
+# Subido desde #5F6E79 para que el texto secundario de 11-12px alcance WCAG AA
+# (>= 4.5:1) sobre las tarjetas sin dejar de verse apagado.
 TEXT_DIM = "#7C8B98"
 TEXT_INVERT = "#0B1014"
-# Text used on solid danger surfaces (kept light for contrast on red).
+# Texto sobre superficies rojas sólidas (claro, por contraste).
 TEXT_ON_DANGER = "#FFFFFF"
 
-# Single restrained accent: steel blue.
+# Único acento contenido: azul acero.
 ACCENT = "#4C9BE8"
 ACCENT_HOVER = "#6BB0F0"
 ACCENT_PRESS = "#3A7FC4"
 ACCENT_SOFT = "rgba(76, 155, 232, 0.14)"
 
-# Semantic colors.
+# Colores semánticos.
 SUCCESS = "#43B76A"
 SUCCESS_SOFT = "rgba(67, 183, 106, 0.14)"
 SUCCESS_SOFT_HOVER = "rgba(67, 183, 106, 0.22)"
@@ -55,7 +55,7 @@ DANGER = "#E0574E"
 DANGER_PRESS = "#C4453D"
 DANGER_SOFT = "rgba(224, 87, 78, 0.13)"
 DANGER_BORDER = "rgba(224, 87, 78, 0.28)"
-# Lighter danger tone for text on the soft-danger surface (>= 4.5:1).
+# Tono de peligro más claro para texto sobre la superficie suave (>= 4.5:1).
 DANGER_TEXT = "#F08F88"
 DANGER_TEXT_STRONG = "#F0ACA6"
 
@@ -67,14 +67,14 @@ INFO_TEXT = "#A9D0F5"
 NEUTRAL_SOFT = "rgba(255, 255, 255, 0.05)"
 
 # ---------------------------------------------------------------------------
-# Spacing scale (px)
+# Escala de espaciado (px)
 # ---------------------------------------------------------------------------
 SP_XS = 4
 SP_SM = 8
 SP_MD = 12
 
 # ---------------------------------------------------------------------------
-# Radii (px)
+# Radios de borde (px)
 # ---------------------------------------------------------------------------
 RADIUS_SM = 4
 RADIUS_MD = 8
@@ -82,7 +82,7 @@ RADIUS_LG = 12
 RADIUS_PILL = 10
 
 # ---------------------------------------------------------------------------
-# Typography
+# Tipografía
 # ---------------------------------------------------------------------------
 FONT_FAMILY = "'IBM Plex Sans', 'Barlow', 'Segoe UI', 'Roboto', sans-serif"
 
@@ -103,60 +103,30 @@ SIDEBAR_MIN_WIDTH = 210
 SIDEBAR_MAX_WIDTH = 260
 RIGHT_COLUMN_MIN_WIDTH = 300
 
-# Public token map used to expand the stylesheet template.
-TOKENS = {
-    "BG": BG,
-    "SURFACE": SURFACE,
-    "SURFACE_2": SURFACE_2,
-    "SURFACE_3": SURFACE_3,
-    "SURFACE_SUNKEN": SURFACE_SUNKEN,
-    "BORDER": BORDER,
-    "BORDER_STRONG": BORDER_STRONG,
-    "TEXT": TEXT,
-    "TEXT_MUTED": TEXT_MUTED,
-    "TEXT_DIM": TEXT_DIM,
-    "TEXT_INVERT": TEXT_INVERT,
-    "TEXT_ON_DANGER": TEXT_ON_DANGER,
-    "ACCENT": ACCENT,
-    "ACCENT_HOVER": ACCENT_HOVER,
-    "ACCENT_PRESS": ACCENT_PRESS,
-    "ACCENT_SOFT": ACCENT_SOFT,
-    "SUCCESS": SUCCESS,
-    "SUCCESS_SOFT": SUCCESS_SOFT,
-    "SUCCESS_SOFT_HOVER": SUCCESS_SOFT_HOVER,
-    "WARNING": WARNING,
-    "WARNING_SOFT": WARNING_SOFT,
-    "WARNING_BORDER": WARNING_BORDER,
-    "WARNING_TEXT": WARNING_TEXT,
-    "DANGER": DANGER,
-    "DANGER_PRESS": DANGER_PRESS,
-    "DANGER_SOFT": DANGER_SOFT,
-    "DANGER_BORDER": DANGER_BORDER,
-    "DANGER_TEXT": DANGER_TEXT,
-    "DANGER_TEXT_STRONG": DANGER_TEXT_STRONG,
-    "INFO": INFO,
-    "INFO_SOFT": INFO_SOFT,
-    "INFO_BORDER": INFO_BORDER,
-    "INFO_TEXT": INFO_TEXT,
-    "NEUTRAL_SOFT": NEUTRAL_SOFT,
-    "RADIUS_SM": RADIUS_SM,
-    "RADIUS_MD": RADIUS_MD,
-    "RADIUS_LG": RADIUS_LG,
-    "RADIUS_PILL": RADIUS_PILL,
-    "FONT_FAMILY": FONT_FAMILY,
-    "FS_XS": FS_XS,
-    "FS_SM": FS_SM,
-    "FS_BASE": FS_BASE,
-    "FS_MD": FS_MD,
-    "FS_XL": FS_XL,
-    "FW_SEMIBOLD": FW_SEMIBOLD,
-    "FW_BOLD": FW_BOLD,
-    "FW_MEDIUM": FW_MEDIUM,
-}
+
+def _collect_tokens() -> dict:
+    """Recoge como tokens todas las constantes en MAYÚSCULAS de este módulo.
+
+    Se evita así mantener a mano un diccionario espejo: al declarar un token
+    nuevo (color, espaciado, radio, tipografía...) queda disponible para la QSS
+    sin ningún paso extra.
+
+    Se excluyen los nombres que empiezan por ``_`` (privados como
+    ``_ASSETS_DIR``) y al propio ``TOKENS``.
+    """
+    return {
+        name: value
+        for name, value in globals().items()
+        if name.isupper() and not name.startswith("_") and name != "TOKENS"
+    }
+
+
+# Mapa público de tokens usado para expandir la plantilla del stylesheet.
+TOKENS = _collect_tokens()
 
 _STYLESHEET = Template(
     """
-/* ---------------------------------------------------------------- base */
+/* ------------------------------------------------------------------ base */
 QMainWindow, QWidget#Root {
     background-color: $BG;
 }
@@ -178,7 +148,7 @@ QToolTip {
     padding: 4px 6px;
 }
 
-/* -------------------------------------------------------------- sidebar */
+/* -------------------------------------------------------- barra lateral */
 #Sidebar {
     background-color: $SURFACE;
     border: 1px solid $BORDER;
@@ -201,7 +171,7 @@ QToolTip {
     padding-left: 2px;
 }
 
-/* ----------------------------------------------------------- nav button */
+/* -------------------------------------------------- botón de navegación */
 QPushButton[variant="nav"] {
     background-color: transparent;
     color: $TEXT_MUTED;
@@ -227,14 +197,15 @@ QPushButton[variant="nav"]:checked {
     color: $ACCENT;
     border: 1px solid $ACCENT;
 }
-/* Keep the accent border when a checked nav item also holds keyboard focus. */
+/* Conserva el borde de acento cuando un item de navegación marcado además
+   tiene el foco de teclado. */
 QPushButton[variant="nav"]:checked:focus {
     background-color: $ACCENT_SOFT;
     color: $ACCENT;
     border: 1px solid $ACCENT;
 }
 
-/* -------------------------------------------------------------- combo box */
+/* --------------------------------------------------------------- combo */
 QComboBox {
     background-color: $SURFACE_2;
     border: 1px solid $BORDER;
@@ -274,7 +245,7 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* ---------------------------------------------------------------- buttons */
+/* ------------------------------------------------------------- botones */
 QPushButton {
     background-color: $SURFACE_2;
     color: $TEXT;
@@ -346,7 +317,7 @@ QPushButton[variant="danger"]:disabled {
     border: 1px solid $BORDER;
 }
 
-/* ------------------------------------------------------------ filter chip */
+/* ------------------------------------------------------- chip de filtro */
 QPushButton#FilterChip {
     text-align: left;
     padding: 9px 12px;
@@ -371,19 +342,19 @@ QPushButton#FilterChip[active="false"]:hover {
     background-color: $SURFACE_3;
     color: $TEXT_MUTED;
 }
-/* Keyboard focus must stay visible above the active/inactive chip styles. */
+/* El foco de teclado debe verse por encima de los estilos activo/inactivo. */
 QPushButton#FilterChip:focus {
     border: 2px solid $ACCENT;
 }
 
-/* -------------------------------------------------------------- cards */
+/* ------------------------------------------------------------ tarjetas */
 QFrame#Card {
     background-color: $SURFACE;
     border: 1px solid $BORDER;
     border-radius: $RADIUS_LG;
 }
 
-/* ------------------------------------------------------------- typography */
+/* ---------------------------------------------------------- tipografía */
 QLabel#SectionTitle {
     color: $TEXT;
     font-size: ${FS_SM}px;
@@ -395,7 +366,7 @@ QLabel#SectionMeta {
     font-weight: $FW_SEMIBOLD;
 }
 
-/* ---------------------------------------------------------------- pills */
+/* -------------------------------------------------- píldoras de estado */
 QLabel#StatusPill {
     padding: 3px 10px;
     border-radius: $RADIUS_PILL;
@@ -423,7 +394,7 @@ QLabel#StatusPill[tone="danger"] {
     color: $DANGER_TEXT;
 }
 
-/* --------------------------------------------------------- video surface */
+/* ---------------------------------------------------- superficie vídeo */
 QLabel#VideoSurface {
     background-color: $SURFACE_SUNKEN;
     border: 1px solid $BORDER;
@@ -454,7 +425,7 @@ QLabel#VideoSurface[state="recovery"] {
     font-weight: $FW_SEMIBOLD;
 }
 
-/* ------------------------------------------------------------- list items */
+/* --------------------------------------------------- elementos de lista */
 QPushButton#ListItem {
     text-align: left;
     background-color: $SURFACE_2;
@@ -476,7 +447,7 @@ QPushButton#ListItem:focus {
     border: 1px solid $ACCENT;
 }
 
-/* ---------------------------------------------------------- alert entries */
+/* --------------------------------------------------- entradas de alerta */
 QLabel#AlertItem {
     background-color: $DANGER_SOFT;
     border: 1px solid $DANGER_BORDER;
@@ -497,7 +468,7 @@ QLabel#AlertItem[tone="warning"] {
     color: $WARNING_TEXT;
 }
 
-/* --------------------------------------------------------------- empty */
+/* ---------------------------------------------------------- estado vacío */
 QLabel#EmptyTitle {
     color: $TEXT_MUTED;
     font-size: ${FS_BASE}px;
@@ -508,7 +479,7 @@ QLabel#EmptyHint {
     font-size: ${FS_SM}px;
 }
 
-/* --------------------------------------------------------------- scroll */
+/* --------------------------------------------------- barras de desplazamiento */
 QScrollArea {
     background: transparent;
     border: none;
@@ -564,19 +535,19 @@ _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
 def _asset_url(filename: str) -> str:
-    """Absolute, forward-slash path for a QSS ``url(...)`` reference."""
+    """Ruta absoluta con barras normales para una referencia ``url(...)``."""
     return os.path.join(_ASSETS_DIR, filename).replace("\\", "/")
 
 
 def build_stylesheet() -> str:
-    """Return the application-wide Qt stylesheet expanded from tokens."""
+    """Devuelve la hoja de estilos Qt expandida desde los tokens."""
     tokens = dict(TOKENS)
     tokens["DOWN_ARROW"] = _asset_url("chevron-down.svg")
     return _STYLESHEET.substitute(tokens)
 
 
 def refresh_style(widget) -> None:
-    """Re-evaluate dynamic-property selectors after a property changed."""
+    """Reevalúa los selectores de propiedades dinámicas tras un cambio."""
     style = widget.style()
     style.unpolish(widget)
     style.polish(widget)
@@ -584,6 +555,6 @@ def refresh_style(widget) -> None:
 
 
 def set_dynamic_property(widget, name: str, value) -> None:
-    """Set a Qt dynamic property and repolish the widget's stylesheet."""
+    """Asigna una propiedad dinámica de Qt y reestiliza el widget."""
     widget.setProperty(name, value)
     refresh_style(widget)

@@ -1,8 +1,8 @@
 # Smart Check — Inspección de tostadas (Raspberry Pi)
 
-Sistema de visión e IoT para una línea de tostadas: captura y procesa vídeo,
-detecta tostadas (OK / quemadas), controla dispositivos IoT, publica el stream
-por RTSP/WebRTC y registra lotes en un servidor central.
+Sistema de visión para una línea de tostadas: captura y procesa vídeo, detecta
+tostadas (OK / quemadas), publica el stream por RTSP/WebRTC y registra lotes en
+un servidor central.
 
 El repositorio contiene tres componentes independientes más los recursos de IA:
 
@@ -19,11 +19,10 @@ El repositorio contiene tres componentes independientes más los recursos de IA:
 ```
 backend/
   domain/                 # Reglas de negocio puras (sin frameworks)
-    entities/             # DetectionResult, IoTDevice, LoteRequest, DeviceMetrics, SensorReadings
-    interfaces/           # IImageDetector, IIoTController, IHttpClient, ISensorProvider, ISystemMetricsProvider
+    entities/             # DetectionResult, LoteRequest, DeviceMetrics, SensorReadings
+    interfaces/           # IImageDetector, IHttpClient, ISensorProvider, ISystemMetricsProvider
   use_cases/              # Casos de uso (orquestan dominio + infraestructura)
-    detect_and_notify.py  # Detecta y acciona IoT / notifica
-    control_device.py     # Enciende/apaga dispositivos
+    detect_and_notify.py  # Detecta tostadas y actualiza el tracker
     send_lote_request.py  # Envía un lote firmado (DeviceProof) al servidor central
     send_lote_inicio.py   # Inicia un lote firmado (DeviceProof) en el servidor central
     send_ping_request.py  # Envía telemetría periódica firmada (DeviceProof)
@@ -32,7 +31,6 @@ backend/
     toast_tracker.py      # Seguimiento y estado de tostadas
   infrastructure/         # Adaptadores concretos
     ai/yolo_detector.py   # YOLO ONNX (CPU) o Hailo HEF (NPU)
-    iot/mock_controller.py
     http/requests_client.py
     sensors/simulated_sensors.py
     system/system_metrics.py  # CPU/RAM/disco/temperatura de Linux (Raspberry)
@@ -42,7 +40,7 @@ backend/
     dependencies.py       # Wiring de casos de uso (Dependency Injection)
     telemetry.py          # TelemetryLoop: ping periódico en hilo daemon
     errors.py             # Traducción de errores de dominio a HTTP
-    routers/              # status, devices, lotes, detection
+    routers/              # status, lotes, detection
   tests/                  # Tests de casos de uso, sensores y endpoints
 ```
 
@@ -69,9 +67,8 @@ device_enrollment/
 El backend reutiliza `SignedTransport` en los tres emisores (`ping`, `lotes`,
 `lotes/inicio`); ya no existe la API key compartida (`X-API-Key`).
 
-**Endpoints:** `GET /api/status`, `GET /api/devices`,
-`POST /api/devices/{id}/turn-on|turn-off|toggle`,
-`POST /api/lotes/finalizar`, `POST /api/lotes/iniciar`, `POST /api/detect`.
+**Endpoints:** `GET /api/status`, `POST /api/lotes/finalizar`,
+`POST /api/lotes/iniciar`, `POST /api/detect`.
 
 ### Frontend — PySide6
 
@@ -79,9 +76,8 @@ El backend reutiliza `SignedTransport` en los tres emisores (`ping`, `lotes`,
 frontend/
   main.py                 # Entrypoint delgado (argparse + QApplication)
   app.py                  # FactoryControlApp: composición y wiring
-  config.py               # Constantes (ventana, catálogo de modelos, endpoints)
+  config.py               # Constantes y resolución de rutas del proyecto
   services/
-    paths.py              # resolve_path (resolución de rutas del proyecto)
     streaming.py          # validate_stream_config, PreviewOnlyPublisher
     models.py             # Detección de plataforma + catálogo de modelos
   workers/
@@ -94,7 +90,6 @@ frontend/
     gallery_panel.py      # Galería de vídeos locales
     alerts_panel.py       # Historial de alertas
     filters_panel.py      # Visibilidad de etiquetas
-    iot_panel.py          # Relés / buzzer
     assets/               # Recursos (chevron del combo, etc.)
 ```
 
@@ -175,7 +170,7 @@ La telemetría y los emisores firmados sólo se habilitan cuando existe una
 identidad **enrolled** cargada desde `DEVICE_IDENTITY_DIR`. Ya **no** se usa
 `X-API-Key`: los POST a `/api/v1/dispositivos/ping`, `/api/v1/lotes` y
 `/api/v1/lotes/inicio` llevan `Authorization: DeviceProof <jws>`. Si no hay
-servidor central configurado, los endpoints de dispositivos y detección siguen
+servidor central configurado, los endpoints de detección siguen
 funcionando; `POST /api/v1/lotes/finalizar` e `POST /api/v1/lotes/iniciar` devolverán
 502.
 
@@ -281,7 +276,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 | Cambiar reglas/entidades de negocio | `backend/domain/` |
 | Agregar o cambiar un caso de uso | `backend/use_cases/` |
 | Cambiar un endpoint o su validación | `backend/app/routers/` |
-| Cambiar la integración con IA / IoT / red | `backend/infrastructure/` |
+| Cambiar la integración con IA / red | `backend/infrastructure/` |
 | Cambiar identidad/firma/CLI del dispositivo | `device_enrollment/` |
 | Cambiar la apariencia o tokens visuales | `frontend/ui/theme.py` |
 | Cambiar un panel o componente de UI | `frontend/ui/` |

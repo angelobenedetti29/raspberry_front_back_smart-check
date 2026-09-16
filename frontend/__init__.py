@@ -1,1 +1,1 @@
-"""Frontend package for the Factory Control PySide6 application."""
+"""Paquete del frontend: aplicación PySide6 de Factory Control."""
