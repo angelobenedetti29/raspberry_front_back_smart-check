@@ -39,16 +39,18 @@ def iniciar_lote(
     horno_id = body.get("hornoId") or settings.horno_id
     producto_id = body.get("productoId") or settings.default_producto_id
 
-    if not horno_id or not producto_id:
+    try:
+        success = use_case.execute(horno_id, producto_id)
+    except ValueError as exc:
+        # La validación de hornoId/productoId vive en el caso de uso.
         raise HTTPException(
             status_code=400,
             detail=(
                 "Se requieren 'hornoId' y 'productoId' "
                 "(en el body o en la configuración)."
             ),
-        )
+        ) from exc
 
-    success = use_case.execute(horno_id, producto_id)
     if not success:
         raise lote_delivery_http_exception(
             message=LOTE_START_FAILED_MESSAGE,

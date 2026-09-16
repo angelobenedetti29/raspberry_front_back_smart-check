@@ -66,3 +66,20 @@ def test_success_returns_exact_payload_and_forwards():
 def test_target_delegates_to_send_use_case():
     use_case, _ = make_use_case(target="http://otro:1234/api/v1/lotes")
     assert use_case.target == "http://otro:1234/api/v1/lotes"
+
+
+def test_execute_envia_el_payload_normalizado():
+    use_case, send = make_use_case()
+    payload = make_lote_payload(
+        productoId="A1B2C3D4-5678-90AB-CDEF-1234567890AB",
+        totalUnidades=3.0,
+        correctos=2.0,
+        quemados=1.0,
+    )
+
+    use_case.execute(payload)
+
+    sent = send.sent[0]
+    assert sent["productoId"] == "a1b2c3d4-5678-90ab-cdef-1234567890ab"
+    assert sent["totalUnidades"] == 3 and isinstance(sent["totalUnidades"], int)
+    assert sent is not payload
