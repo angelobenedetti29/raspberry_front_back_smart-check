@@ -14,8 +14,10 @@ class PreviewOnlyPublisher:
     misma interfaz que ``FFmpegPublisher`` (start/publish/stop).
     """
 
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, _config):
+        # ``FFmpegPublisher`` recibe la configuración por posición; este publisher
+        # no la necesita porque no publica nada, pero conserva la firma.
+        pass
 
     def start(self):
         pass
@@ -32,8 +34,16 @@ def validate_stream_config(config):
 
     ``yuv420p`` exige dimensiones pares; si no, FFmpeg falla al publicar.
     Devuelve la misma configuración recibida para poder encadenar la llamada.
+    Un objeto de configuración incompleto se rechaza con ``ValueError`` (y no
+    con ``AttributeError``) para mantener el contrato de la función.
     """
-    if config.pixel_format == "yuv420p" and (config.width % 2 or config.height % 2):
+    try:
+        pixel_format = config.pixel_format
+        width = config.width
+        height = config.height
+    except AttributeError as exc:
+        raise ValueError("configuración de streaming incompleta") from exc
+    if pixel_format == "yuv420p" and (width % 2 or height % 2):
         raise ValueError("width y height deben ser pares para yuv420p")
     return config
 

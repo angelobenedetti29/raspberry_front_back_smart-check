@@ -15,7 +15,9 @@ import cv2
 import numpy as np
 import time
 import threading
+import logging
 
+from collections import OrderedDict
 from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
@@ -24,16 +26,24 @@ from streaming.config import StreamConfig
 from streaming.publisher import FFmpegPublisher
 
 from backend.app.config import get_settings
-from backend.domain.entities.sensor_readings import SensorReadings
 from backend.infrastructure.sensors.simulated_sensors import SimulatedSensorProvider
-from backend.use_cases.build_lote_payload import DEFAULT_PRODUCT_ID, build_lote_payload
+from backend.use_cases.build_lote_payload import (
+    DEFAULT_PRODUCT_ID,
+    SensorAccumulator,
+    build_lote_payload,
+)
 
 from frontend.services.streaming import validate_stream_config
+
+logger = logging.getLogger(__name__)
 
 # Segundos sin ver ninguna tostada tras los cuales se cierra el lote en curso.
 INACTIVITY_SECONDS = 10.0
 # Segundos mínimos entre dos alertas consecutivas de la ruta sin tracker.
 MOCK_ALERT_THROTTLE_SECONDS = 5.0
+# Ids de tostadas quemadas recordados para no repetir su alerta. Los ids son
+# crecientes; 256 cubre de sobra las tostadas que aún pueden estar en pantalla.
+MAX_ALERTED_IDS = 256
 # Estilo del recuadro y del texto dibujados sobre cada detección.
 OVERLAY_BOX_THICKNESS = 2
 OVERLAY_FONT_SCALE = 0.5
@@ -107,7 +117,7 @@ class YOLODetectionThread(QThread):
         self.show_burnt_toasts = True
 
         # Estado de las alertas y del ritmo de frames.
-        self.alerted_ids = set()
+        self.alerted_ids = OrderedDict()
         self._last_mock_alert_time = 0.0
         self.last_toast_seen_time = 0.0
         # StreamConfig valida fps ∈ {20, 30}, así que no hay división por cero.
@@ -117,10 +127,11 @@ class YOLODetectionThread(QThread):
         if hasattr(self.detect_use_case, "reset_tracker"):
             self.detect_use_case.reset_tracker()
 
-        # Acumuladores de métricas del lote.
+        # Acumuladores de métricas del lote. Los sensores se acumulan como suma
+        # y conteo: memoria constante y promedio del lote completo.
         self.inicio_at = datetime.now()
         self.seen_toasts = {}
-        self.sensor_samples: list[SensorReadings] = []
+        self.sensor_accumulator = SensorAccumulator()
 
     def run(self):
         """Bucle principal: abre la fuente, procesa frames y publica hasta parar."""
@@ -134,7 +145,7 @@ class YOLODetectionThread(QThread):
             publisher = self.publisher = self.publisher_factory(self.stream_config)
 
             if not cap.isOpened():
-                print(f"No se pudo abrir la fuente de video: {cv_source}")
+                logger.error("No se pudo abrir la fuente de video: %s", cv_source)
                 return
 
             # El publisher no debe arrancar hasta que la fuente sea usable.
@@ -144,7 +155,7 @@ class YOLODetectionThread(QThread):
                 publisher.start()
             except Exception as exc:
                 # La previsualización local sigue siendo útil aunque falle FFmpeg.
-                print(f"[Thread] No se pudo iniciar el publisher RTSP: {exc}")
+                logger.warning("[Thread] No se pudo iniciar el publisher RTSP: %s", exc)
 
             self.last_toast_seen_time = time.time()
 
@@ -159,7 +170,7 @@ class YOLODetectionThread(QThread):
                 try:
                     detections = self.detect_use_case.execute(image)
                 except Exception as e:
-                    print(f"[Thread] Error al ejecutar inferencia YOLO: {e}")
+                    logger.error("[Thread] Error al ejecutar inferencia YOLO: %s", e)
                     detections = []
 
                 # Registrar tostadas vistas y su estado final.
@@ -176,19 +187,24 @@ class YOLODetectionThread(QThread):
 
                 # Simular lecturas de sensores en tiempo real.
                 try:
-                    self.sensor_samples.append(self.sensor_provider.read())
+                    self.sensor_accumulator.add(self.sensor_provider.read())
                 except Exception as exc:
-                    print(f"[Thread] Error al leer sensores: {exc}")
+                    logger.error("[Thread] Error al leer sensores: %s", exc)
 
                 # Cierre automático del lote por inactividad.
                 if has_visible_toasts:
                     self.last_toast_seen_time = time.time()
                 elif self.seen_toasts and (time.time() - self.last_toast_seen_time > INACTIVITY_SECONDS):
-                    print("[Thread] Inactividad detectada (10s sin tostadas). Finalizando y enviando lote actual...")
+                    logger.info(
+                        "[Thread] Inactividad detectada (%.0fs sin tostadas). "
+                        "Finalizando y enviando lote actual...",
+                        INACTIVITY_SECONDS,
+                    )
                     self.emit_batch_metrics()
                     self.inicio_at = datetime.now()
                     self.seen_toasts.clear()
-                    self.sensor_samples.clear()
+                    # El reset va después de emitir: el lote nunca sale en cero.
+                    self.sensor_accumulator.reset()
                     self.last_toast_seen_time = time.time()
 
                 # Avisar solo de las tostadas quemadas cuyo aviso no se emitió aún.
@@ -196,8 +212,7 @@ class YOLODetectionThread(QThread):
                     toast_id = getattr(det, "id", None)
 
                     if toast_id is not None:
-                        if _is_burnt(det) and toast_id not in self.alerted_ids:
-                            self.alerted_ids.add(toast_id)
+                        if _is_burnt(det) and self._remember_alerted_id(toast_id):
                             self.burned_toast_alert_signal.emit(
                                 f"¡ALERTA TOSTADA #{toast_id} QUEMADA! (Conf: {det.confidence:.2f})"
                             )
@@ -219,9 +234,12 @@ class YOLODetectionThread(QThread):
                 try:
                     published = publisher.publish(output)
                     if published is False:
-                        print("[Thread] Publisher RTSP rechazó un frame; continúa la vista local")
+                        logger.warning(
+                            "[Thread] Publisher RTSP rechazó un frame; "
+                            "continúa la vista local"
+                        )
                 except Exception as exc:
-                    print(f"[Thread] Error publicando frame RTSP: {exc}")
+                    logger.error("[Thread] Error publicando frame RTSP: %s", exc)
 
                 self.change_pixmap_signal.emit(self._to_qt_image(output))
 
@@ -231,19 +249,21 @@ class YOLODetectionThread(QThread):
                 if sleep_time > 0:
                     self._stop_event.wait(sleep_time)
         except Exception as exc:
-            print(f"[Thread] Error en el procesamiento de video: {exc}")
+            logger.error("[Thread] Error en el procesamiento de video: %s", exc)
         finally:
             # Conservar este orden: detener FFmpeg antes de liberar la entrada.
             if publisher is not None:
                 try:
                     publisher.stop()
                 except Exception as exc:
-                    print(f"[Thread] Error al detener el publisher RTSP: {exc}")
+                    logger.error(
+                        "[Thread] Error al detener el publisher RTSP: %s", exc
+                    )
             if cap is not None:
                 try:
                     cap.release()
                 except Exception as exc:
-                    print(f"[Thread] Error al liberar la captura: {exc}")
+                    logger.error("[Thread] Error al liberar la captura: %s", exc)
 
         if self.seen_toasts:
             self.emit_batch_metrics()
@@ -319,11 +339,25 @@ class YOLODetectionThread(QThread):
             self.inicio_at,
             fin_at,
             self.seen_toasts,
-            self.sensor_samples,
+            self.sensor_accumulator.averages(),
             producto_id=self.producto_id,
         )
 
         self.lote_completed_signal.emit(payload)
+
+    def _remember_alerted_id(self, toast_id) -> bool:
+        """Registra el id de una tostada quemada; devuelve si es la primera vez.
+
+        ``alerted_ids`` se acota a ``MAX_ALERTED_IDS``: al superarlo se descarta
+        el id más antiguo para no crecer sin límite en streams largos. Basta con
+        recordar los ids que aún pueden estar en pantalla.
+        """
+        if toast_id in self.alerted_ids:
+            return False
+        self.alerted_ids[toast_id] = None
+        if len(self.alerted_ids) > MAX_ALERTED_IDS:
+            self.alerted_ids.popitem(last=False)
+        return True
 
     # ------------------------------------------------------------------ api
     def stop(self):
