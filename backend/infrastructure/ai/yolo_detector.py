@@ -181,9 +181,14 @@ class YoloDetector(IImageDetector):
                 
                 # Extract scores starting from index 4
                 classes_score = row[4:]
-                _, _, _, max_idx = cv2.minMaxLoc(classes_score)
-                class_id = max_idx[1]
-                confidence = classes_score[class_id]
+                # np.argmax no depende de la versión de OpenCV. cv2.minMaxLoc
+                # devuelve el pico como Point(x, y) y para un array 1D su
+                # semántica cambia según cómo OpenCV lo convierta a Mat: en 4.x
+                # lo trata como columna (índice en y) y en 5.x como fila (índice
+                # en x). Leer max_idx[1] fijaba la clase 0 en OpenCV 5, por lo
+                # que toda tostada se etiquetaba como quemada (TCQ).
+                class_id = int(np.argmax(classes_score))
+                confidence = float(classes_score[class_id])
 
                 label = self.names[class_id] if class_id < len(self.names) else f"class_{class_id}"
                 thresh = self.class_thresholds.get(label.lower(), self.confidence_threshold)

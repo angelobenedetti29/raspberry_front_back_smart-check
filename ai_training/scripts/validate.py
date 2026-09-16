@@ -72,8 +72,10 @@ for i in range(rows):
     row = preds[0][i]
     conf = row[4]
     classes_score = row[4:]
-    _, _, _, max_idx = cv2.minMaxLoc(classes_score)
-    class_id = max_idx[1]
+    # np.argmax no depende de la versión de OpenCV. cv2.minMaxLoc devuelve el
+    # pico como Point(x, y) y para un array 1D su semántica cambia entre 4.x y
+    # 5.x, por lo que leer max_idx[1] fijaba la clase 0 en OpenCV 5.
+    class_id = int(np.argmax(classes_score))
     
     # Umbral de confianza del 25% para visualización
     if classes_score[class_id] > 0.25:
