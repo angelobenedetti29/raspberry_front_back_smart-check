@@ -1,10 +1,8 @@
 """Direct tests for the ToastTracker state machine.
 
-These tests document the *current* behavior of ``backend/use_cases/
-toast_tracker.py``; they intentionally do not change it.  Known inconsistency:
-the constructor exposes ``min_burnt_confirm_frames`` (default 5) but the
-matching branch hardcodes a 3-frame confirmation threshold.  That option only
-takes effect for brand-new tracks when it is <= 1.
+La confirmación de quemada es por frames *consecutivos*: el contador se reinicia
+al ver una detección OK y la transición ocurre al alcanzar
+``min_burnt_confirm_frames`` (default 3).
 """
 
 from backend.domain.entities.detection import DetectionResult
@@ -43,8 +41,8 @@ def test_new_track_starts_ok_with_burnt_counter_one():
 
 def test_burn_transition_on_third_consecutive_frame():
     tracker = ToastTracker()
-    # The constructor default is 5, but the transition hardcodes 3 frames.
-    assert tracker.min_burnt_confirm_frames == 5
+    # El umbral por defecto es 3 frames consecutivos.
+    assert tracker.min_burnt_confirm_frames == 3
 
     for expected in (1, 2):
         _, newly = tracker.update([_det("TCQ")])
@@ -57,6 +55,35 @@ def test_burn_transition_on_third_consecutive_frame():
     assert toast.state == "burnt"
     assert toast.label == "TCQ"
     assert [t.id for t in newly] == [1]
+
+
+def test_burn_counter_resets_on_ok_frame():
+    tracker = ToastTracker()
+    tracker.update([_det("TCQ")])
+    tracker.update([_det("TCQ")])
+    tracker.update([_det("TCOK")])  # corta la racha
+
+    toast = tracker.tracked_toasts[1]
+    assert toast.consecutive_burnt_frames == 0
+    assert toast.state == "ok"
+
+    tracker.update([_det("TCQ")])
+    tracker.update([_det("TCQ")])
+    assert tracker.tracked_toasts[1].state == "ok"
+
+    tracker.update([_det("TCQ")])
+    assert tracker.tracked_toasts[1].state == "burnt"
+
+
+def test_alternating_burnt_and_ok_never_confirms():
+    tracker = ToastTracker()
+    for _ in range(5):
+        tracker.update([_det("TCQ")])
+        tracker.update([_det("TCOK")])
+
+    toast = tracker.tracked_toasts[1]
+    assert toast.state == "ok"
+    assert toast.label == "TCOK"
 
 
 def test_newly_burnt_is_reported_once():

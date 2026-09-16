@@ -15,7 +15,7 @@ class TrackedToast:
     alert_triggered: bool = False
 
 class ToastTracker:
-    def __init__(self, iou_threshold: float = 0.3, max_lost_frames: int = 10, min_burnt_confirm_frames: int = 5):
+    def __init__(self, iou_threshold: float = 0.3, max_lost_frames: int = 10, min_burnt_confirm_frames: int = 3):
         self.iou_threshold = iou_threshold
         self.max_lost_frames = max_lost_frames
         self.min_burnt_confirm_frames = min_burnt_confirm_frames
@@ -50,6 +50,24 @@ class ToastTracker:
         cB_x = boxB[0] + boxB[2] / 2
         cB_y = boxB[1] + boxB[3] / 2
         return ((cA_x - cB_x) ** 2 + (cA_y - cB_y) ** 2) ** 0.5
+
+    def _update_burnt_state(self, tracked_toast: TrackedToast) -> None:
+        """Confirma o mantiene el estado de quemada de una tostada.
+
+        Una tostada quemada no se des-quema. El resto pasa a "burnt" al acumular
+        ``min_burnt_confirm_frames`` frames *consecutivos* con detección de
+        quemada; una detección OK reinicia el contador.
+        """
+        if tracked_toast.state == "burnt":
+            tracked_toast.label = "TCQ"
+            return
+
+        threshold = max(1, self.min_burnt_confirm_frames)
+        if tracked_toast.consecutive_burnt_frames >= threshold:
+            tracked_toast.state = "burnt"
+            tracked_toast.label = "TCQ"
+        else:
+            tracked_toast.label = "TCOK"
 
     def update(self, detections) -> Tuple[List[TrackedToast], List[TrackedToast]]:
         """
@@ -101,19 +119,13 @@ class ToastTracker:
             # Lógica de máquina de estados de tostada
             is_burnt_detection = is_burnt(det.label)
             
-            if tracked_toast.state == "burnt":
-                # La tostada quemada no puede des-quemarse
-                tracked_toast.label = "TCQ"
+            if is_burnt_detection:
+                tracked_toast.consecutive_burnt_frames += 1
             else:
-                if is_burnt_detection:
-                    tracked_toast.consecutive_burnt_frames += 1
+                # Frames consecutivos: una detección OK corta la racha.
+                tracked_toast.consecutive_burnt_frames = 0
 
-                # Transición a quemado si se alcanza el umbral de confirmación (3 frames en total)
-                if tracked_toast.consecutive_burnt_frames >= 3:
-                    tracked_toast.state = "burnt"
-                    tracked_toast.label = "TCQ"
-                else:
-                    tracked_toast.label = "TCOK"
+            self._update_burnt_state(tracked_toast)
 
         # 3. Manejo de tostadas bajo seguimiento no emparejadas (perdidas en este fotograma)
         for t_id in tracked_ids:
@@ -124,28 +136,19 @@ class ToastTracker:
         # 4. Manejo de nuevas detecciones no emparejadas (nuevas tostadas que entran)
         for det_idx, det in enumerate(new_detections):
             if det_idx not in matched_det_indices:
-                is_burnt_detection = is_burnt(det.label)
-                
-                # Inicialmente asumimos estado "ok" y dejamos que la histéresis confirme si está quemada
-                # A menos que min_burnt_confirm_frames sea 0 o 1
-                initial_state = "ok"
-                consecutive_burnt = 1 if is_burnt_detection else 0
-                
-                if is_burnt_detection and self.min_burnt_confirm_frames <= 1:
-                    initial_state = "burnt"
-
-                initial_label = "TCQ" if initial_state == "burnt" else "TCOK"
-
+                # Un track nuevo entra como "ok" y pasa por la misma confirmación
+                # por frames consecutivos que los tracks existentes.
                 new_toast = TrackedToast(
                     id=self.next_id,
                     bbox=det.bbox,
-                    label=initial_label,
+                    label="TCOK",
                     confidence=det.confidence,
-                    state=initial_state,
-                    consecutive_burnt_frames=consecutive_burnt
+                    state="ok",
+                    consecutive_burnt_frames=1 if is_burnt(det.label) else 0,
                 )
                 self.tracked_toasts[self.next_id] = new_toast
                 self.next_id += 1
+                self._update_burnt_state(new_toast)
 
         # 5. Limpieza de tostadas perdidas por demasiado tiempo
         to_delete = [t_id for t_id, t in self.tracked_toasts.items() if t.frames_since_seen > self.max_lost_frames]
