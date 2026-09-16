@@ -63,6 +63,10 @@ class FakeSendLoteInicioUseCase:
         self.calls = []
 
     def execute(self, horno_id, producto_id):
+        if not horno_id or not producto_id:
+            raise ValueError(
+                "Se requieren 'hornoId' y 'productoId' para iniciar el lote."
+            )
         self.calls.append((horno_id, producto_id))
         return self.success
 
