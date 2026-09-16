@@ -2,25 +2,8 @@
 
 import pytest
 
+from backend.tests.fakes import BareTransport, FakeTransport
 from backend.use_cases.send_lote_inicio import SendLoteInicioUseCase
-
-
-class FakeTransport:
-    def __init__(self, result=True):
-        self.result = result
-        self.calls = []
-        self.last_error = "last error"
-        self.last_status_code = 422
-        self.last_response_text = "unprocessable"
-
-    def post(self, path, payload, **kwargs):
-        self.calls.append((path, payload, kwargs))
-        return self.result
-
-
-class BareTransport:
-    def post(self, path, payload, **kwargs):
-        return True
 
 
 def test_url_strips_trailing_slash_and_sends_payload():
@@ -72,7 +55,7 @@ def test_empty_ids_raise_value_error(horno_id, producto_id):
 
 
 def test_get_last_accessors_proxy_through():
-    transport = FakeTransport()
+    transport = FakeTransport(last_status_code=422, last_response_text="unprocessable")
     use_case = SendLoteInicioUseCase(transport, "http://central:9000/api/v1")
 
     assert use_case.get_last_error() == "last error"

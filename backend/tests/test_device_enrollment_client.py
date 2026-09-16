@@ -5,6 +5,7 @@ import json
 import pytest
 import requests
 
+from backend.tests.fakes import FakeResponse, device_descriptor, make_identity_store
 from device_enrollment.client import EnrollmentClient
 from device_enrollment.errors import (
     CredentialRevokedError,
@@ -12,7 +13,7 @@ from device_enrollment.errors import (
     NewInvitationRequiredError,
     NotEnrolledError,
 )
-from device_enrollment.identity import IdentityStore, PHASE_ENROLLED, PHASE_PENDING
+from device_enrollment.identity import PHASE_ENROLLED, PHASE_PENDING
 from device_enrollment.proof import ENROLLMENT_SUBJECT_PREFIX, decode_header
 
 API = "https://api.example.test/api/v1"
@@ -20,13 +21,6 @@ AUD = "https://api.example.test/api/v1"
 RECOVER = API + "/dispositivos/enrollments/recover"
 PROVISION = API + "/dispositivos/provision"
 DEVICE_ID = "22222222-2222-2222-2222-222222222222"
-
-
-class FakeResponse:
-    def __init__(self, status_code, text="{}", is_redirect=False):
-        self.status_code = status_code
-        self.text = text
-        self.is_redirect = is_redirect
 
 
 class ScriptedSession:
@@ -66,18 +60,12 @@ def identity_body(fingerprint, dispositivo_id=DEVICE_ID, status="active"):
     )
 
 
-def make_store(tmp_path):
-    store = IdentityStore(tmp_path / "identity")
-    store.ensure_directory()
-    return store
-
-
 def prepare_pending(store):
     return store.initialize_pending(API, AUD)
 
 
 def test_new_key_recover_404_then_provision_succeeds(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession([(404, error_body("enrollment_not_found")), (201, identity_body(pending.fingerprint))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -100,7 +88,7 @@ def test_new_key_recover_404_then_provision_succeeds(tmp_path):
 
 
 def test_pending_recover_200_persists_without_code(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession([(200, identity_body(pending.fingerprint, status="disabled"))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -114,7 +102,7 @@ def test_pending_recover_200_persists_without_code(tmp_path):
 
 
 def test_lost_response_after_redeem_recovers_same_key_never_rotates(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession(
         [
@@ -133,7 +121,7 @@ def test_lost_response_after_redeem_recovers_same_key_never_rotates(tmp_path):
 
 
 def test_ambiguous_provision_failure_retries_via_recover(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession(
         [
@@ -151,7 +139,7 @@ def test_ambiguous_provision_failure_retries_via_recover(tmp_path):
 
 
 def test_credential_used_then_recover_returns_identity(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession(
         [
@@ -166,7 +154,7 @@ def test_credential_used_then_recover_returns_identity(tmp_path):
 
 
 def test_revoked_credential_is_a_hard_stop_and_keeps_local_key(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession([(409, error_body("credential_revoked"))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -180,7 +168,7 @@ def test_revoked_credential_is_a_hard_stop_and_keeps_local_key(tmp_path):
 
 
 def test_enrollment_unavailable_requires_a_new_invitation(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     prepare_pending(store)
     session = ScriptedSession(
         [
@@ -196,7 +184,7 @@ def test_enrollment_unavailable_requires_a_new_invitation(tmp_path):
 
 
 def test_already_enrolled_is_idempotent_without_network(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     first = EnrollmentClient(
         store, API, AUD, session=ScriptedSession([(404, error_body("enrollment_not_found")), (201, identity_body(pending.fingerprint))])
@@ -213,7 +201,7 @@ def test_already_enrolled_is_idempotent_without_network(tmp_path):
 def test_missing_code_after_404_requires_code(tmp_path):
     from device_enrollment.errors import CodeRequiredError
 
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     prepare_pending(store)
     session = ScriptedSession([(404, error_body("enrollment_not_found"))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -223,7 +211,7 @@ def test_missing_code_after_404_requires_code(tmp_path):
 
 
 def test_recover_command_404_reports_not_enrolled(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     prepare_pending(store)
     session = ScriptedSession([(404, error_body("enrollment_not_found"))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -233,18 +221,11 @@ def test_recover_command_404_reports_not_enrolled(tmp_path):
 
 
 def test_recover_command_refreshes_enrolled_identity(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     enrolled = store.persist_enrolled(
         pending,
-        {
-            "enrollmentId": "enrollment-1",
-            "dispositivoId": DEVICE_ID,
-            "keyFingerprint": pending.fingerprint,
-            "authStatus": "active",
-            "enrolledAt": "2026-09-12T00:00:00Z",
-            "audience": AUD,
-        },
+        device_descriptor(pending.fingerprint, dispositivo_id=DEVICE_ID, audience=AUD),
     )
     session = ScriptedSession([(200, identity_body(enrolled.fingerprint, status="disabled"))])
     client = EnrollmentClient(store, API, AUD, session=session)
@@ -257,20 +238,13 @@ def test_recover_command_refreshes_enrolled_identity(tmp_path):
 
 def test_recover_records_the_current_api_base_url_not_the_stale_one(tmp_path):
     """A reconfigured central server must replace the stored apiBaseUrl."""
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     old_api = "https://old.example.test/api/v1"
     new_api = "https://new.example.test/api/v1"
     pending = store.initialize_pending(old_api, AUD)
     store.persist_enrolled(
         pending,
-        {
-            "enrollmentId": "enrollment-1",
-            "dispositivoId": DEVICE_ID,
-            "keyFingerprint": pending.fingerprint,
-            "authStatus": "active",
-            "enrolledAt": "2026-09-12T00:00:00Z",
-            "audience": AUD,
-        },
+        device_descriptor(pending.fingerprint, dispositivo_id=DEVICE_ID, audience=AUD),
     )
     assert store.load_metadata()["apiBaseUrl"] == old_api
 
@@ -285,18 +259,11 @@ def test_recover_records_the_current_api_base_url_not_the_stale_one(tmp_path):
 
 
 def test_corrupt_enrolled_key_is_a_hard_failure(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     store.persist_enrolled(
         pending,
-        {
-            "enrollmentId": "enrollment-1",
-            "dispositivoId": DEVICE_ID,
-            "keyFingerprint": pending.fingerprint,
-            "authStatus": "active",
-            "enrolledAt": "2026-09-12T00:00:00Z",
-            "audience": AUD,
-        },
+        device_descriptor(pending.fingerprint, dispositivo_id=DEVICE_ID, audience=AUD),
     )
     store.private_key_path.unlink()
     client = EnrollmentClient(store, API, AUD, session=ScriptedSession([]))
@@ -306,7 +273,7 @@ def test_corrupt_enrolled_key_is_a_hard_failure(tmp_path):
 
 
 def test_enrollment_subject_uses_urn_prefix(tmp_path):
-    store = make_store(tmp_path)
+    store = make_identity_store(tmp_path)
     pending = prepare_pending(store)
     session = ScriptedSession([(200, identity_body(pending.fingerprint))])
     client = EnrollmentClient(store, API, AUD, session=session)

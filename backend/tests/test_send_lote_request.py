@@ -1,24 +1,7 @@
 """Tests for SendLoteRequestUseCase using the signed transport (network-free)."""
 
+from backend.tests.fakes import BareTransport, FakeTransport
 from backend.use_cases.send_lote_request import SendLoteRequestUseCase
-
-
-class FakeTransport:
-    def __init__(self, result=True):
-        self.result = result
-        self.calls = []
-        self.last_error = "last error"
-        self.last_status_code = 503
-        self.last_response_text = "service unavailable"
-
-    def post(self, path, payload, **kwargs):
-        self.calls.append((path, payload, kwargs))
-        return self.result
-
-
-class BareTransport:
-    def post(self, path, payload, **kwargs):
-        return True
 
 
 def test_url_strips_trailing_slash_and_appends_endpoint():

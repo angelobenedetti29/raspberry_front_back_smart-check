@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-from device_enrollment.identity import IdentityStore
+from backend.tests.fakes import FakeResponse, make_enrolled_identity
 from device_enrollment.proof import decode_claims, decode_header
 from device_enrollment.transport import (
     PreparedRequest,
@@ -19,13 +19,6 @@ from device_enrollment.transport import (
 API = "https://api.example.test/api/v1"
 AUD = "https://api.example.test/api/v1"
 DEVICE_ID = "11111111-1111-1111-1111-111111111111"
-
-
-class FakeResponse:
-    def __init__(self, status_code=200, text="{}", is_redirect=False):
-        self.status_code = status_code
-        self.text = text
-        self.is_redirect = is_redirect
 
 
 class FakeSession:
@@ -50,21 +43,6 @@ class FakeSession:
         if self.exc is not None:
             raise self.exc
         return self.response
-
-
-def make_enrolled_identity(tmp_path, dispositivo_id=DEVICE_ID):
-    store = IdentityStore(tmp_path / "identity")
-    store.ensure_directory()
-    pending = store.initialize_pending(API, AUD)
-    descriptor = {
-        "enrollmentId": "enr-1",
-        "dispositivoId": dispositivo_id,
-        "keyFingerprint": pending.fingerprint,
-        "authStatus": "active",
-        "enrolledAt": "2026-09-12T00:00:00Z",
-        "audience": AUD,
-    }
-    return store.persist_enrolled(pending, descriptor)
 
 
 def test_prepare_signs_exact_body_and_never_sets_api_key(tmp_path):

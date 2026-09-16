@@ -2,30 +2,13 @@
 
 import pytest
 
+from backend.tests.fakes import BareTransport, FakeTransport
 from backend.use_cases.send_ping_request import SendPingRequestUseCase
 
 PING_PAYLOAD = {
     "dispositivoId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
     "cpuPct": 12.5,
 }
-
-
-class FakeTransport:
-    def __init__(self, result=True):
-        self.result = result
-        self.calls = []
-        self.last_error = "last error"
-        self.last_status_code = 503
-        self.last_response_text = "service unavailable"
-
-    def post(self, path, payload, **kwargs):
-        self.calls.append((path, payload, kwargs))
-        return self.result
-
-
-class BareTransport:
-    def post(self, path, payload, **kwargs):
-        return True
 
 
 def test_url_strips_trailing_slash_and_appends_endpoint():
