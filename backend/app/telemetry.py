@@ -1,4 +1,7 @@
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 class TelemetryLoop:
@@ -42,15 +45,13 @@ class TelemetryLoop:
             payload = metrics.to_ping_payload(self.dispositivo_id)
             sent = self.ping_use_case.execute(payload)
             if sent:
-                print(
-                    f"[TelemetryLoop] Ping enviado (dispositivo {self.dispositivo_id})."
-                )
+                logger.info("Ping enviado (dispositivo %s).", self.dispositivo_id)
             else:
                 last_error = getattr(self.ping_use_case, "get_last_error", lambda: None)()
-                print(f"[TelemetryLoop] Falló el ping: {last_error}")
+                logger.warning("Falló el ping: %s", last_error)
         except Exception as exc:
             # La telemetría es best-effort: nunca debe tumbar el loop ni la app.
-            print(f"[TelemetryLoop] Error al enviar telemetría: {exc}")
+            logger.warning("Error al enviar telemetría: %s", exc)
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
