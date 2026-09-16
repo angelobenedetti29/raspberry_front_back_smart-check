@@ -14,6 +14,7 @@ from backend.app.dependencies import (
     get_send_lote_inicio_use_case,
 )
 from backend.app.main import app
+from backend.tests.fakes import FakeSendLoteUseCase, make_lote_payload
 from backend.use_cases.finalize_lote import FinalizeLoteUseCase, LoteDeliveryError
 
 
@@ -43,26 +44,6 @@ class FakeDetectUseCase:
     def execute(self, frame):
         self.calls.append(frame)
         return self.detections
-
-
-class FakeSendLoteUseCase:
-    def __init__(self, success=True, status_code=None, error=None, response_text=None):
-        self.success = success
-        self.status_code = status_code
-        self.error = error
-        self.response_text = response_text
-
-    def execute(self, payload):
-        return self.success
-
-    def get_last_status_code(self):
-        return self.status_code
-
-    def get_last_error(self):
-        return self.error
-
-    def get_last_response_text(self):
-        return self.response_text
 
 
 class FakeSendLoteInicioUseCase:
@@ -104,29 +85,6 @@ def make_empty_settings() -> Settings:
         default_producto_id="",
         ping_interval_seconds=10.0,
     )
-
-
-def make_lote_payload(**overrides):
-    payload = {
-        "productoId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-        "turno": "mañana",
-        "inicioAt": "2024-01-01T08:00:00Z",
-        "finAt": "2024-01-01T09:00:00Z",
-        "totalUnidades": 3,
-        "correctos": 2,
-        "quemados": 1,
-        "crudas": 0,
-        "correctosKg": 0.05,
-        "quemadosKg": 0.03,
-        "crudosKg": 0.0,
-        "tempHorno1": 220.0,
-        "tempCombHorno1": 315.0,
-        "tempHorno2": 218.0,
-        "tempCombHorno2": 312.0,
-        "velocidadCinta": 1.1,
-    }
-    payload.update(overrides)
-    return payload
 
 
 @pytest.fixture

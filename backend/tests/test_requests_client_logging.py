@@ -3,12 +3,7 @@
 import requests
 
 from backend.infrastructure.http.requests_client import RequestsHttpClient
-
-
-class FakeResponse:
-    def __init__(self, status_code=200, text="RESPONSE_SECRET"):
-        self.status_code = status_code
-        self.text = text
+from backend.tests.fakes import FakeResponse
 
 
 def test_success_logs_only_allowlisted_metadata(monkeypatch, caplog):
@@ -20,7 +15,7 @@ def test_success_logs_only_allowlisted_metadata(monkeypatch, caplog):
         captured["url"] = url
         captured["json"] = json
         captured["headers"] = headers
-        return FakeResponse()
+        return FakeResponse(text="RESPONSE_SECRET")
 
     monkeypatch.setattr(module.requests, "post", fake_post)
     client = RequestsHttpClient()
