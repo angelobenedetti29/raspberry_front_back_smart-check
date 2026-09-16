@@ -6,7 +6,7 @@ import stat
 
 import pytest
 
-from backend.tests.fakes import device_descriptor, make_identity_store
+from device_enrollment.tests.fakes import device_descriptor, make_identity_store
 from device_enrollment.errors import IdentityCorruptError, IdentityError
 from device_enrollment.identity import (
     PHASE_ENROLLED,
