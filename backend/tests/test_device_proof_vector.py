@@ -15,7 +15,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from backend.tests.proof_vector_builder import build_vector
 from device_enrollment.proof import (
     ENROLLMENT_SUBJECT_PREFIX,
-    b64url,
     decode_claims,
     decode_header,
     signing_input,

@@ -48,7 +48,7 @@ async def detect_toast(
             }
             if hasattr(det, "id"):
                 res_item["id"] = det.id
-                res_item["state"] = getattr(det, "state", "unknown")
+                res_item["state"] = det.state
             results.append(res_item)
 
         has_burned = any(

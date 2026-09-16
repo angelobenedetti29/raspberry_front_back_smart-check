@@ -17,7 +17,6 @@ from device_enrollment.proof import (
     jwk_fingerprint,
     public_jwk,
     serialize_body,
-    signing_input,
     verify_signature,
 )
 

@@ -10,7 +10,7 @@ def get_status(detector=Depends(get_detector)):
     return {
         "status": "online",
         "detector": {
-            "model_path": getattr(detector, "model_path", "Mocked"),
+            "model_path": detector.model_path,
             "classes": detector.get_class_names(),
         },
     }

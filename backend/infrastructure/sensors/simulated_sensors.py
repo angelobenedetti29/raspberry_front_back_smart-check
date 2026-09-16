@@ -5,7 +5,11 @@ from backend.domain.interfaces.sensor_provider import ISensorProvider
 
 
 class SimulatedSensorProvider(ISensorProvider):
-    """Reproduces the simulation ranges used by the frontend worker."""
+    """Genera lecturas simuladas con los rangos nominales del horno.
+
+    Es el proveedor de sensores por defecto del worker del frontend cuando no
+    hay hardware real conectado.
+    """
 
     def __init__(self, rng: random.Random | None = None):
         self._rng = rng if rng is not None else random.Random()
