@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import DEFAULT_IDENTITY_DIR
 from .client import EnrollmentClient, EnrollOutcome
 from .envfile import load_env_values, remove_assignments
 from .errors import (
@@ -22,7 +23,6 @@ from .errors import (
 from .identity import IdentityStore
 from .urls import normalize_api_base_url
 
-DEFAULT_IDENTITY_DIR = "/var/lib/smart-check/device"
 CODE_ENV_VAR = "DEVICE_ENROLLMENT_CODE"
 
 EXIT_OK = 0
@@ -156,10 +156,7 @@ def _cmd_enroll(args: argparse.Namespace) -> int:
     store = IdentityStore(config.identity_dir)
     client = EnrollmentClient(store, api_base_url, audience)
 
-    prompted = {"used": False}
-
     def code_provider() -> str:
-        prompted["used"] = True
         return getpass.getpass(f"{CODE_ENV_VAR}: ").strip()
 
     outcome = client.enroll(code=config.code, code_provider=code_provider)

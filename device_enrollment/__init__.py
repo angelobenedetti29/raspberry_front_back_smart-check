@@ -8,6 +8,11 @@ stays lightweight and can run independently from the application.
 
 from __future__ import annotations
 
-__all__ = ["__version__"]
+__all__ = ["DEFAULT_IDENTITY_DIR", "__version__"]
+
+# Directorio por defecto de la identidad del dispositivo. Se define una sola vez
+# aquí para que la CLI (``device_enrollment.cli``) y el backend
+# (``backend.app.config``) compartan exactamente el mismo valor.
+DEFAULT_IDENTITY_DIR = "/var/lib/smart-check/device"
 
 __version__ = "1.0.0"

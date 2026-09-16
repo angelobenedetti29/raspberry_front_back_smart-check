@@ -4,13 +4,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from device_enrollment import DEFAULT_IDENTITY_DIR
 from device_enrollment.envfile import load_env_values
 from device_enrollment.errors import ConfigurationError
 from device_enrollment.urls import normalize_api_base_url
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_IDENTITY_DIR = "/var/lib/smart-check/device"
 
 # Ruta del .env del backend. Se resuelve en cada llamada a load_env_file para
 # que los tests puedan redirigirla con monkeypatch.
@@ -65,6 +64,8 @@ def _normalize_base_url(raw: str | None) -> str:
 
 @dataclass(frozen=True)
 class Settings:
+    """Configuración inmutable del backend, resuelta una vez por proceso."""
+
     device_api_base_url: str = ""
     device_auth_audience: str = ""
     device_identity_dir: str = DEFAULT_IDENTITY_DIR

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Self
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -74,6 +75,47 @@ class _FileLock:
         return False
 
 
+class _StoreLock:
+    """Re-entrant, per-instance identity lock context manager.
+
+    ``_guard`` is a ``threading.RLock``: it provides in-process mutual exclusion
+    between threads and re-entrancy for the owning thread, so nested ``lock()``
+    calls (e.g. ``EnrollmentClient`` already holding the lock while calling a
+    guarded mutator) never self-deadlock. The ``flock`` is only acquired at the
+    outermost depth and provides cross-process exclusion. A second
+    ``IdentityStore`` instance in the same process blocks on ``flock``, which is
+    the desired behavior.
+    """
+
+    def __init__(self, store: IdentityStore):
+        self._store = store
+
+    def __enter__(self) -> Self:
+        store = self._store
+        store._guard.acquire()
+        try:
+            if store._lock_depth == 0:
+                file_lock = _FileLock(store.lock_path)
+                file_lock.__enter__()
+                store._file_lock = file_lock
+            store._lock_depth += 1
+        except BaseException:
+            store._guard.release()
+            raise
+        return self
+
+    def __exit__(self, *exc_info: object) -> Literal[False]:
+        store = self._store
+        try:
+            store._lock_depth -= 1
+            if store._lock_depth == 0 and store._file_lock is not None:
+                file_lock, store._file_lock = store._file_lock, None
+                file_lock.__exit__(*exc_info)
+        finally:
+            store._guard.release()
+        return False
+
+
 class IdentityStore:
     """Filesystem-backed device identity store."""
 
@@ -82,6 +124,12 @@ class IdentityStore:
         self.private_key_path = self.identity_dir / PRIVATE_KEY_FILENAME
         self.identity_path = self.identity_dir / IDENTITY_FILENAME
         self.lock_path = self.identity_dir / LOCK_FILENAME
+        # ``_guard`` is the in-process mutex (re-entrant for its owning thread);
+        # ``_file_lock`` is only held while ``_lock_depth`` is non-zero so nested
+        # ``lock()`` calls never attempt a second ``flock`` on another fd.
+        self._guard = threading.RLock()
+        self._lock_depth = 0
+        self._file_lock: _FileLock | None = None
 
     # -- directory -----------------------------------------------------------------
     def ensure_directory(self) -> None:
@@ -89,7 +137,11 @@ class IdentityStore:
         if self.identity_dir.is_symlink():
             raise IdentityError("identity directory must not be a symlink")
         if not self.identity_dir.exists():
-            self.identity_dir.mkdir(parents=True, mode=0o700)
+            # ``exist_ok=True`` closes the check-then-create race between two
+            # processes. Parents created implicitly still inherit the process
+            # umask rather than 0700; ``_validate_directory`` rejects them if that
+            # leaves them too permissive.
+            self.identity_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
             os.chmod(self.identity_dir, 0o700)
         self._validate_directory()
 
@@ -107,20 +159,75 @@ class IdentityStore:
         if stat.S_IMODE(st.st_mode) & 0o077:
             raise IdentityError("identity directory permissions are too permissive")
 
-    def _validate_file(self, path: Path) -> None:
-        st = os.lstat(path)
-        if stat.S_ISLNK(st.st_mode):
-            raise IdentityCorruptError("identity file must not be a symlink")
-        if not stat.S_ISREG(st.st_mode):
-            raise IdentityCorruptError("identity file is not a regular file")
-        if st.st_uid != os.geteuid():
-            raise IdentityCorruptError("identity file is not owned by the service user")
-        if stat.S_IMODE(st.st_mode) & 0o077:
-            raise IdentityCorruptError("identity file permissions are too permissive")
+    def _validate_directory_for_reset(self) -> bool:
+        """Comprueba lo mínimo para que un ``reset`` sea seguro.
 
-    def lock(self) -> _FileLock:
-        """Return the exclusive identity lock context manager."""
-        return _FileLock(self.lock_path)
+        A diferencia de ``_validate_directory``, aquí no se exige propietario ni
+        permisos estrictos: un directorio comprometido (p. ej. permisos laxos o
+        de otro usuario) igual debe poder limpiarse para no dejar la clave
+        privada en disco. La validación estricta podría impedir precisamente el
+        reset que se necesita tras una revocación.
+
+        Sí se rechaza un symlink o cualquier cosa que no sea un directorio,
+        porque borrar a través de ellos podría afectar archivos fuera del
+        directorio de identidad.
+
+        Devuelve ``True`` si existe un directorio real; ``False`` si no existe;
+        lanza ``IdentityError`` si es un symlink, no es un directorio o no es
+        accesible.
+        """
+        try:
+            st = os.lstat(self.identity_dir)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise IdentityError("identity directory is not accessible") from exc
+        if stat.S_ISLNK(st.st_mode):
+            raise IdentityError(
+                "refusing to reset through a symlinked identity directory"
+            )
+        if not stat.S_ISDIR(st.st_mode):
+            raise IdentityError("identity path is not a directory")
+        return True
+
+    def _read_secure_file(self, path: Path) -> bytes | None:
+        """Read ``path`` through an fd so it cannot be swapped between check and use.
+
+        Opening with ``O_NOFOLLOW`` (where available) prevents following a symlink
+        planted after a separate ``lstat``. Validation then happens on the open
+        descriptor via ``fstat`` and the bytes are read from that same descriptor,
+        which closes the TOCTOU window of the previous validate-then-open read.
+        """
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise IdentityCorruptError("identity file could not be opened safely") from exc
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise IdentityCorruptError("identity file is not a regular file")
+            if st.st_uid != os.geteuid():
+                raise IdentityCorruptError("identity file is not owned by the service user")
+            if stat.S_IMODE(st.st_mode) & 0o077:
+                raise IdentityCorruptError("identity file permissions are too permissive")
+            if st.st_nlink > 1:
+                raise IdentityCorruptError("identity file must not be hard-linked")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(fd)
+
+    def lock(self) -> _StoreLock:
+        """Return the re-entrant exclusive identity lock context manager."""
+        return _StoreLock(self)
 
     # -- private key ---------------------------------------------------------------
     @staticmethod
@@ -141,10 +248,7 @@ class IdentityStore:
         write_atomic(self.private_key_path, self.serialize_private_key(private_key), mode=0o600)
 
     def read_private_key_pem(self) -> bytes | None:
-        if not self.private_key_path.exists():
-            return None
-        self._validate_file(self.private_key_path)
-        return self.private_key_path.read_bytes()
+        return self._read_secure_file(self.private_key_path)
 
     def load_private_key(self) -> Ed25519PrivateKey | None:
         pem = self.read_private_key_pem()
@@ -160,12 +264,12 @@ class IdentityStore:
 
     # -- metadata ------------------------------------------------------------------
     def load_metadata(self) -> dict[str, Any] | None:
-        if not self.identity_path.exists():
+        raw = self._read_secure_file(self.identity_path)
+        if raw is None:
             return None
-        self._validate_file(self.identity_path)
         try:
-            metadata = json.loads(self.identity_path.read_text(encoding="utf-8"))
-        except (ValueError, OSError) as exc:
+            metadata = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
             raise IdentityCorruptError("stored identity metadata is not valid JSON") from exc
         if not isinstance(metadata, dict) or metadata.get("version") != IDENTITY_VERSION:
             raise IdentityCorruptError("stored identity metadata has an unsupported version")
@@ -195,7 +299,6 @@ class IdentityStore:
         self,
         api_base_url: str,
         audience: str,
-        dispositivo_id: str | None = None,
     ) -> DeviceIdentity:
         """Persist (key then metadata) a pending identity before any network call.
 
@@ -203,23 +306,24 @@ class IdentityStore:
         writes, or a crash after a request without a response, never rotates the
         key.
         """
-        key = self.load_private_key()
-        if key is None:
-            key = self.generate_private_key()
-            self.write_private_key(key)
-        fingerprint = jwk_fingerprint(key.public_key())
-        metadata: dict[str, Any] = {
-            "version": IDENTITY_VERSION,
-            "phase": PHASE_PENDING,
-            "apiBaseUrl": api_base_url,
-            "audience": audience,
-            "keyFingerprint": fingerprint,
-            "dispositivoId": dispositivo_id,
-            "enrollmentId": None,
-            "enrolledAt": None,
-        }
-        self.write_metadata(metadata)
-        return self._identity(key, metadata)
+        with self.lock():
+            key = self.load_private_key()
+            if key is None:
+                key = self.generate_private_key()
+                self.write_private_key(key)
+            fingerprint = jwk_fingerprint(key.public_key())
+            metadata: dict[str, Any] = {
+                "version": IDENTITY_VERSION,
+                "phase": PHASE_PENDING,
+                "apiBaseUrl": api_base_url,
+                "audience": audience,
+                "keyFingerprint": fingerprint,
+                "dispositivoId": None,
+                "enrollmentId": None,
+                "enrolledAt": None,
+            }
+            self.write_metadata(metadata)
+            return self._identity(key, metadata)
 
     def load_identity(self) -> DeviceIdentity:
         """Load and validate the stored identity. Missing key is a hard failure."""
@@ -264,29 +368,39 @@ class IdentityStore:
         stale URL in ``identity.json``.
         """
         server_fingerprint = device.get("keyFingerprint")
-        if server_fingerprint and server_fingerprint != identity.fingerprint:
+        if not server_fingerprint or server_fingerprint != identity.fingerprint:
             raise IdentityCorruptError("server returned a mismatched key fingerprint")
-        metadata = dict(identity.metadata)
-        metadata.update(
-            {
-                "version": IDENTITY_VERSION,
-                "phase": PHASE_ENROLLED,
-                "apiBaseUrl": api_base_url or identity.api_base_url,
-                "audience": device.get("audience") or identity.audience,
-                "keyFingerprint": identity.fingerprint,
-                "dispositivoId": device.get("dispositivoId") or identity.dispositivo_id,
-                "enrollmentId": device.get("enrollmentId") or identity.enrollment_id,
-                "enrolledAt": device.get("enrolledAt") or metadata.get("enrolledAt"),
-            }
-        )
-        self.write_metadata(metadata)
-        return self._identity(identity.private_key, metadata)
+        with self.lock():
+            metadata = dict(identity.metadata)
+            metadata.update(
+                {
+                    "version": IDENTITY_VERSION,
+                    "phase": PHASE_ENROLLED,
+                    "apiBaseUrl": api_base_url or identity.api_base_url,
+                    "audience": device.get("audience") or identity.audience,
+                    "keyFingerprint": identity.fingerprint,
+                    "dispositivoId": device.get("dispositivoId") or identity.dispositivo_id,
+                    "enrollmentId": device.get("enrollmentId") or identity.enrollment_id,
+                    "enrolledAt": device.get("enrolledAt") or metadata.get("enrolledAt"),
+                }
+            )
+            self.write_metadata(metadata)
+            return self._identity(identity.private_key, metadata)
 
     def reset(self) -> list[Path]:
-        """Deliberately discard the local key and metadata (no backups)."""
-        removed: list[Path] = []
-        for path in (self.private_key_path, self.identity_path):
-            if path.exists() and not path.is_symlink():
-                path.unlink()
-                removed.append(path)
-        return removed
+        """Deliberately discard the local key and metadata (no backups).
+
+        Valida que el directorio sea real (no un symlink ni otra cosa) antes de
+        borrar, pero no exige propietario ni permisos estrictos para que un
+        directorio comprometido nunca bloquee una limpieza segura. Ver
+        ``_validate_directory_for_reset``.
+        """
+        if not self._validate_directory_for_reset():
+            return []
+        with self.lock():
+            removed: list[Path] = []
+            for path in (self.private_key_path, self.identity_path):
+                if path.exists() and not path.is_symlink():
+                    path.unlink()
+                    removed.append(path)
+            return removed
