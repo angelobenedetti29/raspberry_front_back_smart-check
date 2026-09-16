@@ -4,9 +4,9 @@ from backend.use_cases.finalize_lote import FinalizeLoteUseCase, LoteDeliveryErr
 from backend.tests.fakes import FakeSendLoteUseCase, make_lote_payload
 
 
-def make_use_case(success=True, base_url="http://central:9000/api/v1", **kwargs):
-    send = FakeSendLoteUseCase(success=success, **kwargs)
-    return FinalizeLoteUseCase(send, base_url), send
+def make_use_case(success=True, target="http://central:9000/api/v1/lotes", **kwargs):
+    send = FakeSendLoteUseCase(success=success, target=target, **kwargs)
+    return FinalizeLoteUseCase(send), send
 
 
 def test_missing_field_raises_value_error():
@@ -50,7 +50,7 @@ def test_send_failure_raises_lote_delivery_error():
 
 
 def test_success_returns_exact_payload_and_forwards():
-    use_case, send = make_use_case(base_url="http://central:9000/api/v1/")
+    use_case, send = make_use_case()
     payload = make_lote_payload()
 
     result = use_case.execute(payload)
@@ -61,3 +61,8 @@ def test_success_returns_exact_payload_and_forwards():
         "target": "http://central:9000/api/v1/lotes",
     }
     assert send.sent == [payload]
+
+
+def test_target_delegates_to_send_use_case():
+    use_case, _ = make_use_case(target="http://otro:1234/api/v1/lotes")
+    assert use_case.target == "http://otro:1234/api/v1/lotes"

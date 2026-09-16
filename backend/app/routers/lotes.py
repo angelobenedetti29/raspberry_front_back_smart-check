@@ -7,7 +7,11 @@ from backend.app.dependencies import (
     get_finalize_lote_use_case,
     get_send_lote_inicio_use_case,
 )
-from backend.app.errors import finalize_lote_http_exception
+from backend.app.errors import (
+    LOTE_START_FAILED_MESSAGE,
+    finalize_lote_http_exception,
+    lote_delivery_http_exception,
+)
 from backend.use_cases.finalize_lote import LoteDeliveryError
 
 router = APIRouter()
@@ -46,15 +50,12 @@ def iniciar_lote(
 
     success = use_case.execute(horno_id, producto_id)
     if not success:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "No se pudo iniciar el lote en el servidor central.",
-                "target": use_case.target,
-                "status_code": use_case.get_last_status_code(),
-                "error": use_case.get_last_error(),
-                "response": use_case.get_last_response_text(),
-            },
+        raise lote_delivery_http_exception(
+            message=LOTE_START_FAILED_MESSAGE,
+            target=use_case.target,
+            status_code=use_case.get_last_status_code(),
+            error=use_case.get_last_error(),
+            response_text=use_case.get_last_response_text(),
         )
 
     return {

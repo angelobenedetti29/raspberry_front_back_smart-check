@@ -102,7 +102,7 @@ def client(detect_use_case, lote_inicio_use_case):
     app.dependency_overrides[get_detector] = lambda: FakeDetector()
     app.dependency_overrides[get_detect_use_case] = lambda: detect_use_case
     app.dependency_overrides[get_finalize_lote_use_case] = lambda: FinalizeLoteUseCase(
-        FakeSendLoteUseCase(success=True), "http://central:9000/api/v1"
+        FakeSendLoteUseCase(success=True)
     )
     app.dependency_overrides[get_send_lote_inicio_use_case] = (
         lambda: lote_inicio_use_case
@@ -150,8 +150,7 @@ def test_finalizar_lote_delivery_failure_returns_502(client):
     app.dependency_overrides[get_finalize_lote_use_case] = lambda: FinalizeLoteUseCase(
         FakeSendLoteUseCase(
             success=False, status_code=500, error="boom", response_text="server error"
-        ),
-        "http://central:9000/api/v1",
+        )
     )
     response = client.post("/api/lotes/finalizar", json=make_lote_payload())
     assert response.status_code == 502
