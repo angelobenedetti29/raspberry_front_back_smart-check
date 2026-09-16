@@ -48,9 +48,10 @@ la instalación de la Raspberry Pi.
 
 6. Con el destino central por defecto
    (`STREAMING_OUTPUT_URL=rtsp://smartcheck.duckdns.org:8554/entrada`), el WHEP
-   que consume el frontend es
-   `https://smartcheck.duckdns.org:8889/entrada/whep` (el `whepUrl` del
-   dispositivo en el panel central). El MediaMTX local de los pasos 1-2 solo es
+   para un cliente externo (navegador/reproductor WebRTC) es
+   `https://smartcheck.duckdns.org:8889/entrada/whep` (el `whepUrl` que publica
+   el dispositivo en el panel central). El frontend de escritorio PySide6 no
+   implementa WHEP/WebRTC. El MediaMTX local de los pasos 1-2 solo es
    necesario si se publica localmente
    (`STREAMING_OUTPUT_URL=rtsp://127.0.0.1:8554/horno`); en ese caso abrir solo
    8889/TCP y 8189/UDP para WHEP/WebRTC, sin exponer 8554/TCP. En despliegues

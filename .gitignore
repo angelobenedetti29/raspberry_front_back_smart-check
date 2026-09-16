@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.ruff_cache/
 
 # Environment files
 .env
@@ -25,6 +26,11 @@ multimedia/videos/
 
 # Generated inference artifacts
 multimedia/output/
+
+# Model binaries (not versioned: generate them from ai_training/)
+*.onnx
+*.hef
+*.pt
 
 # Hailo DFC intermediate files, datasets and YOLO training runs
 *.har

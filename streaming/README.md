@@ -99,9 +99,12 @@ de las colas dentro de un timeout.
 
 Por defecto el pipeline publica en el MediaMTX central:
 `rtsp://smartcheck.duckdns.org:8554/entrada`. El ingest RTSP del central debe
-aceptar publicación en el path `entrada`; el frontend lo consume por WHEP en
-`https://smartcheck.duckdns.org:8889/entrada/whep` (usar el `whepUrl` del
-dispositivo en el panel central). Ajustar el host si el despliegue cambia.
+aceptar publicación en el path `entrada`. El WHEP está disponible en
+`https://smartcheck.duckdns.org:8889/entrada/whep` para un cliente externo
+(navegador u otro reproductor WebRTC) que use el `whepUrl` publicado por el
+dispositivo en el panel central; el frontend de escritorio PySide6 **no**
+implementa WHEP/WebRTC: sólo publica por RTSP y previsualiza localmente.
+Ajustar el host si el despliegue cambia.
 
 `STREAMING_OUTPUT_URL` (o `--output-url`) permite apuntar a otro destino. Para
 desarrollo local sin central, `../mediamtx/mediamtx.yml` levanta un MediaMTX
@@ -117,7 +120,7 @@ local con el path `horno`; en ese caso publicar con
 Desde la raíz del repositorio:
 
 ```bash
-python -m unittest discover -s streaming/tests -p 'test_*.py'
+python -m pytest -q streaming/tests
 python -m compileall -q streaming
 python -m streaming.main --help
 ```
@@ -144,9 +147,10 @@ MediaMTX/FFmpeg instalados:
    detener FFmpeg o MediaMTX y confirmar que el pipeline sigue capturando y
    reinicia con backoff; inspeccionar `health()` y la ausencia de bloqueo al
    apagar.
-3. **RTSP/WHEP:** ejecutar `ffprobe` local sobre RTSP, abrir el WHEP en el
-   frontend desde una máquina autorizada y verificar candidatos ICE por UDP
-   8189/TCP 8889.
+3. **RTSP/WHEP:** ejecutar `ffprobe` local sobre RTSP, abrir el WHEP en un
+   navegador/cliente WebRTC externo desde una máquina autorizada y verificar
+   candidatos ICE por UDP 8189/TCP 8889. El frontend de escritorio no consume
+   WHEP.
 4. **Hailo:** usar el `.hef` real indicado por `STREAMING_MODEL`, arrancar una
    sola instancia y confirmar en logs que `require_hailo` no permite fallback
    CPU; comprobar que `release_hailo()` ocurre al parar.

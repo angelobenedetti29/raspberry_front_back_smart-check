@@ -20,7 +20,7 @@ El repositorio contiene tres componentes independientes más los recursos de IA:
 backend/
   domain/                 # Reglas de negocio puras (sin frameworks)
     entities/             # DetectionResult, LoteRequest, DeviceMetrics, SensorReadings
-    interfaces/           # IImageDetector, IHttpClient, ISensorProvider, ISystemMetricsProvider
+    interfaces/           # IImageDetector
   use_cases/              # Casos de uso (orquestan dominio + infraestructura)
     detect_and_notify.py  # Detecta tostadas y actualiza el tracker
     send_lote_request.py  # Envía un lote firmado (DeviceProof) al servidor central
@@ -106,9 +106,11 @@ No depende de la GUI ni de FastAPI. Ver `streaming/README.md`.
 
 ## Requisitos
 
-- Python 3.11+ (probado con 3.14).
+- Python 3.11+ para el runtime del proyecto (probado con 3.14). El toolchain de
+  compilación Hailo DFC es independiente y exige Python 3.10 (ver
+  `guia_migracion_hailo.md`).
 - Dependencias del frontend/raíz: `pip install -r requirements.txt`
-  (opencv-python, numpy, PySide6, requests).
+  (opencv-python, numpy, PySide6, requests, cryptography, PyJWT).
 - Dependencias del backend: `pip install -r backend/requirements.txt`
   (fastapi, uvicorn, python-multipart, numpy, opencv-python, requests,
   cryptography, PyJWT).
@@ -136,10 +138,14 @@ python run.py --source 0   # los argumentos extra se pasan al frontend
 
 ```bash
 # desde la raíz del repositorio
-python -m backend.app.main
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 # o con recarga:
 python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+`backend/app/main.py` expone la app como `backend.app.main:app` (resultado de
+`create_app()`); no define bloque `__main__`, así que se arranca con Uvicorn.
+`run.py` levanta el backend con este mismo comando.
 
 Configuración en `backend/.env` (se carga automáticamente). Plantilla segura en
 `backend/.env.example`:
@@ -154,8 +160,11 @@ PRODUCTO_ID=...
 PING_INTERVAL_SECONDS=10
 ```
 
-- `DEVICE_API_BASE_URL`: servidor central Go; debe terminar en `/api/v1`
-  (acepta el alias legacy `CENTRAL_BASE_URL`, y le agrega `/api/v1` si falta).
+- `DEVICE_API_BASE_URL`: servidor central Go; el código normaliza la URL y le
+  agrega `/api/v1` si falta, así que terminar en `/api/v1` no es un requisito.
+  El backend ignora los alias legacy `CENTRAL_BASE_URL` y `CENTRAL_LOTE_BASE_URL`,
+  que sólo lee el CLI de aprovisionamiento (`device_enrollment/cli.py`) como
+  fallback (el primero tiene prioridad sobre el segundo).
 - `DEVICE_AUTH_AUDIENCE`: audiencia compartida con el verificador Go.
 - `DEVICE_ENROLLMENT_CODE`: código de invitación de un solo uso. Sólo se
   consume durante el aprovisionamiento y se elimina al completarse.
@@ -171,8 +180,9 @@ identidad **enrolled** cargada desde `DEVICE_IDENTITY_DIR`. Ya **no** se usa
 `X-API-Key`: los POST a `/api/v1/dispositivos/ping`, `/api/v1/lotes` y
 `/api/v1/lotes/inicio` llevan `Authorization: DeviceProof <jws>`. Si no hay
 servidor central configurado, los endpoints de detección siguen
-funcionando; `POST /api/v1/lotes/finalizar` e `POST /api/v1/lotes/iniciar` devolverán
-502.
+funcionando; `POST /api/lotes/finalizar` e `POST /api/lotes/iniciar` (los
+endpoints locales del backend, distintos de los `/api/v1/...` del servidor
+central) devolverán 502.
 
 > **Restricción operativa — la identidad se carga una sola vez al arrancar.**
 > `backend/app/dependencies.py` instancia `IdentityStore` y llama a
@@ -185,7 +195,7 @@ funcionando; `POST /api/v1/lotes/finalizar` e `POST /api/v1/lotes/iniciar` devol
 > 1. Ejecutar `python -m device_enrollment enroll` (o `recover`) y esperar el
 >    resultado `phase=enrolled`.
 > 2. Reiniciar el backend (por ejemplo `systemctl restart smart-check-backend`,
->    o relanzar `python -m backend.app.main`).
+>    o relanzar `python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000`).
 >
 > Tras una revocación, el camino es `reset` → nueva invitación → `enroll`
 > (clave nueva) → reinicio. El cambio de `DEVICE_API_BASE_URL`/audiencia también
@@ -253,17 +263,17 @@ escritura atómica, reinicio, flujo recover/provisión, detección de tampering 
 logging sin secretos) y el frontend (lógica del worker, ciclo de apagado y
 construcción de la ventana en modo offscreen).
 
-Evidencia cross-language: `backend/tests/vectors/device_proof_vector.json` es un
-vector determinístico (clave semilla fija, JWS exacto, body/method/path y
+Evidencia cross-language: `device_enrollment/tests/vectors/device_proof_vector.json`
+es un vector determinístico (clave semilla fija, JWS exacto, body/method/path y
 `bhash`/fingerprint esperados) generado por el código de firma real
 (`device_enrollment.proof`). El padre puede verificarlo con el verificador Go
-real; `backend/tests/test_device_proof_vector.py` regenera y valida el archivo.
+real; `device_enrollment/tests/test_device_proof_vector.py` regenera y valida el archivo.
 
 Entorno recomendado (el Python del sistema puede estar gestionado por el SO):
 
 ```bash
 python -m venv --system-site-packages .venv
-.venv/bin/pip install -r requirements.txt -r backend/requirements.txt httpx pytest
+.venv/bin/pip install -r requirements.txt -r backend/requirements.txt -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 ```
 
@@ -299,4 +309,13 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 
 Las lecturas de sensores (temperaturas de horno/combustión y velocidad de cinta)
 provienen hoy de un `SimulatedSensorProvider`; para hardware real, implementar
-`ISensorProvider` en `backend/infrastructure/sensors/`.
+un proveedor concreto en `backend/infrastructure/sensors/`.
+
+> **Binarios de modelos y vídeos de muestra.** Por decisión del repositorio, los
+> pesos y artefactos binarios (`.onnx`, `.hef`, `.pt`) y los vídeos de muestra
+> ya no se versionan (ver `.gitignore`). Genéralos o descárgalos desde
+> `ai_training/` (entrenamiento/exportación y compilación Hailo; pasos en
+> `guia_migracion_hailo.md`) y colócalos en `ai_training/models/`. `streaming`
+> con `--require-hailo`/`STREAMING_REQUIRE_HAILO=true` necesita el `.hef`
+> presente en disco (`STREAMING_MODEL`); si falta, el proceso falla en vez de
+> degradar a CPU/ONNX.
