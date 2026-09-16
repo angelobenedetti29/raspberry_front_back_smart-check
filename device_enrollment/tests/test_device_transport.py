@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-from backend.tests.fakes import FakeResponse, make_enrolled_identity
+from device_enrollment.tests.fakes import FakeResponse, make_enrolled_identity
 from device_enrollment.proof import decode_claims, decode_header
 from device_enrollment.transport import (
     PreparedRequest,

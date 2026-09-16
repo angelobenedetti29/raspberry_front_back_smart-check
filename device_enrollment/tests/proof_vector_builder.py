@@ -1,5 +1,5 @@
 """Deterministic proof-vector builder used to produce and verify the committed
-machine-readable vector under ``backend/tests/vectors/``.
+machine-readable vector under ``device_enrollment/tests/vectors/``.
 
 Everything here is real signing code (``device_enrollment.proof``); nothing is
 faked. The seed is a public test-only key so the parent can reproduce the exact

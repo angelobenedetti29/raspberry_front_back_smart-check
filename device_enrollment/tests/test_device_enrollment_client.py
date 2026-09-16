@@ -5,7 +5,7 @@ import json
 import pytest
 import requests
 
-from backend.tests.fakes import FakeResponse, device_descriptor, make_identity_store
+from device_enrollment.tests.fakes import FakeResponse, device_descriptor, make_identity_store
 from device_enrollment.client import EnrollmentClient
 from device_enrollment.errors import (
     CredentialRevokedError,
