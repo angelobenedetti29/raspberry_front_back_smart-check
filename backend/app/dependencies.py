@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from device_enrollment.identity import IdentityStore
@@ -26,16 +27,21 @@ class LazyYoloDetector(IImageDetector):
 
     def __init__(self):
         self._detector = None
+        # Evita que dos requests concurrentes (el endpoint corre en el
+        # threadpool) construyan el detector dos veces y reserven la NPU de más.
+        self._lock = threading.Lock()
 
     @property
     def detector(self):
         if self._detector is None:
-            try:
-                self._detector = YoloDetector()
-                print("[Backend] Detector YOLO NPU/ONNX cargado perezosamente con éxito.")
-            except Exception as e:
-                print(f"[Backend] Error al cargar YOLO en inicialización diferida: {e}")
-                self._detector = FallbackDetector(e)
+            with self._lock:
+                if self._detector is None:
+                    try:
+                        self._detector = YoloDetector()
+                        print("[Backend] Detector YOLO NPU/ONNX cargado perezosamente con éxito.")
+                    except Exception as e:
+                        print(f"[Backend] Error al cargar YOLO en inicialización diferida: {e}")
+                        self._detector = FallbackDetector(e)
         return self._detector
 
     def detect(self, image_path: str):
