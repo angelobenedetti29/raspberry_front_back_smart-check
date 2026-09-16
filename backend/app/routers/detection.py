@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend.app.dependencies import get_detect_use_case, get_finalize_lote_use_case
 from backend.app.errors import finalize_lote_http_exception
+from backend.domain.entities.detection import is_burnt
 from backend.use_cases.finalize_lote import LoteDeliveryError
 
 router = APIRouter()
@@ -52,9 +53,7 @@ async def detect_toast(
             results.append(res_item)
 
         has_burned = any(
-            (hasattr(det, "state") and det.state == "burnt")
-            or det.label.lower() in ("tostada quemada", "tcq")
-            for det in detections
+            is_burnt(det.label, getattr(det, "state", None)) for det in detections
         )
 
         response_payload = {
