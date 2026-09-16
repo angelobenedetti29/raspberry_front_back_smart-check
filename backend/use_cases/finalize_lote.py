@@ -50,13 +50,12 @@ def parse_uuid(val: Any) -> UUID:
 
 
 class FinalizeLoteUseCase:
-    def __init__(self, send_lote_use_case, base_url: str):
+    def __init__(self, send_lote_use_case):
         self.send_lote_use_case = send_lote_use_case
-        self.base_url = base_url
 
     @property
     def target(self) -> str:
-        return f"{self.base_url.rstrip('/')}/lotes"
+        return self.send_lote_use_case.target
 
     def execute(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         missing_fields = [field for field in REQUIRED_FIELDS if field not in payload]

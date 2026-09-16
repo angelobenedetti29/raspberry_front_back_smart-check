@@ -80,7 +80,7 @@ _transport = SignedTransport(
 
 _detect_use_case = DetectAndNotifyUseCase(_detector)
 _send_lote_use_case = SendLoteRequestUseCase(_transport, _settings.device_api_base_url)
-_finalize_lote_use_case = FinalizeLoteUseCase(_send_lote_use_case, _settings.device_api_base_url)
+_finalize_lote_use_case = FinalizeLoteUseCase(_send_lote_use_case)
 
 _system_metrics_provider = LinuxSystemMetricsProvider()
 _send_ping_use_case = SendPingRequestUseCase(_transport, _settings.device_api_base_url)

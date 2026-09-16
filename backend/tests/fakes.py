@@ -54,11 +54,19 @@ class BareTransport:
 class FakeSendLoteUseCase:
     """Envío de lote falso; registra en ``sent`` los payloads recibidos."""
 
-    def __init__(self, success: bool = True, status_code=None, error=None, response_text=None):
+    def __init__(
+        self,
+        success: bool = True,
+        status_code=None,
+        error=None,
+        response_text=None,
+        target: str = "http://central:9000/api/v1/lotes",
+    ):
         self.success = success
         self.status_code = status_code
         self.error = error
         self.response_text = response_text
+        self.target = target
         self.sent: list[dict] = []
 
     def execute(self, payload):
