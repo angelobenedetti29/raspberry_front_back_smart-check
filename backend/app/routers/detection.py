@@ -1,4 +1,5 @@
 import json
+import logging
 
 import cv2
 import numpy as np
@@ -10,10 +11,11 @@ from backend.domain.entities.detection import is_burnt
 from backend.use_cases.finalize_lote import LoteDeliveryError
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/api/detect")
-async def detect_toast(
+def detect_toast(
     file: UploadFile = File(...),
     lote_payload: str | None = Form(None),
     detect_use_case=Depends(get_detect_use_case),
@@ -21,10 +23,13 @@ async def detect_toast(
 ):
     """
     Recibe una imagen a través de HTTP POST y realiza la inferencia con YOLOv11.
+
+    Es un endpoint sincrónico a propósito: FastAPI lo ejecuta en su threadpool,
+    de modo que la inferencia (CPU/NPU) no bloquea el event loop.
     """
     try:
         # Read file bytes
-        contents = await file.read()
+        contents = file.file.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -82,5 +87,7 @@ async def detect_toast(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en inferencia: {str(e)}")
+    except Exception:
+        # No exponer detalles internos (paths, errores de numpy/OpenCV) al cliente.
+        logger.exception("Error inesperado en /api/detect")
+        raise HTTPException(status_code=500, detail="Error interno durante la inferencia.")
