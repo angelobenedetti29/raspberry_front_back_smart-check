@@ -1,9 +1,12 @@
 """Punto de entrada del frontend: abre la ventana principal de Factory Control.
 
 Uso:
-    python -m frontend.main [--source RUTA]
+    python -m frontend.main
 
-``--source`` acepta "0" (cámara del dispositivo) o el nombre/ruta de un vídeo.
+La fuente de vídeo inicial se toma de ``config.json`` (sección ``paths`` y el
+fallback de ``frontend.config``). Se acepta ``--source`` solo por compatibilidad
+con ``run.py``: se parsea pero se ignora, porque la configuración es la única
+fuente de verdad.
 """
 
 import os
@@ -21,7 +24,6 @@ import argparse
 from PySide6.QtWidgets import QApplication
 
 from frontend.app import FactoryControlApp
-from frontend.config import DEFAULT_SOURCE
 
 
 def main() -> None:
@@ -32,18 +34,18 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=str,
-        default=DEFAULT_SOURCE,
+        default=None,
         help=(
-            "Fuente de vídeo: '0' para la cámara del dispositivo, "
-            "o el nombre/ruta de un archivo de vídeo"
+            "Ignorado: la fuente se toma de config.json. Se acepta por "
+            "compatibilidad con run.py."
         ),
     )
     # parse_known_args (y no parse_args) porque Qt añade sus propios flags
     # (por ejemplo "-platform offscreen") que no deben hacer fallar el parseo.
-    args, _ = parser.parse_known_args()
+    parser.parse_known_args()
 
     app = QApplication(sys.argv)
-    window = FactoryControlApp(default_source=args.source)
+    window = FactoryControlApp()
     window.show()
     sys.exit(app.exec())
 

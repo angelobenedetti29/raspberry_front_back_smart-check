@@ -9,9 +9,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from smartcheck_config import load_config, load_secrets, resolve_env_file
+
 from . import DEFAULT_IDENTITY_DIR
 from .client import EnrollmentClient, EnrollOutcome
-from .envfile import load_env_values, remove_assignments
+from .envfile import remove_assignments
 from .errors import (
     CodeRequiredError,
     ConfigurationError,
@@ -49,12 +51,32 @@ def _common_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=None,
-        help="absolute path to the env file to read (and clean on success)",
+        # Default: el .env de la raíz del repo (o SMARTCHECK_ENV_FILE si está
+        # definida). Así el CLI y la app comparten exactamente los mismos
+        # secretos sin pasos manuales.
+        default=resolve_env_file(),
+        help=(
+            "ruta absoluta al archivo .env de secretos del que se lee (y se "
+            "limpia) DEVICE_ENROLLMENT_CODE; por defecto el .env de la raíz "
+            "del repositorio o SMARTCHECK_ENV_FILE"
+        ),
     )
-    parser.add_argument("--api-base-url", default=None, help="device API base URL ending in /api/v1")
-    parser.add_argument("--audience", default=None, help="device proof audience (DEVICE_AUTH_AUDIENCE)")
-    parser.add_argument("--identity-dir", type=Path, default=None, help="identity storage directory")
+    parser.add_argument(
+        "--api-base-url",
+        default=None,
+        help="URL base de la API del dispositivo (override de config.json)",
+    )
+    parser.add_argument(
+        "--audience",
+        default=None,
+        help="audiencia de la prueba de dispositivo (override de config.json)",
+    )
+    parser.add_argument(
+        "--identity-dir",
+        type=Path,
+        default=None,
+        help="directorio de la identidad (override de .env)",
+    )
     return parser
 
 
@@ -68,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "enroll",
         parents=[common],
-        help="enroll (or resume) using DEVICE_ENROLLMENT_CODE from env/prompt",
+        help="enroll (or resume) using DEVICE_ENROLLMENT_CODE from env/.env or prompt",
     )
     subparsers.add_parser(
         "recover",
@@ -88,29 +110,24 @@ def _resolve(args: argparse.Namespace) -> ResolvedConfig:
     if args.env_file is not None and not args.env_file.is_absolute():
         raise ConfigurationError("--env-file must be an absolute path")
 
-    values = load_env_values(args.env_file) if args.env_file is not None else {}
-    api_base_url = (
-        args.api_base_url
-        or values.get("DEVICE_API_BASE_URL")
-        or values.get("CENTRAL_BASE_URL")
-        or values.get("CENTRAL_LOTE_BASE_URL")
-        or os.environ.get("DEVICE_API_BASE_URL")
-        or os.environ.get("CENTRAL_BASE_URL")
-        or ""
-    )
-    audience = (
-        args.audience
-        or values.get("DEVICE_AUTH_AUDIENCE")
-        or os.environ.get("DEVICE_AUTH_AUDIENCE")
-        or ""
-    )
+    # Los valores de red NO son secretos: la fuente única es config.json. El
+    # flag explícito (--api-base-url/--audience) sigue teniendo prioridad para
+    # instalaciones puntuales o pruebas.
+    device = load_config().config.device
+    api_base_url = args.api_base_url or device.api_base_url or ""
+    audience = args.audience or device.auth_audience or ""
+
+    # Los secretos (código de enrolamiento y directorio de identidad) se
+    # resuelven con precedencia entorno > .env > default. El flag
+    # --identity-dir conserva la máxima prioridad.
+    secrets = load_secrets(env_file=args.env_file)
     identity_dir = (
         args.identity_dir
-        or values.get("DEVICE_IDENTITY_DIR")
-        or os.environ.get("DEVICE_IDENTITY_DIR")
+        or secrets.identity_dir
         or DEFAULT_IDENTITY_DIR
     )
-    code = values.get(CODE_ENV_VAR) or os.environ.get(CODE_ENV_VAR)
+    code = secrets.enrollment_code or None
+
     return ResolvedConfig(
         api_base_url=api_base_url,
         audience=audience,
@@ -123,7 +140,10 @@ def _resolve(args: argparse.Namespace) -> ResolvedConfig:
 def _require_network_config(config: ResolvedConfig) -> tuple[str, str]:
     api_base_url = normalize_api_base_url(config.api_base_url)
     if not config.audience:
-        raise ConfigurationError("DEVICE_AUTH_AUDIENCE (--audience) is not configured")
+        raise ConfigurationError(
+            "auth_audience no está configurado (definilo en config.json o "
+            "pasá --audience)"
+        )
     return api_base_url, config.audience
 
 

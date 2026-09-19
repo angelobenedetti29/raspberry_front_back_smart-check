@@ -6,8 +6,13 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Environment files
+# Environment files (secrets). config.json *sí* se versiona.
 .env
+
+# Lock y temporales de la escritura atómica de config.json (raíz)
+config.json.lock
+*.tmp
+.tmp-*
 
 # Virtual environments
 .venv/

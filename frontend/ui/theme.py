@@ -271,6 +271,43 @@ QPushButton:disabled {
     border: 1px solid $BORDER;
 }
 
+/* ------------------------------------------- variantes de ActionButton */
+QPushButton[variant="primary"] {
+    background-color: $ACCENT;
+    color: $TEXT_INVERT;
+    border: 1px solid $ACCENT;
+    font-weight: $FW_BOLD;
+}
+QPushButton[variant="primary"]:hover {
+    background-color: $ACCENT_HOVER;
+    border: 1px solid $ACCENT_HOVER;
+}
+QPushButton[variant="primary"]:pressed {
+    background-color: $ACCENT_PRESS;
+    border: 1px solid $ACCENT_PRESS;
+}
+QPushButton[variant="primary"]:focus {
+    border: 2px solid $TEXT;
+}
+QPushButton[variant="danger"] {
+    background-color: $DANGER_SOFT;
+    color: $DANGER_TEXT;
+    border: 1px solid $DANGER_BORDER;
+}
+QPushButton[variant="danger"]:hover {
+    background-color: $DANGER;
+    color: $TEXT_ON_DANGER;
+    border: 1px solid $DANGER;
+}
+QPushButton[variant="danger"]:pressed {
+    background-color: $DANGER_PRESS;
+    color: $TEXT_ON_DANGER;
+    border: 1px solid $DANGER_PRESS;
+}
+QPushButton[variant="danger"]:focus {
+    border: 2px solid $DANGER_TEXT;
+}
+
 /* ------------------------------------------------------- chip de filtro */
 QPushButton#FilterChip {
     text-align: left;
@@ -433,6 +470,96 @@ QLabel#EmptyHint {
     font-size: ${FS_SM}px;
 }
 
+/* ------------------------------------------- diálogo de configuración */
+QDialog#SettingsDialog {
+    background-color: $BG;
+}
+QLabel#SettingsTitle {
+    color: $TEXT;
+    font-size: ${FS_XL}px;
+    font-weight: $FW_BOLD;
+}
+QLabel#FieldHint {
+    color: $TEXT_DIM;
+    font-size: ${FS_XS}px;
+}
+QDialog#SettingsDialog QLineEdit,
+QDialog#SettingsDialog QSpinBox,
+QDialog#SettingsDialog QDoubleSpinBox {
+    background-color: $SURFACE_2;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_MD;
+    padding: 6px 10px;
+    color: $TEXT;
+    font-size: ${FS_BASE}px;
+    selection-background-color: $ACCENT;
+    selection-color: $TEXT_INVERT;
+}
+QDialog#SettingsDialog QLineEdit:hover,
+QDialog#SettingsDialog QSpinBox:hover,
+QDialog#SettingsDialog QDoubleSpinBox:hover {
+    border: 1px solid $BORDER_STRONG;
+}
+QDialog#SettingsDialog QLineEdit:focus,
+QDialog#SettingsDialog QSpinBox:focus,
+QDialog#SettingsDialog QDoubleSpinBox:focus {
+    border: 1px solid $ACCENT;
+}
+QDialog#SettingsDialog QLineEdit:disabled,
+QDialog#SettingsDialog QSpinBox:disabled,
+QDialog#SettingsDialog QDoubleSpinBox:disabled {
+    color: $TEXT_DIM;
+    background-color: $SURFACE;
+}
+QDialog#SettingsDialog QCheckBox {
+    color: $TEXT;
+    spacing: 8px;
+}
+QDialog#SettingsDialog QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid $BORDER_STRONG;
+    border-radius: $RADIUS_SM;
+    background-color: $SURFACE_2;
+}
+QDialog#SettingsDialog QCheckBox::indicator:hover {
+    border: 1px solid $ACCENT;
+}
+QDialog#SettingsDialog QCheckBox::indicator:checked {
+    background-color: $ACCENT;
+    border: 1px solid $ACCENT;
+    image: url($CHECK);
+}
+QDialog#SettingsDialog QCheckBox::indicator:disabled {
+    background-color: $SURFACE;
+    border: 1px solid $BORDER;
+}
+QDialog#SettingsDialog QListWidget {
+    background-color: $SURFACE_2;
+    border: 1px solid $BORDER;
+    border-radius: $RADIUS_MD;
+    color: $TEXT;
+    outline: none;
+    padding: 4px;
+}
+QDialog#SettingsDialog QListWidget::item {
+    padding: 8px 10px;
+    border-radius: $RADIUS_SM;
+}
+QDialog#SettingsDialog QListWidget::item:hover {
+    background-color: $SURFACE_3;
+}
+QDialog#SettingsDialog QListWidget::item:selected {
+    background-color: $ACCENT_SOFT;
+    color: $ACCENT;
+}
+QMessageBox {
+    background-color: $SURFACE;
+}
+QMessageBox QLabel {
+    color: $TEXT;
+}
+
 /* --------------------------------------------------- barras de desplazamiento */
 QScrollArea {
     background: transparent;
@@ -497,6 +624,7 @@ def build_stylesheet() -> str:
     """Devuelve la hoja de estilos Qt expandida desde los tokens."""
     tokens = dict(TOKENS)
     tokens["DOWN_ARROW"] = _asset_url("chevron-down.svg")
+    tokens["CHECK"] = _asset_url("check.svg")
     return _STYLESHEET.substitute(tokens)
 
 

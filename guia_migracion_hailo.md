@@ -128,7 +128,7 @@ El archivo del backend `backend/infrastructure/ai/yolo_detector.py` incluye una 
 
 Puedes verificar el fallback de la CPU ejecutando en Windows:
 ```bash
-python test_inference.py
+python ai_training/scripts/inference_smoke.py
 ```
 Esto creará una imagen de salida con las cajas pintadas en `multimedia/output/test_result_inference.jpg`.
 

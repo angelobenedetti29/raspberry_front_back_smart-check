@@ -7,6 +7,8 @@ import threading
 import logging
 from typing import Any
 
+from smartcheck_config import load_config
+
 from .capture import CaptureWatchdogError, OpenCVFrameCapture
 from .config import StreamConfig
 from .persistence import JsonlDetectionStore
@@ -15,22 +17,28 @@ from .publisher import FFmpegPublisher
 
 
 def create_detector(config: StreamConfig):
-    if not config.inference_enabled:
+    if not config.inference.enabled:
         return None
-    if config.require_hailo and (config.model_path is None or not config.model_path.lower().endswith(".hef")):
-        raise RuntimeError("STREAMING_REQUIRE_HAILO=true exige STREAMING_MODEL apuntando a un archivo .hef")
-    # Import lazily: local simulation and tests do not need Hailo, ONNX or a model.
+    if config.inference.require_hailo and (config.inference.model_path is None or not config.inference.model_path.lower().endswith(".hef")):
+        raise RuntimeError(
+            "stream.inference.require_hailo=true exige "
+            "stream.inference.model_path apuntando a un archivo .hef"
+        )
+    # import lazy
     from backend.infrastructure.ai.yolo_detector import YoloDetector
-    kwargs: dict[str, Any] = {"confidence_threshold": config.confidence_threshold}
-    if config.model_path is not None:
-        kwargs["model_path"] = config.model_path
-    if config.labels_path is not None:
-        kwargs["names_path"] = config.labels_path
+    kwargs: dict[str, Any] = {"confidence_threshold": config.inference.confidence_threshold}
+    if config.inference.model_path is not None:
+        kwargs["model_path"] = config.inference.model_path
+    if config.inference.labels_path is not None:
+        kwargs["names_path"] = config.inference.labels_path
     detector = YoloDetector(**kwargs)
-    if config.require_hailo and not getattr(detector, "use_hailo", False):
+    if config.inference.require_hailo and not getattr(detector, "use_hailo", False):
         if hasattr(detector, "release_hailo"):
             detector.release_hailo()
-        raise RuntimeError("STREAMING_REQUIRE_HAILO=true requiere que YoloDetector use un modelo .hef/Hailo")
+        raise RuntimeError(
+            "stream.inference.require_hailo=true requiere que YoloDetector "
+            "cargue un modelo .hef/Hailo"
+        )
     return detector
 
 
@@ -41,13 +49,13 @@ def run(config: StreamConfig, capture=None, processor=None, publisher=None, max_
     if processor is None:
         detector = create_detector(config)
         store = JsonlDetectionStore(
-            config.storage_path,
-            queue_size=config.storage_queue_size,
-            max_bytes=config.storage_max_bytes,
-            max_files=config.storage_max_files,
-            sample_no_detection_every=config.persist_no_detection_every,
+            config.storage.path,
+            queue_size=config.storage.queue_size,
+            max_bytes=config.storage.max_bytes,
+            max_files=config.storage.max_files,
+            sample_no_detection_every=config.storage.persist_no_detection_every,
         )
-        processor = FrameProcessor(detector, store, {"source": config.source})
+        processor = FrameProcessor(detector, store, {"source": config.capture.source})
     publisher = FFmpegPublisher(config) if publisher is None else publisher
     stop_requested = False
 
@@ -97,8 +105,14 @@ def run(config: StreamConfig, capture=None, processor=None, publisher=None, max_
 
 
 def main(argv=None) -> int:
+    """Punto de entrada del proceso de streaming.
+
+    ``argv`` se conserva por compatibilidad de firma, pero se ignora: la
+    configuración proviene exclusivamente de ``config.json`` a través de
+    ``smartcheck_config.load_config``.
+    """
     try:
-        config = StreamConfig.from_cli(argv)
+        config = StreamConfig.from_app_config(load_config().config.stream)
         run(config)
     except CaptureWatchdogError as exc:
         logging.getLogger("streaming").critical("Watchdog de captura: %s", exc)

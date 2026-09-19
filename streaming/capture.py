@@ -26,10 +26,10 @@ class OpenCVFrameCapture:
         self.cv2 = cv2_module
         self._sleep = sleep
         self._capture = None
-        self._backoff = config.reconnect_initial_seconds
+        self._backoff = config.reconnect.initial_seconds
         self._next_retry = 0.0
         self._released = False
-        self._is_file = not self._is_camera_source(config.source)
+        self._is_file = not self._is_camera_source(config.capture.source)
         self._exhausted = False
         self._stable_frames = 0
         self.effective_properties: dict[str, float | int] = {}
@@ -52,20 +52,20 @@ class OpenCVFrameCapture:
         return self._exhausted
 
     def _source_value(self) -> int | str:
-        return int(self.config.source) if self._is_camera_source(self.config.source) else self.config.source
+        return int(self.config.capture.source) if self._is_camera_source(self.config.capture.source) else self.config.capture.source
 
     def _schedule_retry(self) -> None:
         self._next_retry = time.monotonic() + self._backoff
-        self._backoff = min(max(self._backoff * 2, self.config.reconnect_initial_seconds), self.config.reconnect_max_seconds)
+        self._backoff = min(max(self._backoff * 2, self.config.reconnect.initial_seconds), self.config.reconnect.max_seconds)
 
     def _configure_device(self, capture) -> None:
-        if not self._is_camera_source(self.config.source):
+        if not self._is_camera_source(self.config.capture.source):
             return
         properties = (
-            ("width", getattr(self.cv2, "CAP_PROP_FRAME_WIDTH", None), self.config.width),
-            ("height", getattr(self.cv2, "CAP_PROP_FRAME_HEIGHT", None), self.config.height),
-            ("fps", getattr(self.cv2, "CAP_PROP_FPS", None), self.config.fps),
-            ("buffer_size", getattr(self.cv2, "CAP_PROP_BUFFERSIZE", None), self.config.capture_buffer_size),
+            ("width", getattr(self.cv2, "CAP_PROP_FRAME_WIDTH", None), self.config.capture.width),
+            ("height", getattr(self.cv2, "CAP_PROP_FRAME_HEIGHT", None), self.config.capture.height),
+            ("fps", getattr(self.cv2, "CAP_PROP_FPS", None), self.config.capture.fps),
+            ("buffer_size", getattr(self.cv2, "CAP_PROP_BUFFERSIZE", None), self.config.capture.buffer_size),
         )
         for name, property_id, requested in properties:
             if property_id is None:
@@ -77,14 +77,14 @@ class OpenCVFrameCapture:
                 # values below remain the source of truth for observability.
                 LOGGER.debug(
                     "No se pudo fijar %s=%s en la captura de %s: %s",
-                    name, requested, self.config.source, exc,
+                    name, requested, self.config.capture.source, exc,
                 )
             try:
                 self.effective_properties[name] = capture.get(property_id)
             except Exception as exc:
                 LOGGER.debug(
                     "No se pudo leer la propiedad efectiva %s de la captura de %s: %s",
-                    name, self.config.source, exc,
+                    name, self.config.capture.source, exc,
                 )
                 self.effective_properties[name] = requested
 
@@ -107,14 +107,14 @@ class OpenCVFrameCapture:
             self._start_reader(capture)
             return True
         except Exception as exc:
-            LOGGER.warning("No se pudo abrir la fuente de captura %s: %s", self.config.source, exc)
+            LOGGER.warning("No se pudo abrir la fuente de captura %s: %s", self.config.capture.source, exc)
             if capture is not None:
                 try:
                     capture.release()
                 except Exception as release_exc:
                     LOGGER.debug(
                         "Fallo liberando la captura de %s tras error de apertura: %s",
-                        self.config.source, release_exc,
+                        self.config.capture.source, release_exc,
                     )
             self._schedule_retry()
             return False
@@ -174,7 +174,7 @@ class OpenCVFrameCapture:
         if capture is None:
             return None
         try:
-            result_type, result = self._read_queue.get(timeout=self.config.capture_read_timeout_seconds)
+            result_type, result = self._read_queue.get(timeout=self.config.capture.read_timeout_seconds)
         except queue.Empty as exc:
             self._watchdog_tripped = True
             self._reader_stop.set()
@@ -183,7 +183,7 @@ class OpenCVFrameCapture:
                 else f"{time.monotonic() - self._last_heartbeat:.2f}s"
             )
             raise CaptureWatchdogError(
-                f"sin frames de {self.config.source} durante {self.config.capture_read_timeout_seconds:.2f}s "
+                f"sin frames de {self.config.capture.source} durante {self.config.capture.read_timeout_seconds:.2f}s "
                 f"(heartbeat: {heartbeat_age}); terminando para que systemd reinicie"
             ) from exc
         if result_type == "exception":
@@ -191,15 +191,15 @@ class OpenCVFrameCapture:
             return None
         if result_type == "failure":
             self._handle_read_failure(capture)
-            if self._is_file and not self.config.loop_video:
+            if self._is_file and not self.config.capture.loop_video:
                 self._exhausted = True
             return None
         frame = result
         self._stable_frames += 1
-        if self._stable_frames >= self.config.capture_stable_frames:
-            self._backoff = self.config.reconnect_initial_seconds
-        if frame.shape[1] != self.config.width or frame.shape[0] != self.config.height:
-            frame = self.cv2.resize(frame, (self.config.width, self.config.height), interpolation=self.cv2.INTER_AREA)
+        if self._stable_frames >= self.config.capture.stable_frames:
+            self._backoff = self.config.reconnect.initial_seconds
+        if frame.shape[1] != self.config.capture.width or frame.shape[0] != self.config.capture.height:
+            frame = self.cv2.resize(frame, (self.config.capture.width, self.config.capture.height), interpolation=self.cv2.INTER_AREA)
         return frame  # OpenCV delivers BGR and it is kept as BGR throughout the pipeline.
 
     def _handle_read_failure(self, capture) -> None:
@@ -207,7 +207,7 @@ class OpenCVFrameCapture:
         try:
             capture.release()
         except Exception as exc:
-            LOGGER.debug("Fallo liberando la captura de %s tras fallo de lectura: %s", self.config.source, exc)
+            LOGGER.debug("Fallo liberando la captura de %s tras fallo de lectura: %s", self.config.capture.source, exc)
         self._capture = None
         self._stable_frames = 0
         self._schedule_retry()
@@ -220,7 +220,7 @@ class OpenCVFrameCapture:
             # cancelled safely; process exit is the resource boundary.
             LOGGER.warning(
                 "Watchdog de captura activado para %s; se omite release porque una lectura nativa sigue bloqueada",
-                self.config.source,
+                self.config.capture.source,
             )
             self._capture = None
             return
@@ -228,7 +228,7 @@ class OpenCVFrameCapture:
             try:
                 self._capture.release()
             except Exception as exc:
-                LOGGER.debug("Fallo liberando la captura de %s: %s", self.config.source, exc)
+                LOGGER.debug("Fallo liberando la captura de %s: %s", self.config.capture.source, exc)
             self._capture = None
 
     close = release

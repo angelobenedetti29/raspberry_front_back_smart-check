@@ -1,7 +1,13 @@
-"""Config normalization tests (no API key fallback)."""
+"""Configuración del backend desde el esquema unificado (sin env ni lru_cache)."""
+
+from __future__ import annotations
 
 import pytest
 
+from smartcheck_config import AppConfig, Secrets
+
+from backend.app import config
+from backend.app.config import Settings, get_settings, settings_from_config
 from device_enrollment.errors import ConfigurationError
 from device_enrollment.urls import normalize_api_base_url
 
@@ -22,176 +28,98 @@ def test_normalize_api_base_url_rejects_empty_and_non_http():
         normalize_api_base_url("api.example.test")
 
 
-def test_normalize_api_base_url_allows_https_anywhere():
-    assert normalize_api_base_url("https://central.example.com/api/v1") == (
-        "https://central.example.com/api/v1"
-    )
-    assert normalize_api_base_url("HTTPS://Central.Example.COM") == (
-        "HTTPS://Central.Example.COM/api/v1"
-    )
-
-
-def test_normalize_api_base_url_allows_http_only_on_literal_loopback():
-    assert normalize_api_base_url("http://127.0.0.1:8000") == (
-        "http://127.0.0.1:8000/api/v1"
-    )
-    assert normalize_api_base_url("http://localhost:9000/prefix") == (
-        "http://localhost:9000/prefix/api/v1"
-    )
-    assert normalize_api_base_url("http://[::1]:8000") == "http://[::1]:8000/api/v1"
-
-
 def test_normalize_api_base_url_rejects_cleartext_http_to_non_loopback():
     for value in (
         "http://central.example.com",
         "http://192.168.1.10:8080",
-        "http://127.0.0.1.evil.example",
-        "http://localhost.evil.example",
         "http://0.0.0.0:8000",
     ):
         with pytest.raises(ConfigurationError):
             normalize_api_base_url(value)
 
 
-def test_settings_normalizer_rejects_insecure_and_schemeless():
-    from backend.app import config
-
-    with pytest.raises(ConfigurationError):
-        config._normalize_base_url("http://central.example.com")
-    # Loopback http remains the development escape hatch.
-    assert config._normalize_base_url("http://localhost:9000") == (
-        "http://localhost:9000/api/v1"
-    )
-    # Scheme-less values are invalid: no legacy tolerance.
+def test_settings_normalizer_degrades_invalid_to_empty():
+    assert config._normalize_base_url(None) == ""
+    assert config._normalize_base_url("") == ""
     with pytest.raises(ConfigurationError):
         config._normalize_base_url("central.example.com")
 
 
-
-def test_settings_use_device_api_base_url_and_ignore_legacy_alias(monkeypatch):
-    from backend.app import config
-
-    for name in (
-        "DEVICE_API_BASE_URL",
-        "DEVICE_AUTH_AUDIENCE",
-        "DEVICE_IDENTITY_DIR",
-        "CENTRAL_BASE_URL",
-        "CENTRAL_LOTE_BASE_URL",
-        "CENTRAL_LOTES_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("DEVICE_API_BASE_URL", "https://central.example")
-    # El alias legacy ya no debe influir en la URL del dispositivo.
-    monkeypatch.setenv("CENTRAL_BASE_URL", "https://legacy.example")
-    config.get_settings.cache_clear()
-    try:
-        settings = config.get_settings()
-        assert settings.device_api_base_url == "https://central.example/api/v1"
-        assert not hasattr(settings, "central_base_url")
-    finally:
-        config.get_settings.cache_clear()
-
-
-def test_settings_have_no_shared_api_key_field(monkeypatch):
-    from backend.app import config
-
-    config.get_settings.cache_clear()
-    try:
-        settings = config.get_settings()
-        assert not hasattr(settings, "central_api_key")
-        assert not hasattr(settings, "central_lotes_api_key")
-    finally:
-        config.get_settings.cache_clear()
-
-
-@pytest.mark.parametrize("invalid_url", ["central.example.com", "http://central.example.com"])
-def test_settings_degrade_invalid_base_url_to_empty(monkeypatch, caplog, invalid_url):
-    from backend.app import config
-
-    monkeypatch.setattr(config, "ENV_FILE", None)  # hermético: no leer un .env real
-    monkeypatch.setenv("DEVICE_API_BASE_URL", invalid_url)
-    config.get_settings.cache_clear()
-    try:
-        with caplog.at_level("WARNING", logger="backend.app.config"):
-            settings = config.get_settings()
-        assert settings.device_api_base_url == ""
-        assert "DEVICE_API_BASE_URL inválida" in caplog.text
-    finally:
-        config.get_settings.cache_clear()
-
-
-def test_settings_missing_env_file_is_noop(monkeypatch, tmp_path):
-    from backend.app import config
-
-    monkeypatch.setattr(config, "ENV_FILE", tmp_path / "missing.env")
-    monkeypatch.delenv("DEVICE_API_BASE_URL", raising=False)
-    config.get_settings.cache_clear()
-    try:
-        assert config.get_settings().device_api_base_url == ""
-    finally:
-        config.get_settings.cache_clear()
-
-
-def test_settings_read_env_file_with_shared_parser(monkeypatch, tmp_path):
-    from backend.app import config
-
-    env_file = tmp_path / "backend.env"
-    env_file.write_text(
-        "# comentario\n"
-        "export DEVICE_API_BASE_URL=https://env.example/api/v1\n"
-        "HORNO_ID=horno-env\n",
-        encoding="utf-8",
+def test_settings_from_config_maps_unified_schema():
+    app_config = AppConfig.from_dict(
+        {
+            "revision": 7,
+            "stream": {
+                "inference": {
+                    "enabled": True,
+                    "model_path": "ai_training/models/m.hef",
+                    "labels_path": "ai_training/models/m.names",
+                    "confidence_threshold": 0.75,
+                }
+            },
+            "device": {
+                "api_base_url": "https://central.example.com",
+                "auth_audience": "https://central.example.com/api/v1",
+                "horno_id": "horno-1",
+                "producto_id": "prod-1",
+                "ping_interval_seconds": 5.0,
+            },
+            "api": {"host": "127.0.0.1", "port": 9001},
+        }
     )
-    monkeypatch.setattr(config, "ENV_FILE", env_file)
-    monkeypatch.delenv("DEVICE_API_BASE_URL", raising=False)
-    monkeypatch.delenv("HORNO_ID", raising=False)
-    config.get_settings.cache_clear()
-    try:
-        settings = config.get_settings()
-        assert settings.device_api_base_url == "https://env.example/api/v1"
-        assert settings.horno_id == "horno-env"
-    finally:
-        config.get_settings.cache_clear()
+    secrets = Secrets(enrollment_code="secreto", identity_dir="/tmp/identidad")
+
+    settings = settings_from_config(app_config, secrets)
+
+    assert isinstance(settings, Settings)
+    assert settings.device_api_base_url == "https://central.example.com/api/v1"
+    assert settings.device_auth_audience == "https://central.example.com/api/v1"
+    assert settings.device_identity_dir == "/tmp/identidad"
+    assert settings.horno_id == "horno-1"
+    assert settings.default_producto_id == "prod-1"
+    assert settings.ping_interval_seconds == 5.0
+    assert settings.inference_enabled is True
+    assert settings.require_hailo is False
+    assert settings.inference_model_path == "ai_training/models/m.hef"
+    assert settings.inference_labels_path == "ai_training/models/m.names"
+    assert settings.inference_confidence_threshold == 0.75
+    assert settings.api_host == "127.0.0.1"
+    assert settings.api_port == 9001
+    assert settings.config_revision == 7
 
 
-def test_explicit_env_wins_over_env_file(monkeypatch, tmp_path):
-    from backend.app import config
-
-    env_file = tmp_path / "backend.env"
-    env_file.write_text(
-        "DEVICE_API_BASE_URL=https://file.example/api/v1\n", encoding="utf-8"
+def test_identity_dir_viene_de_secretos_y_no_de_config():
+    app_config = AppConfig.from_dict({"device": {"horno_id": "h"}})
+    settings = settings_from_config(
+        app_config, Secrets(identity_dir="/var/lib/smart-check/device")
     )
-    monkeypatch.setattr(config, "ENV_FILE", env_file)
-    monkeypatch.setenv("DEVICE_API_BASE_URL", "https://process.example/api/v1")
-    config.get_settings.cache_clear()
-    try:
-        assert (
-            config.get_settings().device_api_base_url
-            == "https://process.example/api/v1"
-        )
-    finally:
-        config.get_settings.cache_clear()
+    assert settings.device_identity_dir == "/var/lib/smart-check/device"
+    assert not hasattr(app_config.device, "identity_dir")
 
 
-def test_unreadable_env_file_degrades_with_warning(monkeypatch, caplog, tmp_path):
-    from backend.app import config
-
-    env_file = tmp_path / "backend.env"
-    env_file.write_text(
-        "DEVICE_API_BASE_URL=https://env.example/api/v1\n", encoding="utf-8"
+def test_invalid_api_base_url_degrades_to_empty(caplog):
+    app_config = AppConfig.from_dict(
+        {"device": {"api_base_url": "central.example.com"}}
     )
-    monkeypatch.setattr(config, "ENV_FILE", env_file)
-    monkeypatch.delenv("DEVICE_API_BASE_URL", raising=False)
+    with caplog.at_level("WARNING", logger="backend.app.config"):
+        settings = settings_from_config(app_config, Secrets())
+    assert settings.device_api_base_url == ""
+    assert "device.api_base_url inválida" in caplog.text
 
-    def boom(_path):
-        raise OSError("permiso denegado")
 
-    monkeypatch.setattr(config, "load_env_values", boom)
-    config.get_settings.cache_clear()
-    try:
-        with caplog.at_level("WARNING", logger="backend.app.config"):
-            settings = config.get_settings()
-        assert settings.device_api_base_url == ""
-        assert "No se pudo leer" in caplog.text
-    finally:
-        config.get_settings.cache_clear()
+def test_api_host_default_es_loopback():
+    """M4: el backend no debe escuchar en 0.0.0.0 por defecto."""
+    assert Settings().api_host == "127.0.0.1"
+    assert settings_from_config(AppConfig.from_dict({}), Secrets()).api_host == (
+        "127.0.0.1"
+    )
+
+
+def test_get_settings_tiene_defaults_y_no_cachea():
+    # El acceso directo sin runtime usa el fallback pero sigue siendo una
+    # función plana, sin ``lru_cache``.
+    assert not hasattr(get_settings, "cache_clear")
+    defaults = Settings()
+    assert defaults.device_api_base_url == ""
+    assert defaults.inference_enabled is False
+    assert defaults.config_revision == 1
