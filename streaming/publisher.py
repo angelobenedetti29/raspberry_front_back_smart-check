@@ -26,29 +26,29 @@ class FFmpegPublisher:
         self._popen = popen
         self._monotonic = monotonic
         self._process = None
-        self._queue: queue.Queue[Any] = queue.Queue(maxsize=config.publisher_queue_size)
+        self._queue: queue.Queue[Any] = queue.Queue(maxsize=config.publisher.queue_size)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._next_start_at = 0.0
-        self._restart_backoff = config.reconnect_initial_seconds
+        self._restart_backoff = config.reconnect.initial_seconds
         self._process_started_at: float | None = None
         self._last_progress: float | None = None
         self._restart_count = 0
         self._last_error: str | None = None
 
     def _command(self) -> list[str]:
-        gop = self.config.fps * self.config.gop_seconds
+        gop = self.config.capture.fps * self.config.publisher.gop_seconds
         return [
-            self.config.ffmpeg_executable,
+            self.config.publisher.ffmpeg_executable,
             "-hide_banner", "-loglevel", "warning",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
-            "-video_size", f"{self.config.width}x{self.config.height}",
-            "-framerate", str(self.config.fps), "-i", "-",
-            "-an", "-c:v", self.config.encoder, "-pix_fmt", self.config.pixel_format,
-            "-g", str(gop), "-bf", str(self.config.b_frames),
-            "-b:v", self.config.bitrate,
-            "-f", "rtsp", "-rtsp_transport", "tcp", self.config.output_url,
+            "-video_size", f"{self.config.capture.width}x{self.config.capture.height}",
+            "-framerate", str(self.config.capture.fps), "-i", "-",
+            "-an", "-c:v", self.config.publisher.encoder, "-pix_fmt", self.config.publisher.pixel_format,
+            "-g", str(gop), "-bf", str(self.config.publisher.b_frames),
+            "-b:v", self.config.publisher.bitrate,
+            "-f", "rtsp", "-rtsp_transport", "tcp", self.config.publisher.output_url,
         ]
 
     def start(self) -> None:
@@ -64,8 +64,8 @@ class FFmpegPublisher:
         self._restart_count += 1
         self._next_start_at = now + self._restart_backoff
         self._restart_backoff = min(
-            max(self._restart_backoff * 2, self.config.reconnect_initial_seconds),
-            self.config.reconnect_max_seconds,
+            max(self._restart_backoff * 2, self.config.reconnect.initial_seconds),
+            self.config.reconnect.max_seconds,
         )
 
     def _start_process(self) -> bool:
@@ -123,7 +123,7 @@ class FFmpegPublisher:
         except (AttributeError, OSError, ValueError):
             return False
         sent = 0
-        deadline = self._monotonic() + self.config.publisher_write_timeout
+        deadline = self._monotonic() + self.config.publisher.write_timeout
         while sent < len(data):
             if self._stop.is_set():
                 return False
@@ -179,8 +179,8 @@ class FFmpegPublisher:
                     continue
                 now = self._monotonic()
                 self._last_progress = now
-                if self._process_started_at is not None and now - self._process_started_at >= self.config.publisher_stable_seconds:
-                    self._restart_backoff = self.config.reconnect_initial_seconds
+                if self._process_started_at is not None and now - self._process_started_at >= self.config.publisher.stable_seconds:
+                    self._restart_backoff = self.config.reconnect.initial_seconds
         finally:
             self._close_process()
 
@@ -228,7 +228,7 @@ class FFmpegPublisher:
         # Closing stdin/process makes stop independent of a producer or a full pipe.
         self._close_process()
         if self._thread is not None:
-            self._thread.join(timeout=max(2.0, self.config.publisher_write_timeout + 1.0))
+            self._thread.join(timeout=max(2.0, self.config.publisher.write_timeout + 1.0))
             self._thread = None
         while True:
             try:

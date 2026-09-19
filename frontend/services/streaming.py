@@ -32,15 +32,18 @@ class PreviewOnlyPublisher:
 def validate_stream_config(config):
     """Valida restricciones del frontend además de las de ``StreamConfig``.
 
-    ``yuv420p`` exige dimensiones pares; si no, FFmpeg falla al publicar.
-    Devuelve la misma configuración recibida para poder encadenar la llamada.
-    Un objeto de configuración incompleto se rechaza con ``ValueError`` (y no
-    con ``AttributeError``) para mantener el contrato de la función.
+    ``StreamConfig`` ya expone la forma anidada del bloque ``stream``
+    (``capture``, ``publisher``, ...), así que aquí se leen
+    ``publisher.pixel_format`` y ``capture.width/height``. ``yuv420p`` exige
+    dimensiones pares; si no, FFmpeg falla al publicar. Devuelve la misma
+    configuración recibida para poder encadenar la llamada. Un objeto de
+    configuración incompleto se rechaza con ``ValueError`` (y no con
+    ``AttributeError``) para mantener el contrato de la función.
     """
     try:
-        pixel_format = config.pixel_format
-        width = config.width
-        height = config.height
+        pixel_format = config.publisher.pixel_format
+        width = config.capture.width
+        height = config.capture.height
     except AttributeError as exc:
         raise ValueError("configuración de streaming incompleta") from exc
     if pixel_format == "yuv420p" and (width % 2 or height % 2):

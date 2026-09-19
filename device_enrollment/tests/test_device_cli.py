@@ -1,5 +1,6 @@
 """CLI parsing, code handling, secure cleanup and lightweight-import tests."""
 
+import json
 import os
 import subprocess
 import sys
@@ -49,6 +50,30 @@ class FakeClient:
     def recover(self):
         self.recover_called = True
         return FakeClient.next_outcome or fake_outcome()
+
+
+def _write_config(
+    tmp_path,
+    monkeypatch,
+    *,
+    api_base_url="https://api.example.test/api/v1",
+    auth_audience="https://api.example.test/api/v1",
+):
+    """Escribe un ``config.json`` temporal y lo fija vía ``SMARTCHECK_CONFIG``."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "device": {
+                    "api_base_url": api_base_url,
+                    "auth_audience": auth_audience,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SMARTCHECK_CONFIG", str(config_file))
+    return config_file
 
 
 @pytest.fixture(autouse=True)
@@ -114,10 +139,9 @@ def test_enroll_normalizes_legacy_base_url_and_persists(tmp_path, monkeypatch):
 
 
 def test_enroll_reads_code_from_selected_env_file_and_cleans_it(tmp_path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
     env_file = tmp_path / "device.env"
     env_file.write_text(
-        "DEVICE_API_BASE_URL=https://api.example.test/api/v1\n"
-        "DEVICE_AUTH_AUDIENCE=https://api.example.test/api/v1\n"
         f"{CODE}=from-file-secret\n"
         "HORNO_ID=horno-1\n",
         encoding="utf-8",
@@ -183,6 +207,76 @@ def test_enroll_cleans_process_environment(tmp_path, monkeypatch):
 
     assert result == EXIT_OK
     assert CODE not in os.environ
+
+
+def test_device_network_config_comes_from_config_json(tmp_path, monkeypatch):
+    """La URL base y la audiencia salen de ``config.json``, no del entorno."""
+    monkeypatch.delenv("DEVICE_API_BASE_URL", raising=False)
+    monkeypatch.delenv("DEVICE_AUTH_AUDIENCE", raising=False)
+    monkeypatch.setenv(CODE, "process-code")
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        api_base_url="https://cfg.example.test",
+        auth_audience="cfg-audience",
+    )
+
+    result = main(["enroll", "--identity-dir", str(tmp_path / "id")])
+
+    assert result == EXIT_OK
+    assert FakeClient.instances[0].api_base_url == "https://cfg.example.test/api/v1"
+    assert FakeClient.instances[0].audience == "cfg-audience"
+
+
+def test_enroll_flags_override_config_json(tmp_path, monkeypatch):
+    """Los flags explícitos siguen teniendo prioridad sobre ``config.json``."""
+    monkeypatch.setenv(CODE, "process-code")
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        api_base_url="https://cfg.example.test/api/v1",
+        auth_audience="cfg-audience",
+    )
+
+    result = main(
+        [
+            "enroll",
+            "--api-base-url",
+            "https://flag.example.test",
+            "--audience",
+            "flag-audience",
+            "--identity-dir",
+            str(tmp_path / "id"),
+        ]
+    )
+
+    assert result == EXIT_OK
+    assert FakeClient.instances[0].api_base_url == "https://flag.example.test/api/v1"
+    assert FakeClient.instances[0].audience == "flag-audience"
+
+
+def test_enroll_secrets_come_from_smartcheck_env_file(tmp_path, monkeypatch):
+    """Código e ``identity_dir`` salen del env-file resuelto por ``SMARTCHECK_ENV_FILE``."""
+    monkeypatch.delenv(CODE, raising=False)
+    monkeypatch.delenv("DEVICE_IDENTITY_DIR", raising=False)
+    _write_config(tmp_path, monkeypatch)
+
+    identity_dir = tmp_path / "identidad"
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text(
+        f"{CODE}=file-code\nDEVICE_IDENTITY_DIR={identity_dir}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SMARTCHECK_ENV_FILE", str(env_file))
+
+    result = main(["enroll"])
+
+    assert result == EXIT_OK
+    client = FakeClient.instances[0]
+    assert client.code == "file-code"
+    assert client.store.identity_dir == identity_dir
+    # El código se borra del env-file tras un enrolamiento durable.
+    assert CODE not in env_file.read_text(encoding="utf-8")
 
 
 def test_enroll_cleanup_failure_returns_nonzero_but_keeps_identity(tmp_path, monkeypatch):

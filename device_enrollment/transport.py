@@ -219,6 +219,21 @@ class SignedTransport:
     def url_for(self, path: str) -> str:
         return f"{self.api_base_url}{path}"
 
+    def close(self) -> None:
+        """Cierra la ``requests.Session`` subyacente. Idempotente.
+
+        La usan los transportes retirados por una recarga en caliente. No se
+        pone ``session`` a ``None`` para no romper un envío en vuelo que ya
+        tomó la referencia; ``Session.close`` es idempotente.
+        """
+        session = getattr(self, "session", None)
+        if session is None:
+            return
+        try:
+            session.close()
+        except Exception:
+            logger.warning("No se pudo cerrar la sesión del transporte.", exc_info=True)
+
     def post(
         self,
         path: str,

@@ -36,11 +36,12 @@ backend/
     system/system_metrics.py  # CPU/RAM/disco/temperatura de Linux (Raspberry)
   app/                    # Composición FastAPI
     main.py               # create_app() + routers
-    config.py             # Settings desde backend/.env
+    config.py             # Traduce config.json + secretos a Settings planos
+    config_store.py       # Cache de config.json con recarga por mtime
     dependencies.py       # Wiring de casos de uso (Dependency Injection)
     telemetry.py          # TelemetryLoop: ping periódico en hilo daemon
     errors.py             # Traducción de errores de dominio a HTTP
-    routers/              # status, lotes, detection
+    routers/              # status, lotes, detection, config
   tests/                  # Tests de casos de uso, sensores y endpoints
 ```
 
@@ -68,7 +69,8 @@ El backend reutiliza `SignedTransport` en los tres emisores (`ping`, `lotes`,
 `lotes/inicio`); ya no existe la API key compartida (`X-API-Key`).
 
 **Endpoints:** `GET /api/status`, `POST /api/lotes/finalizar`,
-`POST /api/lotes/iniciar`, `POST /api/detect`.
+`POST /api/lotes/iniciar`, `POST /api/detect`, `GET /api/config`,
+`POST /api/config/reload`.
 
 ### Frontend — PySide6
 
@@ -119,98 +121,162 @@ No depende de la GUI ni de FastAPI. Ver `streaming/README.md`.
 
 ---
 
+## Configuración
+
+Toda la configuración funcional vive en **`config.json`**, versionado en la raíz
+del repositorio. Es la fuente única para el backend, el frontend, el pipeline de
+`streaming/` y el CLI `device_enrollment`: ningún componente lee variables de
+entorno para *valores* de configuración. Secciones del documento:
+
+- `stream.capture` — fuente, resolución, fps, loop, buffer, frames estables y
+  timeout de lectura.
+- `stream.publisher` — `output_url` RTSP, bitrate, encoder, formato, GOP/B-frames
+  y colas.
+- `stream.inference` — `enabled`, `require_hailo`, `model_path`, `labels_path` y
+  `confidence_threshold`.
+- `stream.storage` — ruta y rotación del JSONL de detecciones.
+- `stream.reconnect` — backoff de reconexión.
+- `device` — `api_base_url`, `auth_audience`, `horno_id`, `producto_id` y
+  `ping_interval_seconds`.
+- `models` — `default_model_id`, `npu_model_id` y el `catalog` de modelos
+  seleccionables.
+- `paths` — `videos_dir`, `models_dir`, `data_dir`.
+- `api` — `host`, `port` y `lote_endpoint` del backend local.
+
+`schema_version` y `revision` son metadatos: `revision` se incrementa en cada
+guardado y permite detectar escrituras concurrentes (`save_config(expected_revision=...)`).
+
+### Edición desde la UI (app en marcha)
+
+La configuración se edita desde la UI del frontend con la aplicación corriendo.
+Al guardar, el frontend escribe `config.json` de forma atómica y notifica al
+backend local (`POST /api/config/reload`). Cada hoja modificada se clasifica
+según lo que exige aplicarla (`frontend/services/config_apply.py`, `plan_changes`):
+
+| Categoría | Ejemplos | Aplicación |
+|---|---|---|
+| **hot** | `device.*`, `stream.storage.*`, `stream.reconnect.*` y colas/timeouts del publisher | En caliente: el backend recarga sin reiniciar la app |
+| **detector** | `stream.inference.*` | Se reconstruye el detector de inferencia |
+| **pipeline** | `stream.capture.source/width/height/fps` y `stream.publisher.output_url/bitrate/encoder/...` | Se reinicia el pipeline de captura/publicación |
+| **restart_app** | `models.*`, `paths.*` | Reinicio total del proceso |
+
+El reinicio total se pide saliendo con el código de salida `75`; `run.py` lo
+reconoce y relanza el frontend. `api.host`/`api.port` los toma `run.py` al
+arrancar, así que para re-vincular el socket hay que reiniciar `run.py`.
+
+### Secretos — `.env` en la raíz
+
+Solo dos valores son secretos y viven fuera de `config.json`, en el `.env` de la
+**raíz** del repositorio (o en el archivo que indique `SMARTCHECK_ENV_FILE`):
+
+- `DEVICE_ENROLLMENT_CODE`: código de invitación de un solo uso; solo lo consume
+  el aprovisionamiento.
+- `DEVICE_IDENTITY_DIR`: directorio de la identidad Ed25519 (default
+  `/var/lib/smart-check/device`).
+
+Plantilla: `.env.example` (raíz). No hay `backend/.env` ni
+`backend/.env.example`.
+
+### Variables de bootstrap
+
+Solo las *rutas* se controlan por entorno; el resto se ignora:
+
+- `SMARTCHECK_ROOT`: raíz del repositorio (si no se define, se busca
+  `pyproject.toml` subiendo desde `smartcheck_config/`).
+- `SMARTCHECK_CONFIG`: ruta alternativa a `config.json`.
+- `SMARTCHECK_ENV_FILE`: ruta alternativa al `.env` de secretos.
+
+### Endpoints de configuración
+
+- `GET /api/config`: snapshot efectivo del runtime (revisión, estado de
+  enrolamiento y settings, sin secretos).
+- `POST /api/config/reload`: fuerza la recarga de `config.json` y aplica los
+  cambios hot. Responde `200` aunque el JSON sea inválido (`ok=false`; conserva
+  el último valor bueno).
+
+---
+
 ## Cómo ejecutar
 
 ### Frontend + Backend juntos
 
 `run.py` levanta el backend (FastAPI) y el frontend (PySide6) al mismo tiempo.
-Si ya hay un backend activo en `http://localhost:8000`, lo reutiliza; si no, lo
-inicia y lo detiene al cerrar el frontend (o con `Ctrl+C`). Si el intérprete
-actual no tiene las dependencias pero existe `.venv/`, se re-ejecuta solo con
-`.venv/bin/python`.
+Toma el host y el puerto de `config.api`; si ya hay un backend activo ahí, lo
+reutiliza; si no, lo inicia y lo detiene al cerrar el frontend (o con `Ctrl+C`).
+Si el frontend pide un reinicio total (código de salida `75`), lo relanza. Si el
+intérprete actual no tiene las dependencias pero existe `.venv/`, se re-ejecuta
+solo con `.venv/bin/python`.
 
 ```bash
-python run.py              # frontend con su fuente por defecto
-python run.py --source 0   # los argumentos extra se pasan al frontend
+python run.py   # host/puerto y fuente de vídeo salen de config.json
 ```
 
 ### Backend
 
 ```bash
-# desde la raíz del repositorio
-python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+# desde la raíz del repositorio (host/puerto deben coincidir con config.api)
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 # o con recarga:
-python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 `backend/app/main.py` expone la app como `backend.app.main:app` (resultado de
 `create_app()`); no define bloque `__main__`, así que se arranca con Uvicorn.
-`run.py` levanta el backend con este mismo comando.
+`run.py` levanta el backend con este mismo comando usando `config.api.host` y
+`config.api.port`.
 
-Configuración en `backend/.env` (se carga automáticamente). Plantilla segura en
-`backend/.env.example`:
-
-```
-DEVICE_API_BASE_URL=https://servidor-central.example.com/api/v1
-DEVICE_AUTH_AUDIENCE=https://servidor-central.example.com/api/v1
-DEVICE_ENROLLMENT_CODE=
-DEVICE_IDENTITY_DIR=/var/lib/smart-check/device
-HORNO_ID=...
-PRODUCTO_ID=...
-PING_INTERVAL_SECONDS=10
-```
-
-- `DEVICE_API_BASE_URL`: servidor central Go; el código normaliza la URL y le
-  agrega `/api/v1` si falta, así que terminar en `/api/v1` no es un requisito.
-  El backend ignora los alias legacy `CENTRAL_BASE_URL` y `CENTRAL_LOTE_BASE_URL`,
-  que sólo lee el CLI de aprovisionamiento (`device_enrollment/cli.py`) como
-  fallback (el primero tiene prioridad sobre el segundo).
-- `DEVICE_AUTH_AUDIENCE`: audiencia compartida con el verificador Go.
-- `DEVICE_ENROLLMENT_CODE`: código de invitación de un solo uso. Sólo se
-  consume durante el aprovisionamiento y se elimina al completarse.
-- `DEVICE_IDENTITY_DIR`: directorio de identidad (default
-  `/var/lib/smart-check/device`; dueño del servicio, `0700`).
-- `HORNO_ID` / `PRODUCTO_ID`: defaults usados por `POST /api/lotes/iniciar`
-  cuando el body no los incluye.
-- `PING_INTERVAL_SECONDS`: periodo de telemetría (default 10; valores inválidos
-  o <= 0 se ignoran).
+La configuración del backend es `config.json` (ver **[Configuración](#configuración)**)
+y sus secretos se resuelven desde el `.env` de la raíz; no hay `backend/.env`.
+`backend/app/config_store.py` cachea el documento, lo relee por `mtime` y
+conserva el último valor bueno si el JSON queda inválido. Los valores que antes
+eran variables de entorno ahora viven en `config.device`: `api_base_url`
+(servidor central Go; el código normaliza la URL y le agrega `/api/v1` si falta,
+así que terminar en `/api/v1` no es un requisito), `auth_audience`, `horno_id`,
+`producto_id` y `ping_interval_seconds`. `horno_id` / `producto_id` son los
+defaults de `POST /api/lotes/iniciar` cuando el body no los incluye;
+`ping_interval_seconds` es el periodo de telemetría (el esquema rechaza valores
+<= 0).
 
 La telemetría y los emisores firmados sólo se habilitan cuando existe una
-identidad **enrolled** cargada desde `DEVICE_IDENTITY_DIR`. Ya **no** se usa
-`X-API-Key`: los POST a `/api/v1/dispositivos/ping`, `/api/v1/lotes` y
+identidad **enrolled** cargada desde `DEVICE_IDENTITY_DIR` (`.env`). Ya **no** se
+usa `X-API-Key`: los POST a `/api/v1/dispositivos/ping`, `/api/v1/lotes` y
 `/api/v1/lotes/inicio` llevan `Authorization: DeviceProof <jws>`. Si no hay
-servidor central configurado, los endpoints de detección siguen
-funcionando; `POST /api/lotes/finalizar` e `POST /api/lotes/iniciar` (los
-endpoints locales del backend, distintos de los `/api/v1/...` del servidor
-central) devolverán 502.
+servidor central configurado, los endpoints de detección siguen funcionando;
+`POST /api/lotes/finalizar` e `POST /api/lotes/iniciar` (los endpoints locales
+del backend, distintos de los `/api/v1/...` del servidor central) devolverán 502.
 
-> **Restricción operativa — la identidad se carga una sola vez al arrancar.**
-> `backend/app/dependencies.py` instancia `IdentityStore` y llama a
-> `try_load_enrolled()` en tiempo de import. La telemetría y los emisores firmados
-> quedan cableados con esa identidad (y con `dispositivoId`, `DEVICE_API_BASE_URL`
-> y `DEVICE_AUTH_AUDIENCE` de ese momento). Por lo tanto, enrolar, recuperar,
-> revocar o re-provisionar un nodo **mientras el servicio está corriendo no surte
-> efecto hasta reiniciarlo**:
+> **Identidad y enrolamiento.** Enrolar, recuperar, revocar o re-provisionar un
+> nodo con el servicio en marcha no se adopta solo: tras el enrolamiento, forzá
+> la recarga (`POST /api/config/reload`, que relee la identidad) o reiniciá el
+> backend.
 >
 > 1. Ejecutar `python -m device_enrollment enroll` (o `recover`) y esperar el
 >    resultado `phase=enrolled`.
-> 2. Reiniciar el backend (por ejemplo `systemctl restart smart-check-backend`,
->    o relanzar `python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000`).
+> 2. Forzar la recarga (`curl -X POST http://127.0.0.1:8000/api/config/reload`)
+>    o reiniciar el backend (`systemctl restart smart-check-backend`, o relanzar
+>    `python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000`).
 >
 > Tras una revocación, el camino es `reset` → nueva invitación → `enroll`
-> (clave nueva) → reinicio. El cambio de `DEVICE_API_BASE_URL`/audiencia también
-> requiere reinicio, aunque el `apiBaseUrl` persistido en `identity.json` se
-> reescribe con el valor realmente usado en el próximo `recover`/`enroll`.
+> (clave nueva) → reinicio. El cambio de `device.api_base_url`/`auth_audience`
+> sí se aplica en caliente al guardar `config.json`, aunque el `apiBaseUrl`
+> persistido en `identity.json` se reescribe con el valor realmente usado en el
+> próximo `recover`/`enroll`.
 
 ### Aprovisionamiento de identidad (CLI)
 
 El nodo se enrola una sola vez contra el servidor central. El CLI es liviano
 (no importa FastAPI, YOLO/PySide6 ni hardware) y **nunca** acepta el código por
-argumento:
+argumento. La red (`device.api_base_url` y `device.auth_audience`) sale de
+`config.json`; los secretos (`DEVICE_ENROLLMENT_CODE`, `DEVICE_IDENTITY_DIR`)
+salen del env-file (por defecto el `.env` de la raíz, o `SMARTCHECK_ENV_FILE`).
+Los flags de red e identidad son overrides:
 
 ```bash
 # Enrolar (recover-first; el código se lee del env/archivo o se pide sin eco)
+python -m device_enrollment enroll
+# o con un env-file explícito:
 python -m device_enrollment enroll --env-file /etc/smart-check/device.env
+# overrides puntuales de red/identidad:
 python -m device_enrollment enroll \
   --api-base-url https://api.example.com/api/v1 \
   --audience https://api.example.com/api/v1 \
@@ -224,8 +290,9 @@ python -m device_enrollment reset --identity-dir /var/lib/smart-check/device --y
 ```
 
 Flags disponibles: `--env-file /ruta/absoluta`, `--api-base-url`, `--audience`,
-`--identity-dir`. El código sale de `DEVICE_ENROLLMENT_CODE` (env o archivo
-seleccionado) o de un prompt sin eco. Flujo: al iniciar con una clave pendiente
+`--identity-dir` (los tres últimos son overrides de `config.json`/`.env`). El
+código sale de `DEVICE_ENROLLMENT_CODE` (env o archivo seleccionado) o de un
+prompt sin eco. Flujo: al iniciar con una clave pendiente
 se llama primero a `/api/v1/dispositivos/enrollments/recover`; con `404` se
 redime la invitación en `/api/v1/dispositivos/provision` con la misma clave. Un
 resultado ambiguo (timeout/5xx) se reintenta vía recover y **nunca** rota la
@@ -237,21 +304,23 @@ exportó el código, conviene limpiarlo aparte.
 
 ### Frontend
 
+La fuente de vídeo inicial sale de `config.json` (galería `paths.videos_dir` y
+la degradación documentada en `frontend/config.py`). `--source` se acepta por
+compatibilidad pero se ignora: la configuración es la única fuente de verdad.
+
 ```bash
-# cámara local (índice 0) o un vídeo de multimedia/videos/
-python -m frontend.main --source 0
-python -m frontend.main --source road.mp4
-# también: python frontend/main.py --source road.mp4
+python -m frontend.main
+# también: python frontend/main.py
 ```
 
 ### Streaming
 
 ```bash
-python -m streaming.main --source 0 --no-inference
-STREAMING_ENCODER=h264_v4l2m2m python -m streaming.main --source 0
+python -m streaming.main
 ```
 
-Variables y detalles en `streaming/README.md`.
+No hay flags ni variables de entorno: el pipeline lee `config.json`. Detalles en
+`streaming/README.md`.
 
 ---
 
@@ -287,6 +356,8 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 | Agregar o cambiar un caso de uso | `backend/use_cases/` |
 | Cambiar un endpoint o su validación | `backend/app/routers/` |
 | Cambiar la integración con IA / red | `backend/infrastructure/` |
+| Cambiar la configuración global | `config.json` + `smartcheck_config/` |
+| Cambiar la aplicación de config en la UI | `frontend/services/config_apply.py` |
 | Cambiar identidad/firma/CLI del dispositivo | `device_enrollment/` |
 | Cambiar la apariencia o tokens visuales | `frontend/ui/theme.py` |
 | Cambiar un panel o componente de UI | `frontend/ui/` |
@@ -316,6 +387,6 @@ un proveedor concreto en `backend/infrastructure/sensors/`.
 > ya no se versionan (ver `.gitignore`). Genéralos o descárgalos desde
 > `ai_training/` (entrenamiento/exportación y compilación Hailo; pasos en
 > `guia_migracion_hailo.md`) y colócalos en `ai_training/models/`. `streaming`
-> con `--require-hailo`/`STREAMING_REQUIRE_HAILO=true` necesita el `.hef`
-> presente en disco (`STREAMING_MODEL`); si falta, el proceso falla en vez de
-> degradar a CPU/ONNX.
+> con `stream.inference.require_hailo=true` en `config.json` necesita que
+> `stream.inference.model_path` apunte a un `.hef` presente en disco; si falta o
+> no es Hailo, el proceso falla en vez de degradar a CPU/ONNX.

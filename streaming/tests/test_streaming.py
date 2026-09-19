@@ -4,11 +4,22 @@ import tempfile
 import threading
 import time
 import unittest
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
 import numpy as np
+
+from smartcheck_config import (
+    CaptureSettings,
+    InferenceSettings,
+    PublisherSettings,
+    ReconnectSettings,
+    SchemaError,
+    StorageSettings,
+    StreamSettings,
+)
 
 from streaming.capture import CaptureWatchdogError, OpenCVFrameCapture
 from streaming.config import StreamConfig
@@ -19,29 +30,42 @@ from streaming.publisher import FFmpegPublisher, FakePublisher
 
 
 class ConfigTests(unittest.TestCase):
-    def test_configuration_reads_environment(self):
-        with patch.dict(os.environ, {
-            "STREAMING_SOURCE": "sample.mp4",
-            "STREAMING_WIDTH": "1280",
-            "STREAMING_HEIGHT": "720",
-            "STREAMING_FPS": "20",
-            "STREAMING_INFERENCE": "true",
-            "STREAMING_ENCODER": "h264_v4l2m2m",
-        }, clear=False):
-            config = StreamConfig.from_env()
-        self.assertEqual(config.source, "sample.mp4")
-        self.assertEqual(config.fps, 20)
-        self.assertTrue(config.inference_enabled)
-        self.assertEqual(config.encoder, "h264_v4l2m2m")
-
     def test_default_output_is_central_entrada(self):
         config = StreamConfig()
-        self.assertEqual(config.output_url, "rtsp://smartcheck.duckdns.org:8554/entrada")
-        self.assertEqual((config.width, config.height), (1280, 720))
+        self.assertEqual(config.publisher.output_url, "rtsp://smartcheck.duckdns.org:8554/entrada")
+        self.assertEqual((config.capture.width, config.capture.height), (1280, 720))
+
+    def test_from_app_config_maps_every_section(self):
+        settings = StreamSettings(
+            capture=CaptureSettings(source="sample.mp4", width=640, height=480, fps=20),
+            publisher=PublisherSettings(encoder="h264_v4l2m2m"),
+            inference=InferenceSettings(confidence_threshold=0.5),
+        )
+        config = StreamConfig.from_app_config(settings)
+        for section in fields(StreamSettings):
+            self.assertEqual(getattr(config, section.name), getattr(settings, section.name))
+
+    def test_from_app_config_still_validates(self):
+        base = asdict(StreamSettings())
+        base["capture"]["fps"] = 25
+
+        @dataclass
+        class _RawStream:
+            capture: dict
+            publisher: dict
+            inference: dict
+            storage: dict
+            reconnect: dict
+
+        raw = _RawStream(**base)
+        with self.assertRaises(SchemaError):
+            StreamConfig.from_app_config(raw)  # type: ignore[arg-type]
 
     def test_require_hailo_rejects_missing_hef_before_loading_cpu_model(self):
         with self.assertRaises(RuntimeError):
-            create_detector(StreamConfig(inference_enabled=True, require_hailo=True))
+            create_detector(
+                StreamConfig(inference=InferenceSettings(enabled=True, require_hailo=True))
+            )
 
 
 class _ClosedCapture:
@@ -139,7 +163,10 @@ class _BlockingCV2:
 class CaptureTests(unittest.TestCase):
     def test_open_failure_is_retried_and_does_not_raise(self):
         fake_cv2 = _FailingCV2()
-        config = StreamConfig(source="0", reconnect_initial_seconds=0, reconnect_max_seconds=0)
+        config = StreamConfig(
+            capture=CaptureSettings(source="0"),
+            reconnect=ReconnectSettings(initial_seconds=0, max_seconds=0),
+        )
         capture = OpenCVFrameCapture(config, cv2_module=fake_cv2, sleep=lambda _seconds: None)
         self.assertIsNone(capture.read())
         self.assertEqual(len(fake_cv2.captures), 1)
@@ -148,7 +175,10 @@ class CaptureTests(unittest.TestCase):
 
     def test_read_exception_is_recovered_without_escaping(self):
         fake_cv2 = _ThrowingCV2()
-        config = StreamConfig(source="0", reconnect_initial_seconds=0, reconnect_max_seconds=0)
+        config = StreamConfig(
+            capture=CaptureSettings(source="0"),
+            reconnect=ReconnectSettings(initial_seconds=0, max_seconds=0),
+        )
         capture = OpenCVFrameCapture(config, cv2_module=fake_cv2, sleep=lambda _seconds: None)
         self.assertIsNone(capture.read())
         self.assertTrue(fake_cv2.capture.released)
@@ -157,10 +187,8 @@ class CaptureTests(unittest.TestCase):
     def test_blocked_read_trips_watchdog_and_stops_pipeline(self):
         fake_cv2 = _BlockingCV2()
         config = StreamConfig(
-            source="0",
-            capture_read_timeout_seconds=0.02,
-            reconnect_initial_seconds=0,
-            reconnect_max_seconds=0,
+            capture=CaptureSettings(source="0", read_timeout_seconds=0.02),
+            reconnect=ReconnectSettings(initial_seconds=0, max_seconds=0),
         )
         capture = OpenCVFrameCapture(config, cv2_module=fake_cv2, sleep=lambda _seconds: None)
         publisher = FakePublisher()
@@ -170,8 +198,34 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(publisher.started)
 
     def test_watchdog_is_controlled_exit_code_for_systemd_restart(self):
-        with patch("streaming.main.run", side_effect=CaptureWatchdogError("simulated blocked read")):
-            self.assertEqual(streaming_main(["--no-inference"]), 1)
+        loaded = SimpleNamespace(config=SimpleNamespace(stream=StreamSettings()))
+        with patch("streaming.main.load_config", return_value=loaded), \
+                patch("streaming.main.run", side_effect=CaptureWatchdogError("simulated blocked read")):
+            self.assertEqual(streaming_main(), 1)
+
+
+class MainTests(unittest.TestCase):
+    def test_main_builds_config_from_loaded_app_config(self):
+        settings = StreamSettings(
+            capture=CaptureSettings(source="multimedia/videos/test1.mp4"),
+            inference=InferenceSettings(enabled=True),
+        )
+        loaded = SimpleNamespace(config=SimpleNamespace(stream=settings))
+        with patch("streaming.main.load_config", return_value=loaded) as loader, \
+                patch("streaming.main.run") as runner:
+            self.assertEqual(streaming_main(), 0)
+        loader.assert_called_once()
+        passed = runner.call_args.args[0]
+        self.assertIsInstance(passed, StreamConfig)
+        self.assertEqual(passed.capture.source, "multimedia/videos/test1.mp4")
+        self.assertTrue(passed.inference.enabled)
+
+    def test_main_ignores_argv(self):
+        loaded = SimpleNamespace(config=SimpleNamespace(stream=StreamSettings()))
+        with patch("streaming.main.load_config", return_value=loaded), \
+                patch("streaming.main.run") as runner:
+            self.assertEqual(streaming_main(["--no-inference"]), 0)
+        runner.assert_called_once()
 
 
 @dataclass
@@ -289,7 +343,10 @@ class PublisherTests(unittest.TestCase):
             processes.append(process)
             return process
 
-        config = StreamConfig(reconnect_initial_seconds=0.01, reconnect_max_seconds=0.02, publisher_write_timeout=0.05)
+        config = StreamConfig(
+            publisher=PublisherSettings(write_timeout=0.05),
+            reconnect=ReconnectSettings(initial_seconds=0.01, max_seconds=0.02),
+        )
         publisher = _NoProgressPublisher(config, popen=popen)
         publisher.start()
         publisher.publish(np.zeros((4, 4, 3), dtype=np.uint8))
@@ -375,7 +432,7 @@ class OrchestrationTests(unittest.TestCase):
             detector = _DetectorWithRelease()
             with patch("streaming.main.create_detector", return_value=detector):
                 run(
-                    StreamConfig(storage_path=os.path.join(directory, "detections.jsonl")),
+                    StreamConfig(storage=StorageSettings(path=os.path.join(directory, "detections.jsonl"))),
                     capture=_Capture(),
                     processor=None,
                     publisher=FakePublisher(),

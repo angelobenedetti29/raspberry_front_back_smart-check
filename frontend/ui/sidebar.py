@@ -31,10 +31,12 @@ class Sidebar(QFrame):
     -------
     camera_toggled(bool): cambió el botón de cámara (encendido o apagado).
     model_changed(int): nueva posición del catálogo elegida en el selector.
+    settings_requested(): se pidió abrir el editor de configuración.
     """
 
     camera_toggled = Signal(bool)
     model_changed = Signal(int)
+    settings_requested = Signal()
 
     def __init__(self, model_labels=None, current_index=0, parent=None):
         super().__init__(parent)
@@ -78,6 +80,16 @@ class Sidebar(QFrame):
         footer_layout = QVBoxLayout(footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(SP_XS)
+
+        footer_layout.addWidget(self._group_label("CONFIGURACIÓN"))
+        self.settings_btn = ActionButton("Configuración")
+        self.settings_btn.setToolTip(
+            "Ver y editar la configuración del sistema"
+        )
+        self.settings_btn.clicked.connect(lambda: self.settings_requested.emit())
+        footer_layout.addWidget(self.settings_btn)
+
+        footer_layout.addSpacing(SP_SM)
         footer_layout.addWidget(self._group_label("ESTADO DEL DETECTOR"))
 
         self.detector_pill = StatusPill("Inicializando", tone="info")
@@ -89,6 +101,18 @@ class Sidebar(QFrame):
     def set_camera_checked(self, checked):
         """Refleja el estado de la cámara sin reemitir ``camera_toggled``."""
         self.camera_btn.setChecked(checked)
+
+    def set_model_index(self, index):
+        """Refleja el modelo activo sin reemitir ``model_changed``.
+
+        Se usa al arrancar cuando ``config.json`` fija una ruta de inferencia
+        que corresponde a una entrada del catálogo: el selector debe mostrar ese
+        modelo y no el de la plataforma.
+        """
+        if 0 <= index < self.model_selector.count():
+            self.model_selector.blockSignals(True)
+            self.model_selector.setCurrentIndex(index)
+            self.model_selector.blockSignals(False)
 
     def set_detector_pill(self, text, tone="info"):
         """Actualiza texto y tono de la píldora del estado del detector."""

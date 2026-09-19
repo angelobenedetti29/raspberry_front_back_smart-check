@@ -1,0 +1,14 @@
+[Unit]
+Description=Vigila cambios en config.json de Smart-Check
+
+[Path]
+# El guardado de config.json es atómico (temporal + os.replace). Al reemplazar
+# el archivo, el inodo vigilado recibe IN_DELETE_SELF, que está en la máscara de
+# PathModified: el reload dispara y systemd re-arma el watch sobre el inodo nuevo,
+# de modo que los reemplazos posteriores también disparan. No funcionaría si
+# config.json fuese un symlink; es un archivo regular.
+PathModified=/opt/raspberry_front_back_smart-check/config.json
+Unit=smartcheck-config-reload.service
+
+[Install]
+WantedBy=multi-user.target

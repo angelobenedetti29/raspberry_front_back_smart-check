@@ -4,23 +4,26 @@ import math
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QImage, QResizeEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QSignalSpy
+from PySide6.QtWidgets import QApplication, QDialog
 
-# Asegurar que el path del proyecto esté en el PYTHONPATH.
-project_root = os.path.dirname(os.path.abspath(__file__))
+# Asegurar que la raíz del repositorio esté en el PYTHONPATH. Este archivo vive
+# en ``frontend/tests``, es decir, dos niveles bajo la raíz.
+project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
 from frontend.app import FactoryControlApp  # noqa: E402
 from frontend.config import (  # noqa: E402
-    LOCAL_LOTE_ENDPOINT,
     MODEL_CATALOG,
     resolve_project_path,
 )
@@ -31,9 +34,35 @@ from frontend.services.streaming import (  # noqa: E402
     PreviewOnlyPublisher,
     validate_stream_config,
 )
+from frontend.services.config_apply import plan_changes  # noqa: E402
+from frontend.services.config_notify import notify_backend_reload  # noqa: E402
+from frontend.ui.settings_dialog import (  # noqa: E402
+    SettingsDialog,
+    validate_settings,
+)
 import frontend.app as frontend_app  # noqa: E402
 from backend.domain.entities.sensor_readings import SensorReadings  # noqa: E402
+from backend.use_cases.build_lote_payload import DEFAULT_PRODUCT_ID  # noqa: E402
+from smartcheck_config import (  # noqa: E402
+    AppConfig,
+    CaptureSettings,
+    ConfigError,
+    InferenceSettings,
+    ModelEntry,
+    PublisherSettings,
+    ReconnectSettings,
+    RevisionConflictError,
+    StorageSettings,
+    StreamSettings,
+)
 from streaming.config import StreamConfig  # noqa: E402
+
+
+def _stream_config(width=4, height=4, fps=20):
+    """``StreamConfig`` con la forma anidada del bloque ``stream``."""
+    return StreamConfig(
+        capture=CaptureSettings(width=width, height=height, fps=fps)
+    )
 
 
 @pytest.fixture(scope="session")
@@ -68,7 +97,7 @@ class MockUseCase:
 def test_emit_batch_metrics_is_a_real_test(qt_app):
     thread = YOLODetectionThread(
         "road.mp4", MockUseCase(),
-        stream_config=StreamConfig(width=4, height=4, fps=20),
+        stream_config=_stream_config(width=4, height=4, fps=20),
     )
     thread.seen_toasts.update({1: "ok", 2: "ok", 3: "burnt", 4: "ok", 5: "burnt"})
     for sample in (
@@ -138,7 +167,7 @@ def test_injected_capture_and_publisher_share_annotated_canonical_frame(qt_app):
     thread = YOLODetectionThread(
         "0",
         MockUseCase([Detection(bbox=(0, 0, 2, 2))]),
-        stream_config=StreamConfig(width=4, height=4, fps=20),
+        stream_config=_stream_config(width=4, height=4, fps=20),
         capture_factory=lambda _source: capture,
         publisher_factory=make_publisher,
     )
@@ -160,7 +189,7 @@ def test_injected_capture_and_publisher_share_annotated_canonical_frame(qt_app):
 
 def test_odd_yuv420p_dimensions_are_rejected():
     with pytest.raises(ValueError, match="pares"):
-        validate_stream_config(StreamConfig(width=3, height=4, fps=20))
+        validate_stream_config(_stream_config(width=3, height=4, fps=20))
 
 
 class FakeSignal:
@@ -226,18 +255,25 @@ def make_lifecycle_harness(worker):
 
 
 def test_invalid_initial_config_starts_preview_only(qt_app, monkeypatch):
-    def invalid_config():
-        raise ValueError("STREAMING_WIDTH inválido")
+    def invalid_config(_stream_settings):
+        raise ValueError("capture.width inválido")
 
-    monkeypatch.setattr(frontend_app.StreamConfig, "from_env", staticmethod(invalid_config))
+    monkeypatch.setattr(
+        frontend_app.StreamConfig, "from_app_config", staticmethod(invalid_config)
+    )
     messages = []
     app = SimpleNamespace()
     app._show_streaming_disabled = lambda error, preview_only: messages.append(
         (str(error), preview_only)
     )
+    # Enlaza la construcción real para que el monkeypatch de from_app_config se
+    # ejecute (y no un AttributeError del SimpleNamespace).
+    app._stream_config_from_app = lambda: FactoryControlApp._stream_config_from_app(
+        app
+    )
     config, publisher_factory = FactoryControlApp._stream_setup(app, True)
 
-    assert config.width % 2 == 0 and config.height % 2 == 0
+    assert config.capture.width % 2 == 0 and config.capture.height % 2 == 0
     assert publisher_factory is PreviewOnlyPublisher
     assert messages and messages[0][1] is True
 
@@ -267,16 +303,18 @@ def test_invalid_initial_config_starts_preview_only(qt_app, monkeypatch):
     thread.start()
     assert thread.wait(3000)
     qt_app.processEvents()
-    assert displayed and displayed[0].width() == config.width
+    assert displayed and displayed[0].width() == config.capture.width
     assert isinstance(thread.publisher, PreviewOnlyPublisher)
     assert not hasattr(thread.publisher, "frames")
 
 
 def test_invalid_config_does_not_stop_or_replace_active_worker(monkeypatch):
-    def invalid_config():
-        raise ValueError("STREAMING_HEIGHT impar")
+    def invalid_config(_stream_settings):
+        raise ValueError("capture.height impar")
 
-    monkeypatch.setattr(frontend_app.StreamConfig, "from_env", staticmethod(invalid_config))
+    monkeypatch.setattr(
+        frontend_app.StreamConfig, "from_app_config", staticmethod(invalid_config)
+    )
     worker = FakeWorker()
     requests = []
     messages = []
@@ -290,6 +328,9 @@ def test_invalid_config_does_not_stop_or_replace_active_worker(monkeypatch):
     )
     app._stream_setup = lambda allow_preview_fallback: FactoryControlApp._stream_setup(
         app, allow_preview_fallback
+    )
+    app._stream_config_from_app = lambda: FactoryControlApp._stream_config_from_app(
+        app
     )
     app._request_thread_shutdown = lambda **kwargs: requests.append(kwargs)
 
@@ -333,9 +374,10 @@ class StubDetector:
 
     instances = []
 
-    def __init__(self, model_path=None, names_path=None):
+    def __init__(self, model_path=None, names_path=None, confidence_threshold=None):
         self.model_path = model_path
         self.names_path = names_path
+        self.confidence_threshold = confidence_threshold
         self.use_hailo = False
         StubDetector.instances.append(self)
 
@@ -521,7 +563,7 @@ def _run_thread_until_done(qt_app, detections, sensor_provider, frame_count=2):
     thread = YOLODetectionThread(
         "0",
         MockUseCase(detections),
-        stream_config=StreamConfig(width=4, height=4, fps=20),
+        stream_config=_stream_config(width=4, height=4, fps=20),
         capture_factory=lambda _source: capture,
         publisher_factory=_RecordingPublisher,
         sensor_provider=sensor_provider,
@@ -585,7 +627,7 @@ def test_residual_lote_is_delivered_on_stop(qt_app, monkeypatch):
     thread = YOLODetectionThread(
         "0",
         MockUseCase([Detection(id=7, state="ok", bbox=(0, 0, 2, 2))]),
-        stream_config=StreamConfig(width=4, height=4, fps=20),
+        stream_config=_stream_config(width=4, height=4, fps=20),
         capture_factory=lambda _source: capture,
         publisher_factory=_RecordingPublisher,
     )
@@ -650,7 +692,7 @@ def test_alerted_ids_are_bounded(qt_app, monkeypatch):
     monkeypatch.setattr(worker_module, "MAX_ALERTED_IDS", 2)
     thread = YOLODetectionThread(
         "road.mp4", MockUseCase(),
-        stream_config=StreamConfig(width=4, height=4, fps=20),
+        stream_config=_stream_config(width=4, height=4, fps=20),
     )
 
     assert thread._remember_alerted_id(1) is True
@@ -663,8 +705,12 @@ def test_alerted_ids_are_bounded(qt_app, monkeypatch):
 # ---------------------------------------------------------------------------
 # Phase 3: panel-extraction contracts
 # ---------------------------------------------------------------------------
-def _build_hermetic_app(monkeypatch):
-    """Construct the app with hardware-free stubs and a recording navigator."""
+def _build_hermetic_app(monkeypatch, config=None):
+    """Construct the app with hardware-free stubs and a recording navigator.
+
+    Con ``config`` se inyecta un ``AppConfig`` concreto en ``frontend_app.load``
+    para ejercitar el arranque con una configuración dada.
+    """
     calls = []
     monkeypatch.setattr(
         FactoryControlApp,
@@ -676,6 +722,8 @@ def _build_hermetic_app(monkeypatch):
         "detect_platform",
         lambda: SimpleNamespace(is_raspberry_pi=False, is_npu=False),
     )
+    if config is not None:
+        monkeypatch.setattr(frontend_app, "load", lambda: config)
     StubDetector.instances.clear()
     monkeypatch.setattr(frontend_app, "YoloDetector", StubDetector)
     app = FactoryControlApp()
@@ -829,6 +877,10 @@ def _drain_lote_posts(app, qt_app):
 
 def test_handle_lote_completed_success_and_failure(qt_app, monkeypatch):
     app, _calls = _build_hermetic_app(monkeypatch)
+    # El endpoint se relee de config.json en cada lote; se fija la config para
+    # que la URL sea determinista.
+    config = AppConfig()
+    monkeypatch.setattr(frontend_app, "load", lambda: config)
     logged = []
     app.add_alert_log = lambda message, tone="danger": logged.append((message, tone))
 
@@ -839,7 +891,7 @@ def test_handle_lote_completed_success_and_failure(qt_app, monkeypatch):
     _drain_lote_posts(app, qt_app)
 
     assert app.http_client.calls
-    assert app.http_client.calls[0][0] == LOCAL_LOTE_ENDPOINT
+    assert app.http_client.calls[0][0] == config.api.lote_endpoint
     assert app.http_client.calls[0][1] == payload
     assert logged and "LOTE REGISTRADO" in logged[-1][0]
     assert logged[-1][1] == "info"
@@ -1101,3 +1153,773 @@ def test_shutdown_timeout_disconnects_abandoned_worker_signals():
 
     assert received == []
     assert app._recovery_required is True
+
+
+# ---------------------------------------------------------------------------
+# Configuración unificada: plan_changes y notificación al backend
+# ---------------------------------------------------------------------------
+_EMPTY_PLAN = {"detector": [], "pipeline": [], "restart_app": [], "hot": []}
+
+
+def test_plan_changes_is_empty_for_identical_configs():
+    base = AppConfig()
+    assert plan_changes(base, base) == _EMPTY_PLAN
+
+
+def test_plan_changes_classifies_each_taxonomy_bucket():
+    base = AppConfig()
+    new = replace(
+        base,
+        revision=base.revision + 1,  # los metadatos no cuentan como cambios
+        stream=replace(
+            base.stream,
+            capture=replace(base.stream.capture, width=1920),
+            inference=replace(base.stream.inference, confidence_threshold=0.9),
+            publisher=replace(base.stream.publisher,
+                              output_url="rtsp://nuevo:8554/entrada",
+                              queue_size=8),
+        ),
+        device=replace(base.device, api_base_url="http://central"),
+        models=replace(base.models, default_model_id="tostadas-v1"),
+        paths=replace(base.paths, videos_dir="videos"),
+        api=replace(base.api, port=9000),
+    )
+
+    plan = plan_changes(base, new)
+
+    assert plan["detector"] == ["stream.inference.confidence_threshold"]
+    assert plan["pipeline"] == [
+        "stream.capture.width",
+        "stream.publisher.output_url",
+        "stream.publisher.queue_size",
+    ]
+    assert plan["restart_app"] == [
+        "device.api_base_url",
+        "models.default_model_id",
+        "paths.videos_dir",
+        "api.port",
+    ]
+    assert plan["hot"] == []
+
+
+def test_plan_changes_detector_flags_and_pipeline_capture():
+    base = AppConfig()
+    new = replace(
+        base,
+        stream=replace(
+            base.stream,
+            capture=replace(base.stream.capture, source="camara.mp4", fps=20),
+            inference=replace(
+                base.stream.inference,
+                enabled=True,
+                require_hailo=True,
+            ),
+        ),
+    )
+
+    plan = plan_changes(base, new)
+
+    assert plan["pipeline"] == ["stream.capture.source", "stream.capture.fps"]
+    assert plan["detector"] == [
+        "stream.inference.enabled",
+        "stream.inference.require_hailo",
+    ]
+    assert plan["restart_app"] == []
+    assert plan["hot"] == []
+
+
+def test_plan_changes_frozen_stream_fields_are_pipeline():
+    """Almacenamiento, reconexión y ajustes de captura/publicación los congela
+    el worker al construirse: deben reiniciar el pipeline, no quedar en hot."""
+    base = AppConfig()
+    new = replace(
+        base,
+        stream=replace(
+            base.stream,
+            capture=replace(
+                base.stream.capture,
+                loop_video=False,
+                buffer_size=4,
+                stable_frames=10,
+                read_timeout_seconds=2.0,
+            ),
+            publisher=replace(
+                base.stream.publisher,
+                queue_size=4,
+                write_timeout=1.0,
+                stable_seconds=1.0,
+            ),
+            storage=replace(base.stream.storage, path="otro/detections.jsonl"),
+            reconnect=replace(base.stream.reconnect, max_seconds=60.0),
+        ),
+    )
+
+    plan = plan_changes(base, new)
+
+    assert plan["pipeline"] == [
+        "stream.capture.loop_video",
+        "stream.capture.buffer_size",
+        "stream.capture.stable_frames",
+        "stream.capture.read_timeout_seconds",
+        "stream.publisher.queue_size",
+        "stream.publisher.write_timeout",
+        "stream.publisher.stable_seconds",
+        "stream.storage.path",
+        "stream.reconnect.max_seconds",
+    ]
+    assert plan["detector"] == []
+    assert plan["restart_app"] == []
+    assert plan["hot"] == []
+
+
+def test_plan_changes_only_product_and_lote_endpoint_are_hot():
+    """Único hot real: lo que la app aplica en vivo. El host/puerto de la API y
+    el resto de device exigen reinicio (H2/M3)."""
+    base = AppConfig()
+    new = replace(
+        base,
+        device=replace(base.device, producto_id="P1", horno_id="H1"),
+        api=replace(
+            base.api,
+            host="10.0.0.5",
+            port=9000,
+            lote_endpoint="http://127.0.0.1:9000/api/lotes/finalizar",
+        ),
+    )
+
+    plan = plan_changes(base, new)
+
+    assert plan["hot"] == ["device.producto_id", "api.lote_endpoint"]
+    assert plan["restart_app"] == ["device.horno_id", "api.host", "api.port"]
+    assert plan["detector"] == []
+    assert plan["pipeline"] == []
+
+
+class _FakeResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+
+
+def test_notify_backend_reload_returns_ok_and_never_raises(monkeypatch):
+    import frontend.services.config_notify as notify_module
+
+    calls = []
+
+    def fake_post(url, timeout=None):
+        calls.append((url, timeout))
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(notify_module.requests, "post", fake_post)
+    ok, detail = notify_backend_reload("127.0.0.1", 8000)
+
+    assert ok is True
+    assert calls == [("http://127.0.0.1:8000/api/config/reload", 1.5)]
+    assert "200" in detail
+
+    monkeypatch.setattr(
+        notify_module.requests,
+        "post",
+        lambda url, timeout=None: _FakeResponse(503),
+    )
+    ok, detail = notify_backend_reload("127.0.0.1", 8000)
+    assert ok is False
+    assert "503" in detail
+
+    def boom(url, timeout=None):
+        raise ConnectionError("sin ruta al backend")
+
+    monkeypatch.setattr(notify_module.requests, "post", boom)
+    ok, detail = notify_backend_reload("127.0.0.1", 8000)
+    assert ok is False
+    assert "sin ruta al backend" in detail
+
+
+# ---------------------------------------------------------------------------
+# Editor de configuración: validación pura, result_config y plan de aplicación
+# ---------------------------------------------------------------------------
+def test_validate_settings_accepts_default_config():
+    assert validate_settings(AppConfig()) == []
+
+
+def test_validate_settings_rejects_invalid_stream_fields():
+    base = AppConfig()
+    bad = replace(
+        base,
+        stream=replace(
+            base.stream,
+            capture=replace(base.stream.capture, width=3),
+            publisher=replace(
+                base.stream.publisher, output_url="ftp://servidor/salida"
+            ),
+            inference=replace(
+                base.stream.inference, confidence_threshold=1.5
+            ),
+        ),
+    )
+    text = " ".join(validate_settings(bad))
+    assert "pares" in text
+    assert "rtsp://" in text
+    assert "confianza" in text
+
+
+def test_validate_settings_rejects_out_of_range_fps_and_port():
+    # ``CaptureSettings`` valida fps al construirse, así que para ejercitar
+    # ``validate_settings`` se usa un namespace con la forma anidada esperada.
+    base = AppConfig()
+    capture = SimpleNamespace(
+        source=base.stream.capture.source,
+        width=base.stream.capture.width,
+        height=base.stream.capture.height,
+        fps=25,
+        loop_video=base.stream.capture.loop_video,
+        buffer_size=base.stream.capture.buffer_size,
+        stable_frames=base.stream.capture.stable_frames,
+        read_timeout_seconds=base.stream.capture.read_timeout_seconds,
+    )
+    config = SimpleNamespace(
+        stream=SimpleNamespace(
+            capture=capture,
+            publisher=base.stream.publisher,
+            inference=base.stream.inference,
+            storage=base.stream.storage,
+            reconnect=base.stream.reconnect,
+        ),
+        api=SimpleNamespace(
+            host=base.api.host,
+            port=0,
+            lote_endpoint=base.api.lote_endpoint,
+        ),
+        models=base.models,
+    )
+    text = " ".join(validate_settings(config))
+    assert "FPS" in text
+    assert "puerto" in text
+
+
+def test_validate_settings_detects_catalog_inconsistencies():
+    base = AppConfig()
+    duplicate_id = ModelEntry("Primera", "a.onnx", "a.names", "repetido")
+    second = ModelEntry("Segunda", "b.onnx", "b.names", "repetido")
+    bad = replace(
+        base,
+        models=replace(
+            base.models,
+            catalog=(duplicate_id, second),
+            default_model_id="no-existe",
+            npu_model_id="tampoco",
+        ),
+    )
+    text = " ".join(validate_settings(bad))
+    assert "repetido" in text
+    assert "por defecto" in text
+    assert "NPU" in text
+
+
+def test_validate_settings_detects_empty_catalog_and_missing_paths():
+    base = AppConfig()
+    bad = replace(
+        base,
+        models=replace(
+            base.models,
+            catalog=(
+                ModelEntry(label="", model_path="", names_path="", model_id=""),
+            ),
+        ),
+    )
+    text = " ".join(validate_settings(bad))
+    assert "etiqueta" in text
+    assert "ruta de modelo" in text
+    assert "ruta de etiquetas" in text
+    assert "identificador" in text
+
+
+def test_settings_dialog_result_config_returns_modified_copy(qt_app):
+    snapshot = AppConfig()
+    dialog = SettingsDialog(snapshot)
+
+    dialog.width_spin.setValue(1920)
+    dialog.confidence_spin.setValue(0.85)
+    dialog.pub_queue_spin.setValue(9)
+    dialog.reconnect_max_spin.setValue(60.0)
+    dialog.horno_edit.setText("HORNO-1")
+    dialog.producto_edit.setText("PROD-7")
+
+    new_config = dialog.result_config()
+
+    assert new_config.stream.capture.width == 1920
+    assert new_config.stream.publisher.queue_size == 9
+    assert new_config.stream.reconnect.max_seconds == 60.0
+    assert new_config.stream.inference.confidence_threshold == 0.85
+    assert new_config.device.horno_id == "HORNO-1"
+    assert new_config.device.producto_id == "PROD-7"
+    # La revisión se conserva para que save_config haga el control de conflicto.
+    assert new_config.revision == snapshot.revision
+    # El snapshot original no se muta.
+    assert snapshot.stream.capture.width == 1280
+    assert snapshot.stream.publisher.queue_size == 2
+    assert snapshot.device.horno_id == ""
+
+    # La copia debe poder serializarse y reparsearse sin perder nada.
+    assert AppConfig.from_dict(new_config.to_dict()) == new_config
+
+    dialog.close()
+
+
+def test_settings_dialog_catalog_editor_adds_valid_entry(qt_app):
+    dialog = SettingsDialog(AppConfig())
+    initial = len(dialog.result_config().models.catalog)
+
+    dialog.catalog_label_edit.setText("Modelo nuevo")
+    dialog.catalog_id_edit.setText("modelo-nuevo")
+    dialog.catalog_model_edit.setText("ai_training/models/nuevo.onnx")
+    dialog.catalog_names_edit.setText("ai_training/models/nuevo.names")
+    dialog._on_catalog_add()
+
+    catalog = dialog.result_config().models.catalog
+    assert len(catalog) == initial + 1
+    assert any(entry.model_id == "modelo-nuevo" for entry in catalog)
+    dialog.close()
+
+
+def test_settings_dialog_catalog_editor_rejects_duplicate_id(qt_app):
+    dialog = SettingsDialog(AppConfig())
+    existing_id = dialog._catalog[0].model_id
+    duplicate = ModelEntry("Otra", "x.onnx", "x.names", existing_id)
+
+    error = dialog._validate_catalog_entry(duplicate)
+
+    assert error is not None and existing_id in error
+    dialog.close()
+
+
+def test_settings_dialog_accept_blocks_invalid_config(qt_app, monkeypatch):
+    import frontend.ui.settings_dialog as settings_module
+
+    warnings = []
+    monkeypatch.setattr(
+        settings_module.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    dialog = SettingsDialog(AppConfig())
+    dialog.width_spin.setValue(3)  # impar: yuv420p lo rechaza
+    dialog.accept()
+
+    assert warnings
+    assert dialog.result() != QDialog.Accepted
+    dialog.close()
+
+
+def test_sidebar_settings_button_emits_request(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    # Se desconecta el slot real para no abrir un diálogo modal en el test.
+    app.sidebar.settings_requested.disconnect()
+    spy = QSignalSpy(app.sidebar.settings_requested)
+
+    assert app.sidebar.settings_btn.toolTip()
+    app.sidebar.settings_btn.click()
+
+    assert spy.count() == 1
+    app.close()
+
+
+# ---------------------------------------------------------------------------
+# Aplicación del plan de cambios
+# ---------------------------------------------------------------------------
+def test_apply_config_plan_pipeline_restarts_worker(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+    worker = FakeWorker()
+    worker.source_file = "road.mp4"
+    app.yolo_thread = worker
+
+    started = []
+    app._start_internal_target = lambda *args, **kwargs: started.append((args, kwargs))
+
+    base = AppConfig()
+    new_cfg = replace(
+        base,
+        stream=replace(
+            base.stream,
+            publisher=replace(
+                base.stream.publisher, output_url="http://nuevo:8554/entrada"
+            ),
+        ),
+    )
+    plan = {
+        "detector": [],
+        "pipeline": ["stream.publisher.output_url"],
+        "restart_app": [],
+        "hot": [],
+    }
+
+    app._apply_config_plan(plan, new_cfg)
+
+    assert worker.stop_requested is True
+    assert app._shutdown_thread is worker
+
+    # El reinicio ocurre recién cuando el worker anterior termina.
+    worker.running = False
+    worker.finished.emit()
+
+    assert started, "el pipeline debió reiniciarse tras apagar el worker"
+    assert app._shutdown_thread is None
+    app.close()
+
+
+def test_apply_config_plan_detector_uses_catalog_paths_and_threshold(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+    captured = {}
+
+    def fake_change_model(index, **kwargs):
+        captured["index"] = index
+        captured.update(kwargs)
+
+    app.change_model = fake_change_model
+
+    base = AppConfig()
+    new_cfg = replace(
+        base,
+        stream=replace(
+            base.stream,
+            inference=replace(base.stream.inference, confidence_threshold=0.9),
+        ),
+    )
+    plan = {
+        "detector": ["stream.inference.confidence_threshold"],
+        "pipeline": [],
+        "restart_app": [],
+        "hot": [],
+    }
+
+    app._apply_config_plan(plan, new_cfg)
+
+    assert captured["confidence_threshold"] == 0.9
+    entry = base.models.model_by_id(base.models.default_model_id)
+    assert captured["model_path"] == resolve_project_path(entry.model_path)
+    assert captured["names_path"] == resolve_project_path(entry.names_path)
+    assert captured["source_override"] is None
+    app.close()
+
+
+def test_apply_config_plan_hot_updates_product(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    base = AppConfig()
+    new_cfg = replace(base, device=replace(base.device, producto_id="PROD-99"))
+    plan = {
+        "detector": [],
+        "pipeline": [],
+        "restart_app": [],
+        "hot": ["device.producto_id"],
+    }
+
+    app._apply_config_plan(plan, new_cfg)
+
+    assert app._producto_id == "PROD-99"
+    app.close()
+
+
+def test_apply_config_plan_restart_app_triggers_full_restart(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+    restarts = []
+    app.request_full_restart = lambda: restarts.append(True)
+    monkeypatch.setattr(app, "_confirm_restart", lambda: True)
+
+    base = AppConfig()
+    new_cfg = replace(
+        base, models=replace(base.models, default_model_id="tostadas-v1")
+    )
+    plan = {
+        "detector": [],
+        "pipeline": [],
+        "restart_app": ["models.default_model_id"],
+        "hot": [],
+    }
+
+    app._apply_config_plan(plan, new_cfg)
+
+    assert restarts == [True]
+    app.close()
+
+
+# ---------------------------------------------------------------------------
+# Flujo del editor de configuración (H2, M1, L1b, M2)
+# ---------------------------------------------------------------------------
+class _AcceptedSettingsDialog:
+    """Diálogo falso que acepta sin mostrar UI."""
+
+    def __init__(self, snapshot, parent=None):
+        self._snapshot = snapshot
+
+    def exec(self):
+        return QDialog.Accepted
+
+    def result_config(self):
+        return self._snapshot
+
+
+class _ReturnsConfigDialog:
+    """Diálogo falso que acepta devolviendo una configuración concreta."""
+
+    def __init__(self, config, parent=None):
+        self._config = config
+
+    def exec(self):
+        return QDialog.Accepted
+
+    def result_config(self):
+        return self._config
+
+
+def test_open_settings_stale_revision_warns_and_does_not_apply(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    warnings = []
+    monkeypatch.setattr(
+        frontend_app.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    applied = []
+    notified = []
+    app._apply_config_plan = lambda plan, cfg: applied.append((plan, cfg))
+    app._notify_backend_reload_async = lambda *args, **kwargs: notified.append(True)
+    monkeypatch.setattr(frontend_app, "load", lambda: AppConfig())
+    monkeypatch.setattr(frontend_app, "SettingsDialog", _AcceptedSettingsDialog)
+
+    def stale_save(config, *, expected_revision=None, **kwargs):
+        raise RevisionConflictError("revisión vieja")
+
+    monkeypatch.setattr(frontend_app, "save_config", stale_save)
+
+    app.open_settings_dialog()
+
+    assert warnings, "debía avisarse del conflicto de revisión"
+    assert applied == []
+    assert notified == []
+    app.close()
+
+
+def test_open_settings_guard_blocks_while_worker_transitions(qt_app, monkeypatch):
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app._shutdown_thread = FakeWorker()
+
+    messages = []
+    monkeypatch.setattr(
+        frontend_app.QMessageBox,
+        "information",
+        lambda *args, **kwargs: messages.append(args),
+    )
+
+    opened = []
+    saved = []
+    monkeypatch.setattr(frontend_app, "SettingsDialog", _AcceptedSettingsDialog)
+    monkeypatch.setattr(frontend_app, "load", lambda: opened.append(True) or AppConfig())
+    monkeypatch.setattr(
+        frontend_app,
+        "save_config",
+        lambda *args, **kwargs: saved.append(True) or AppConfig(),
+    )
+
+    app.open_settings_dialog()
+
+    assert messages, "debía avisarse que hay un cambio en curso"
+    assert opened == []
+    assert saved == []
+    app.close()
+
+
+def test_open_settings_notifies_previous_backend_host_port(qt_app, monkeypatch):
+    """H2: el reload debe avisar al backend que está corriendo (snapshot), no al
+    host/puerto recién guardado, donde todavía no escucha nadie."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    base = AppConfig()
+    snapshot = replace(base, api=replace(base.api, host="127.0.0.1", port=8000))
+    new_cfg = replace(snapshot, api=replace(snapshot.api, host="10.0.0.5", port=9000))
+
+    monkeypatch.setattr(frontend_app, "load", lambda: snapshot)
+    monkeypatch.setattr(
+        frontend_app,
+        "SettingsDialog",
+        lambda snapshot, parent=None: _ReturnsConfigDialog(new_cfg),
+    )
+    monkeypatch.setattr(
+        frontend_app,
+        "save_config",
+        lambda config, *, expected_revision=None, **kwargs: config,
+    )
+
+    notified = []
+    app._notify_backend_reload_async = (
+        lambda host=None, port=None: notified.append((host, port))
+    )
+    applied = []
+    app._apply_config_plan = lambda plan, cfg: applied.append((plan, cfg))
+
+    app.open_settings_dialog()
+
+    assert notified == [("127.0.0.1", 8000)]
+    assert applied, "el plan debió aplicarse tras guardar"
+    app.close()
+
+
+def test_handle_lote_completed_uses_current_lote_endpoint(qt_app, monkeypatch):
+    """H2: el endpoint de lotes se relee de config.json en cada lote."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+    app.add_alert_log = lambda *args, **kwargs: None
+    dynamic_endpoint = "http://127.0.0.1:9100/api/lotes/finalizar"
+    cfg = replace(
+        AppConfig(), api=replace(AppConfig().api, lote_endpoint=dynamic_endpoint)
+    )
+    monkeypatch.setattr(frontend_app, "load", lambda: cfg)
+
+    app.http_client = _FakeHttpClient(success=True)
+    app.handle_lote_completed(
+        {"totalUnidades": 1, "correctos": 1, "quemados": 0, "crudas": 0}
+    )
+    _drain_lote_posts(app, qt_app)
+
+    assert app.http_client.calls[0][0] == dynamic_endpoint
+    app.close()
+
+
+def test_apply_hot_config_propagates_product_to_live_worker(qt_app, monkeypatch):
+    """M1: el producto nuevo llega al worker en marcha, que lo copió al nacer."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+    worker = FakeWorker()
+    worker.producto_id = "viejo"
+    app.yolo_thread = worker
+
+    base = AppConfig()
+    new_cfg = replace(base, device=replace(base.device, producto_id="PROD-99"))
+    app._apply_hot_config({"hot": ["device.producto_id"]}, new_cfg)
+
+    assert app._producto_id == "PROD-99"
+    assert worker.producto_id == "PROD-99"
+
+    # Producto vacío: el worker cae al producto por defecto del payload.
+    empty_cfg = replace(base, device=replace(base.device, producto_id=""))
+    app._apply_hot_config({"hot": ["device.producto_id"]}, empty_cfg)
+
+    assert app._producto_id is None
+    assert worker.producto_id == DEFAULT_PRODUCT_ID
+    worker.running = False
+    app.close()
+
+
+def test_app_startup_detector_uses_config_paths_and_threshold(qt_app, monkeypatch):
+    """M2a: el detector arranca con umbral y rutas de config.json."""
+    base = AppConfig()
+    cfg = replace(
+        base,
+        stream=replace(
+            base.stream,
+            inference=replace(
+                base.stream.inference,
+                model_path="ai_training/models/tostadas_v2.onnx",
+                labels_path="ai_training/models/tostadas_v2.names",
+                confidence_threshold=0.42,
+            ),
+        ),
+    )
+
+    app, _calls = _build_hermetic_app(monkeypatch, config=cfg)
+
+    detector = StubDetector.instances[-1]
+    assert detector.confidence_threshold == 0.42
+    assert detector.model_path == resolve_project_path(
+        "ai_training/models/tostadas_v2.onnx"
+    )
+    assert detector.names_path == resolve_project_path(
+        "ai_training/models/tostadas_v2.names"
+    )
+    # El selector debe reflejar el modelo activo de config.json, no el de la
+    # plataforma: si no, el operador vería un modelo distinto del que corre.
+    assert app.sidebar.model_selector.currentText() == "YOLOv11 Tostadas V2 (Custom)"
+    app.close()
+
+
+def test_sidebar_set_model_index_does_not_emit_model_changed(qt_app, monkeypatch):
+    """Alinear el selector al arrancar no debe disparar un cambio de modelo."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    app.sidebar.model_selector.setCurrentIndex(0)
+    spy = QSignalSpy(app.sidebar.model_changed)
+    app.sidebar.set_model_index(2)
+
+    assert app.sidebar.model_selector.currentIndex() == 2
+    assert spy.count() == 0
+    app.close()
+
+
+def test_apply_config_plan_detector_prefers_config_paths(qt_app, monkeypatch):
+    """M2b: si config.json define rutas de inferencia, el plan las usa en vez
+    del catálogo."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+    captured = {}
+    app.change_model = lambda index, **kwargs: captured.update(index=index, **kwargs)
+
+    base = AppConfig()
+    new_cfg = replace(
+        base,
+        stream=replace(
+            base.stream,
+            inference=replace(
+                base.stream.inference,
+                model_path="ai_training/models/tostadas_v2.onnx",
+                labels_path="ai_training/models/tostadas_v2.names",
+                confidence_threshold=0.8,
+            ),
+        ),
+    )
+    plan = {
+        "detector": [
+            "stream.inference.model_path",
+            "stream.inference.labels_path",
+        ],
+        "pipeline": [],
+        "restart_app": [],
+        "hot": [],
+    }
+
+    app._apply_config_plan(plan, new_cfg)
+
+    assert captured["model_path"] == resolve_project_path(
+        "ai_training/models/tostadas_v2.onnx"
+    )
+    assert captured["names_path"] == resolve_project_path(
+        "ai_training/models/tostadas_v2.names"
+    )
+    assert captured["confidence_threshold"] == 0.8
+    app.close()
+
+
+def test_open_settings_invalid_config_warns_and_does_not_open(qt_app, monkeypatch):
+    """L1b: un config.json ilegible no debe lanzar dentro del slot Qt."""
+    app, _calls = _build_hermetic_app(monkeypatch)
+
+    warnings = []
+    monkeypatch.setattr(
+        frontend_app.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    def boom():
+        raise ConfigError("JSON inválido")
+
+    monkeypatch.setattr(frontend_app, "load", boom)
+    opened = []
+    monkeypatch.setattr(
+        frontend_app, "SettingsDialog", lambda *args, **kwargs: opened.append(True)
+    )
+
+    app.open_settings_dialog()
+
+    assert warnings, "debía avisarse del error de lectura"
+    assert opened == []
+    app.close()

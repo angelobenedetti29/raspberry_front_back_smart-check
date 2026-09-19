@@ -124,12 +124,17 @@ class StatusPill(QLabel):
 
 
 class ActionButton(QPushButton):
-    """Botón de acción con la variante de navegación del sistema de diseño."""
+    """Botón de acción con una variante del sistema de diseño.
 
-    def __init__(self, text="", parent=None):
+    ``variant`` elige el estilo definido en la hoja de estilos: ``nav``
+    (navegación, por defecto), ``primary`` (acción principal), ``danger``
+    (acción destructiva) o ``default`` (botón estándar del tema).
+    """
+
+    def __init__(self, text="", parent=None, variant="nav"):
         super().__init__(text, parent)
         self.setCursor(Qt.PointingHandCursor)
-        set_dynamic_property(self, "variant", "nav")
+        set_dynamic_property(self, "variant", variant)
 
 
 class ListItem(QPushButton):

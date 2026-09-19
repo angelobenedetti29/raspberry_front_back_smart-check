@@ -10,28 +10,32 @@ la instalación de la Raspberry Pi.
    `/etc/mediamtx/mediamtx.yml`, y sustituir el origen permitido y
    `webrtcAdditionalHosts` por valores reales.
 3. Instalar el checkout del proyecto y FFmpeg. Confirmar aceleración con
-   `ffmpeg -encoders`; definir `STREAMING_ENCODER=h264_v4l2m2m` solo si existe.
-   Usar `libx264` si no existe el encoder V4L2.
-4. Crear `/etc/tesis/streaming.env`, sin secretos. El archivo es obligatorio
-   para systemd. Debe contener `STREAMING_MODEL` con la ruta absoluta al
-   `.hef` real instalado en esa Pi; no existe una ruta predeterminada válida.
-   Un ejemplo de variables no relacionadas con la ruta concreta es:
+   `ffmpeg -encoders`; definir `encoder` en `config.json`
+   (`h264_v4l2m2m` solo si existe, `libx264` si no).
+4. Editar el `config.json` versionado en la raíz del repositorio. Es la única
+   fuente de configuración: ya no hay `EnvironmentFile` ni flags de CLI. Ajustar
+   sobre todo:
 
-   ```text
-   STREAMING_SOURCE=0
-   STREAMING_OUTPUT_URL=rtsp://smartcheck.duckdns.org:8554/entrada
-   STREAMING_STORAGE=/var/lib/tesis-streaming/detections.jsonl
-   STREAMING_INFERENCE=true
-   STREAMING_REQUIRE_HAILO=true
-   # STREAMING_MODEL debe apuntar al .hef real de esta instalación.
-   STREAMING_ENCODER=libx264
+   ```json
+   "stream": {
+     "capture": { "source": "0" },
+     "publisher": {
+       "output_url": "rtsp://smartcheck.duckdns.org:8554/entrada",
+       "encoder": "libx264"
+     },
+     "inference": {
+       "enabled": true,
+       "require_hailo": true,
+       "model_path": "/ruta/absoluta/real/modelo.hef"
+     },
+     "storage": { "path": "/var/lib/tesis-streaming/detections.jsonl" }
+   }
    ```
 
-   La unidad también fuerza mediante CLI `--inference --require-hailo`, por lo
-   que esas flags no pueden ser anuladas por el EnvironmentFile. Un modelo que
-   no sea `.hef` produce fallo rápido, sin fallback CPU/ONNX. Hailo es
-   exclusivo: mantener una sola instancia que use la NPU.
-   `STREAMING_CAPTURE_READ_TIMEOUT` permite ajustar el watchdog de `read()`;
+   `model_path` debe apuntar al `.hef` real instalado en esa Pi; no existe una
+   ruta predeterminada válida. Un modelo que no sea `.hef` produce fallo rápido,
+   sin fallback CPU/ONNX. Hailo es exclusivo: mantener una sola instancia que
+   use la NPU. `read_timeout_seconds` permite ajustar el watchdog de `read()`;
    una lectura nativa bloqueada termina el proceso con código 1 y
    `Restart=always` lo reinicia.
 5. Crear el directorio de almacenamiento con permisos para `tesis` y copiar
@@ -41,19 +45,26 @@ la instalación de la Raspberry Pi.
    sudo install -d -o tesis -g tesis /var/lib/tesis-streaming
    sudo install -D -m 0644 mediamtx.service /etc/systemd/system/mediamtx.service
    sudo install -D -m 0644 streaming.service /etc/systemd/system/streaming.service
+   sudo install -D -m 0644 smartcheck-config.path /etc/systemd/system/smartcheck-config.path
+   sudo install -D -m 0644 smartcheck-config-reload.service /etc/systemd/system/smartcheck-config-reload.service
    sudo systemctl daemon-reload
-   sudo systemctl enable --now mediamtx.service streaming.service
-   sudo systemctl status mediamtx.service streaming.service
+   sudo systemctl enable --now mediamtx.service streaming.service smartcheck-config.path
+   sudo systemctl status mediamtx.service streaming.service smartcheck-config.path
    ```
 
+   `smartcheck-config.path` observa `config.json` con `PathModified`: como el
+   guardado es atómico (`os.replace`), systemd detecta el reemplazo del path y
+   dispara `smartcheck-config-reload.service`, que reinicia `streaming.service`
+   como proceso nuevo.
+
 6. Con el destino central por defecto
-   (`STREAMING_OUTPUT_URL=rtsp://smartcheck.duckdns.org:8554/entrada`), el WHEP
+   (`output_url=rtsp://smartcheck.duckdns.org:8554/entrada`), el WHEP
    para un cliente externo (navegador/reproductor WebRTC) es
    `https://smartcheck.duckdns.org:8889/entrada/whep` (el `whepUrl` que publica
    el dispositivo en el panel central). El frontend de escritorio PySide6 no
    implementa WHEP/WebRTC. El MediaMTX local de los pasos 1-2 solo es
    necesario si se publica localmente
-   (`STREAMING_OUTPUT_URL=rtsp://127.0.0.1:8554/horno`); en ese caso abrir solo
+   (`output_url=rtsp://127.0.0.1:8554/horno`); en ese caso abrir solo
    8889/TCP y 8189/UDP para WHEP/WebRTC, sin exponer 8554/TCP. En despliegues
    HTTPS, configurar el proxy TLS y usar el origen HTTPS exacto del frontend,
    nunca CORS `*`.

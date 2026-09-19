@@ -2,12 +2,14 @@
 """Levanta el backend (FastAPI) y el frontend (PySide6) juntos.
 
 Uso:
-    python run.py                # frontend con su fuente por defecto
-    python run.py --source 0     # los argumentos extra se pasan al frontend
+    python run.py
 
 Comportamiento:
-  - Si ya hay un backend respondiendo en http://localhost:8000, lo reutiliza.
+  - La configuración (host/puerto del backend, fuente de vídeo, etc.) sale de
+    ``config.json`` a través de ``smartcheck_config``.
+  - Si ya hay un backend respondiendo en el host/puerto configurados, lo reutiliza.
   - Si no, inicia el backend y lo detiene al cerrar el frontend (o con Ctrl+C).
+  - Si el frontend termina con ``RESTART_EXIT_CODE`` (75), se relanza.
   - Si se ejecuta con un Python sin las dependencias y existe `.venv/`, se
     re-ejecuta automáticamente con `.venv/bin/python`.
 """
@@ -24,11 +26,15 @@ import time
 import urllib.request
 from pathlib import Path
 
+from smartcheck_config import load_config
+
 ROOT_DIR = Path(__file__).resolve().parent
 VENV_PYTHON = ROOT_DIR / ".venv" / "bin" / "python"
-HOST = "0.0.0.0"
-PORT = 8000
-STATUS_URL = f"http://localhost:{PORT}/api/status"
+
+# Código de salida con el que el frontend pide un reinicio limpio. Debe coincidir
+# con la constante compartida de ``frontend.config``; se define localmente para
+# no importar el paquete frontend antes de instalar sus dependencias.
+RESTART_EXIT_CODE = 75
 
 # Módulos mínimos por componente. Deben reflejar los imports reales del stack:
 # el backend importa `jwt` (PyJWT) vía device_enrollment, no solo FastAPI.
@@ -81,16 +87,50 @@ def _check_dependencies() -> None:
         raise SystemExit(1)
 
 
-def backend_is_up() -> bool:
+def _local_check_host(host: str) -> str:
+    """Devuelve un host local usable para el chequeo de estado.
+
+    Cuando el backend escucha en ``0.0.0.0`` (todas las interfaces) la petición
+    local debe apuntar a loopback, no a la dirección comodín.
+    """
+    if host in ("", "0.0.0.0", "::"):
+        return "127.0.0.1"
+    return host
+
+
+def _status_url(host: str, port: int) -> str:
+    """Construye la URL del endpoint de estado del backend local."""
+    return f"http://{_local_check_host(host)}:{port}/api/status"
+
+
+def _child_environment() -> dict[str, str]:
+    """Entorno para los procesos hijos con el bootstrap de rutas propagado.
+
+    Se fija ``SMARTCHECK_ROOT`` a la raíz del repo y se reenvían
+    ``SMARTCHECK_CONFIG``/``SMARTCHECK_ENV_FILE`` si están definidos, de modo
+    que backend y frontend carguen exactamente el mismo ``config.json`` y `.env`.
+    """
+    env = os.environ.copy()
+    env["SMARTCHECK_ROOT"] = str(ROOT_DIR)
+    for name in ("SMARTCHECK_CONFIG", "SMARTCHECK_ENV_FILE"):
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    return env
+
+
+def backend_is_up(status_url: str) -> bool:
     try:
-        with urllib.request.urlopen(STATUS_URL, timeout=1) as response:
+        with urllib.request.urlopen(status_url, timeout=1) as response:
             data = json.load(response)
     except Exception:
         return False
     return data.get("status") == "online"
 
 
-def _start_backend() -> subprocess.Popen:
+def _start_backend(
+    host: str, port: int, env: dict[str, str]
+) -> subprocess.Popen:
     return subprocess.Popen(
         [
             sys.executable,
@@ -98,20 +138,23 @@ def _start_backend() -> subprocess.Popen:
             "uvicorn",
             "backend.app.main:app",
             "--host",
-            HOST,
+            host,
             "--port",
-            str(PORT),
+            str(port),
         ],
         cwd=str(ROOT_DIR),
+        env=env,
     )
 
 
-def _wait_for_backend(process: subprocess.Popen, timeout: float = 15.0) -> bool:
+def _wait_for_backend(
+    process: subprocess.Popen, status_url: str, timeout: float = 15.0
+) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return False
-        if backend_is_up():
+        if backend_is_up(status_url):
             return True
         time.sleep(0.5)
     return False
@@ -133,6 +176,15 @@ def _raise_keyboard_interrupt(_signum, _frame) -> None:
     raise KeyboardInterrupt
 
 
+def _start_frontend(env: dict[str, str]) -> subprocess.Popen:
+    """Lanza el frontend; la fuente de vídeo la manda config.json."""
+    return subprocess.Popen(
+        [sys.executable, "-m", "frontend.main"],
+        cwd=str(ROOT_DIR),
+        env=env,
+    )
+
+
 def main() -> int:
     os.chdir(ROOT_DIR)
     _reuse_venv_if_needed()
@@ -140,33 +192,49 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
+    loaded = load_config()
+    host = loaded.config.api.host
+    port = loaded.config.api.port
+    status_url = _status_url(host, port)
+    child_env = _child_environment()
+
     print(f"[run] Intérprete: {sys.executable}", flush=True)
 
     backend_process: subprocess.Popen | None = None
-    if backend_is_up():
-        print(f"[run] Ya hay un backend activo en {STATUS_URL}; se reutiliza.", flush=True)
+    if backend_is_up(status_url):
+        print(
+            f"[run] Ya hay un backend activo en {status_url}; se reutiliza.",
+            flush=True,
+        )
     else:
-        print(f"[run] Iniciando backend en http://{HOST}:{PORT} ...", flush=True)
-        backend_process = _start_backend()
+        print(f"[run] Iniciando backend en http://{host}:{port} ...", flush=True)
+        backend_process = _start_backend(host, port, child_env)
         print("[run] Esperando al backend", end="", flush=True)
-        if _wait_for_backend(backend_process):
+        if _wait_for_backend(backend_process, status_url):
             print(" listo.", flush=True)
         else:
             print(" falló (revisá si el puerto está ocupado).", flush=True)
 
-    print("[run] Iniciando frontend ...", flush=True)
-    frontend_process = subprocess.Popen(
-        [sys.executable, "-m", "frontend.main", *sys.argv[1:]],
-        cwd=str(ROOT_DIR),
-    )
-
     try:
-        return frontend_process.wait()
-    except KeyboardInterrupt:
-        frontend_process.terminate()
-        return 130
+        # El frontend puede pedir un reinicio limpio saliendo con
+        # RESTART_EXIT_CODE; en ese caso se relanza sin tocar el backend.
+        while True:
+            print("[run] Iniciando frontend ...", flush=True)
+            frontend_process = _start_frontend(child_env)
+            try:
+                code = frontend_process.wait()
+            except KeyboardInterrupt:
+                _stop(frontend_process, "frontend")
+                return 130
+            _stop(frontend_process, "frontend")
+            if code != RESTART_EXIT_CODE:
+                return code
+            print(
+                f"[run] El frontend pidió reinicio (código {RESTART_EXIT_CODE}); "
+                "relanzando ...",
+                flush=True,
+            )
     finally:
-        _stop(frontend_process, "frontend")
         if backend_process is not None:
             _stop(backend_process, "backend")
 

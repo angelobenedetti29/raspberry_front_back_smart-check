@@ -22,10 +22,10 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from smartcheck_config import load_config
 from streaming.config import StreamConfig
 from streaming.publisher import FFmpegPublisher
 
-from backend.app.config import get_settings
 from backend.infrastructure.sensors.simulated_sensors import SimulatedSensorProvider
 from backend.use_cases.build_lote_payload import (
     DEFAULT_PRODUCT_ID,
@@ -90,18 +90,20 @@ class YOLODetectionThread(QThread):
         # La app entrega la ruta ya resuelta: absoluta, o "0" para la cámara.
         self.source_file = source_file
         self.detect_use_case = detect_use_case
-        self.stream_config = validate_stream_config(
-            stream_config if stream_config is not None else StreamConfig.from_env()
-        )
+        if stream_config is None:
+            # Sin configuración explícita se deriva de config.json, la fuente
+            # unificada. La app igualmente inyecta siempre la config validada.
+            stream_config = StreamConfig.from_app_config(load_config().config.stream)
+        self.stream_config = validate_stream_config(stream_config)
         self.capture_factory = capture_factory or cv2.VideoCapture
         self.publisher_factory = publisher_factory or FFmpegPublisher
         self.sensor_provider = (
             sensor_provider if sensor_provider is not None else SimulatedSensorProvider()
         )
+        # La app inyecta el producto desde la config unificada; sin él se usa el
+        # producto por defecto del payload.
         self.producto_id = (
-            producto_id
-            if producto_id is not None
-            else (get_settings().default_producto_id or DEFAULT_PRODUCT_ID)
+            producto_id if producto_id is not None else DEFAULT_PRODUCT_ID
         )
 
         # Recursos que posee el hilo; se crean dentro de run().
@@ -121,7 +123,7 @@ class YOLODetectionThread(QThread):
         self._last_mock_alert_time = 0.0
         self.last_toast_seen_time = 0.0
         # StreamConfig valida fps ∈ {20, 30}, así que no hay división por cero.
-        self.frame_time = 1.0 / self.stream_config.fps
+        self.frame_time = 1.0 / self.stream_config.capture.fps
 
         # Reinicia el tracker y el registro de alertas al arrancar un stream nuevo.
         if hasattr(self.detect_use_case, "reset_tracker"):
@@ -310,7 +312,10 @@ class YOLODetectionThread(QThread):
         """Normaliza el frame a BGR uint8 contiguo de tres canales."""
         output = cv2.resize(
             image,
-            (self.stream_config.width, self.stream_config.height),
+            (
+                self.stream_config.capture.width,
+                self.stream_config.capture.height,
+            ),
             interpolation=cv2.INTER_AREA,
         )
         if output.ndim == 2:
