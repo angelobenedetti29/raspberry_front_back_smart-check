@@ -50,7 +50,7 @@ from smartcheck_config import (
     StorageSettings,
     StreamSettings,
 )
-from frontend.ui.components import ActionButton, Card
+from frontend.ui.components import ActionButton, Card, block_wheel_on_children
 from frontend.ui.theme import SP_MD, SP_SM, SP_XS
 
 __all__ = ["SettingsDialog", "validate_settings"]
@@ -162,7 +162,8 @@ def _spin(value, minimum, maximum, step=1) -> QSpinBox:
     box.setSingleStep(int(step))
     box.setValue(int(value))
     # Sin flechas nativas: el tema oscuro no define su aspecto y quedan fuera
-    # de lugar. El valor se edita escribiendo o con la rueda del mouse.
+    # de lugar. El valor se edita escribiendo; la rueda queda reservada para
+    # desplazar la página (ver ``block_wheel_on_children`` en ``_build_ui``).
     box.setButtonSymbols(QAbstractSpinBox.NoButtons)
     return box
 
@@ -281,6 +282,8 @@ class SettingsDialog(QDialog):
         content_layout.addStretch(1)
 
         scroll.setWidget(content)
+        # La rueda desplaza la página; los valores solo se editan escribiendo.
+        block_wheel_on_children(content, QComboBox, QAbstractSpinBox)
         root.addWidget(scroll, stretch=1)
 
         footer = QHBoxLayout()
