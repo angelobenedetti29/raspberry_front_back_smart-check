@@ -780,6 +780,40 @@ def test_update_image_sets_live_state_and_pixmap(qt_app, monkeypatch):
     app.close()
 
 
+def test_video_surface_size_hint_stays_stable_across_frames(qt_app):
+    """El hint del destino de vídeo no debe seguir al pixmap.
+
+    Un ``QLabel`` normal deriva ``sizeHint()``/``minimumSizeHint()`` del pixmap
+    mostrado, de modo que cada frame realimenta el layout y provoca la vibración
+    durante la reproducción. La superficie de vídeo debe exponer pistas neutras
+    e independientes del contenido para que la disposición quede estable.
+    """
+    from frontend.ui.video_panel import VideoPanel
+
+    panel = VideoPanel()
+    panel.resize(640, 480)
+    panel.show()
+    qt_app.processEvents()
+
+    label = panel.video_label
+    hint_before = label.sizeHint()
+    min_hint_before = label.minimumSizeHint()
+
+    image = QImage(1280, 720, QImage.Format_RGB888)
+    image.fill(0x336699)
+    for _ in range(3):
+        panel.show_image(image)
+        qt_app.processEvents()
+        assert label.sizeHint() == hint_before
+        assert label.minimumSizeHint() == min_hint_before
+
+    assert label.pixmap() is not None and not label.pixmap().isNull()
+    # La pista neutra mantiene el suelo visual explícito de 220 px.
+    assert label.minimumHeight() == 220
+
+    panel.close()
+
+
 def test_alerts_empty_state_and_add_alert(qt_app, monkeypatch):
     app, _calls = _build_hermetic_app(monkeypatch)
 

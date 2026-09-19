@@ -1,11 +1,32 @@
 """Superficie central de vídeo en vivo con estados explícitos."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from frontend.ui.components import Card, SectionMeta, StatusPill
 from frontend.ui.theme import SP_MD, set_dynamic_property
+
+
+class VideoSurface(QLabel):
+    """Destino de render cuyo tamaño no depende del pixmap mostrado.
+
+    Un ``QLabel`` normal deriva ``sizeHint()``/``minimumSizeHint()`` del pixmap
+    actual. Como :meth:`VideoPanel.show_image` escala el frame al tamaño del
+    propio label, cada frame cambiaba la pista de tamaño, forzaba un relayout y
+    volvía a escalar el siguiente frame al nuevo tamaño: un bucle que hacía
+    vibrar la ventana durante la reproducción. Devolver pistas neutras (16:9)
+    rompe el bucle sin dejar de ser un ``QLabel`` (``setPixmap``/``pixmap``
+    siguen funcionando) ni tocar el diseño visual.
+    """
+
+    _NEUTRAL_HINT = QSize(640, 360)  # 16:9, por encima del suelo de 220 px.
+
+    def sizeHint(self):
+        return QSize(self._NEUTRAL_HINT)
+
+    def minimumSizeHint(self):
+        return QSize(0, 0)
 
 
 class VideoPanel(Card):
@@ -39,7 +60,7 @@ class VideoPanel(Card):
         self.status_pill = StatusPill("Detenida", tone="off")
         self.add_header_widget(self.status_pill)
 
-        self.video_label = QLabel()
+        self.video_label = VideoSurface()
         self.video_label.setObjectName("VideoSurface")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumHeight(220)
