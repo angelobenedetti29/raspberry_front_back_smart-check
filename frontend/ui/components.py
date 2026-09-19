@@ -5,7 +5,7 @@ de su aspecto y expone una API mínima. Los paneles de ``frontend.ui`` los
 componen y ``frontend/app.py`` cablea sus señales con el comportamiento.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -238,3 +238,37 @@ class ScrollableList(QWidget):
     def hide_empty(self):
         """Oculta el estado vacío porque ya hay elementos que mostrar."""
         self.empty.setVisible(False)
+
+
+class NoWheelFilter(QObject):
+    """Ignora la rueda para que la maneje el contenedor desplazable.
+
+    Qt6 hace que ``QSpinBox``, ``QDoubleSpinBox`` y ``QComboBox`` consuman la
+    rueda siempre, tenga o no el foco, así que al pasar por encima de un control
+    dentro de un ``QScrollArea`` se modifica el valor en vez de desplazar la
+    página. Este filtro descarta el evento en el control: al llamar a
+    ``ignore()`` la propagación hacia el padre continúa y el ``QScrollArea``
+    termina desplazándose.
+    """
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Wheel:
+            # ``ignore()`` es imprescindible: Qt6 marca la rueda como aceptada
+            # antes de entregarla, y sin esto el evento no subiría al padre.
+            event.ignore()
+            return True
+        return super().eventFilter(watched, event)
+
+
+def block_wheel_on_children(parent, *widget_types):
+    """Bloquea la rueda en los hijos de ``parent`` de los tipos indicados.
+
+    Se recorre tipo por tipo porque ``QObject.findChildren`` no acepta tuplas en
+    PySide6. El filtro se parenta al propio widget para que su vida quede atada
+    a la del control; además se fija ``StrongFocus`` para que la rueda tampoco
+    le robe el foco al pasar por encima.
+    """
+    for widget_type in widget_types:
+        for widget in parent.findChildren(widget_type):
+            widget.setFocusPolicy(Qt.StrongFocus)
+            widget.installEventFilter(NoWheelFilter(widget))

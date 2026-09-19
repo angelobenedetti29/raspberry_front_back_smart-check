@@ -1511,6 +1511,42 @@ def test_settings_dialog_accept_blocks_invalid_config(qt_app, monkeypatch):
     dialog.close()
 
 
+def test_settings_dialog_wheel_does_not_change_value_controls(qt_app):
+    """La rueda no debe editar los controles: se reserva para el scroll."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QAbstractSpinBox, QComboBox
+
+    dialog = SettingsDialog(AppConfig())
+
+    controls = []
+    for control_type in (QComboBox, QAbstractSpinBox):
+        controls.extend(dialog.findChildren(control_type))
+    assert controls, "el diálogo debe contener controles de valor"
+
+    for control in controls:
+        is_combo = isinstance(control, QComboBox)
+        before = control.currentIndex() if is_combo else control.value()
+        event = QWheelEvent(
+            QPointF(5, 5),
+            QPointF(5, 5),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.NoButton,
+            Qt.NoModifier,
+            Qt.NoScrollPhase,
+            False,
+        )
+        QApplication.sendEvent(control, event)
+
+        after = control.currentIndex() if is_combo else control.value()
+        assert after == before, f"{type(control).__name__} cambió con la rueda"
+        # El filtro ignora el evento para que lo tome el QScrollArea.
+        assert not event.isAccepted()
+
+    dialog.close()
+
+
 def test_sidebar_settings_button_emits_request(qt_app, monkeypatch):
     app, _calls = _build_hermetic_app(monkeypatch)
 
