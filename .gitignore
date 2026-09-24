@@ -9,6 +9,9 @@ __pycache__/
 # Environment files (secrets). config.json *sí* se versiona.
 .env
 
+# Estado de enrolamiento del nodo (contiene el secret). No versionar.
+/device*.json
+
 # Lock y temporales de la escritura atómica de config.json (raíz)
 config.json.lock
 *.tmp
