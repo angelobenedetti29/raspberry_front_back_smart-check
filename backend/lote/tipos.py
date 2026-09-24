@@ -1,7 +1,7 @@
 """Tipos de dominio del subsistema de lotes (sin HTTP ni hilos).
 
-Espejo en Python de lo que expone el backend Go (ver
-`docs/backend-go-lotes-sector.md`). Todo es inmutable (`frozen=True, slots=True`),
+Espejo en Python de lo que expone el backend Go. Todo es inmutable (`frozen=True,
+slots=True`),
 coherente con el resto de la configuración.
 """
 

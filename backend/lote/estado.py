@@ -2,7 +2,7 @@
 
 El modelo define qué estados puede emitir: si no tiene una clase de "crudo", ese
 estado simplemente no aparece en el lote. La traducción es local, por convención
-de nombre; no hay tabla de alias del backend (ver `docs/backend-go-lotes-sector.md`).
+de nombre; no hay tabla de alias del backend.
 
 No confundir con `estabilizador._es_quemada`: aquello es el latch anti-parpadeo del
 estado "burnt"; esto es la etiqueta de calidad que viaja al backend.

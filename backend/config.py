@@ -134,8 +134,8 @@ class DeviceConfig:
 
 @dataclass(frozen=True, slots=True)
 class LoteConfig:
-    # Coordinación de lotes por sector contra el backend Go (ver
-    # docs/backend-go-lotes-sector.md). Todos los tiempos en segundos.
+    # Coordinación de lotes por sector contra el backend Go. Todos los tiempos en
+    # segundos.
     habilitado: bool
     # Inactividad necesaria para cerrar el lote (salida local y sector servidor).
     cierre_sin_detecciones_segundos: float
