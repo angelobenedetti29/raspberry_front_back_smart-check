@@ -499,7 +499,7 @@ class Configuracion(SeccionBase):
         layout.setContentsMargins(14, 8, 14, 12)
         layout.setSpacing(8)
 
-        rotulo = QLabel("LOTES")
+        rotulo = QLabel("MODELOS")
         rotulo.setProperty("rol", "rotulo")
         layout.addWidget(rotulo)
 

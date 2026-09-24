@@ -69,7 +69,7 @@
             },
             {
                 "model_id": "tostadas-v2",
-                "producto_id": null,
+                "producto_id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
                 "label": "YOLOv11 Tostadas V2 (Custom)",
                 "file": "tostadas_v2.onnx",
                 "names_file": "tostadas_v2.names",
@@ -103,7 +103,7 @@
         "lotes_endpoint": "/api/v1/lotes"
     },
     "device": {
-        "hostname": "smartcheck-rbpi-02",
+        "hostname": "smartcheck-rbpi-03",
         "ping_interval_seconds": 60.0,
         "registration_poll_interval_seconds": 5.0
     },
