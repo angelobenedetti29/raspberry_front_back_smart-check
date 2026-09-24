@@ -8,8 +8,6 @@ Por rol:
 - ENTRADA: abre el lote con el primer `alta`. No reporta estados.
 - SALIDA: traduce los eventos a productos con estado (ok/crudo/quemado), los
   reporta en vivo y cierra el lote por inactividad (o a pedido del operador).
-
-Ver `docs/backend-go-lotes-sector.md`.
 """
 
 from __future__ import annotations
