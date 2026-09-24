@@ -1,5 +1,0 @@
-# Dependencias de desarrollo/tests (no necesarias en runtime).
-# pytest: runner de la suite. httpx: lo requiere fastapi.testclient/TestClient
-# (backend/tests/test_api.py). Versiones sin acotar, igual que el resto.
-pytest
-httpx

@@ -1,93 +1,121 @@
 {
-  "schema_version": 1,
-  "revision": 1,
-  "stream": {
-    "capture": {
-      "source": "0",
-      "width": 1280,
-      "height": 720,
-      "fps": 30,
-      "loop_video": true,
-      "buffer_size": 1,
-      "stable_frames": 30,
-      "read_timeout_seconds": 5.0
+    "stream": {
+        "capture": {
+            "source": "0",
+            "width": 1280,
+            "height": 720,
+            "fps": 30,
+            "loop_video": true,
+            "buffer_size": 1,
+            "stable_frames": 30,
+            "read_timeout_seconds": 5.0
+        },
+        "publisher": {
+            "output_url": "rtsp://smartcheck.duckdns.org:8554/entrada",
+            "bitrate": "2M",
+            "ffmpeg_executable": "ffmpeg",
+            "encoder": "libx264",
+            "preset": "ultrafast",
+            "tune": "zerolatency",
+            "pixel_format": "yuv420p",
+            "rtsp_transport": "tcp",
+            "gop_seconds": 2,
+            "b_frames": 0,
+            "queue_size": 2,
+            "write_timeout": 0.5,
+            "stable_seconds": 5.0
+        },
+        "inference": {
+            "image_size": 640,
+            "confidence_threshold": 0.6,
+            "nms_threshold": 0.4
+        },
+        "preview": {
+            "fps": 15
+        },
+        "storage": {
+            "file": "eventos.jsonl",
+            "queue_size": 128,
+            "max_bytes": 26214400,
+            "max_files": 20,
+            "persist_no_detection_every": 300
+        },
+        "reconnect": {
+            "initial_seconds": 1.0,
+            "max_seconds": 30.0
+        }
     },
-    "publisher": {
-      "output_url": "rtsp://smartcheck.duckdns.org:8554/entrada",
-      "bitrate": "2M",
-      "ffmpeg_executable": "ffmpeg",
-      "encoder": "libx264",
-      "pixel_format": "yuv420p",
-      "gop_seconds": 2,
-      "b_frames": 0,
-      "queue_size": 2,
-      "write_timeout": 0.5,
-      "stable_seconds": 5.0
+    "models": {
+        "default_model_id": "tostadas-v2",
+        "catalog": [
+            {
+                "model_id": "yolo11n-coco",
+                "producto_id": null,
+                "label": "YOLOv11 Original (COCO)",
+                "file": "yolo11n.onnx",
+                "names_file": "class.names",
+                "class_thresholds": {}
+            },
+            {
+                "model_id": "tostadas-v1",
+                "producto_id": null,
+                "label": "YOLOv11 Tostadas V1 (Custom)",
+                "file": "tostadas_v1.onnx",
+                "names_file": "tostadas_v1.names",
+                "class_thresholds": {
+                    "tostada quemada": 0.3,
+                    "tostadas ok": 0.6
+                }
+            },
+            {
+                "model_id": "tostadas-v2",
+                "producto_id": null,
+                "label": "YOLOv11 Tostadas V2 (Custom)",
+                "file": "tostadas_v2.onnx",
+                "names_file": "tostadas_v2.names",
+                "class_thresholds": {
+                    "tcq": 0.3,
+                    "tcok": 0.6
+                }
+            },
+            {
+                "model_id": "yolov8s-hailo",
+                "producto_id": null,
+                "label": "YOLOv8s NPU (Hailo-8L COCO)",
+                "file": "/usr/share/hailo-models/yolov8s_h8l.hef",
+                "names_file": "class.names",
+                "class_thresholds": {}
+            }
+        ]
     },
-    "inference": {
-      "enabled": false,
-      "require_hailo": false,
-      "model_path": null,
-      "labels_path": null,
-      "confidence_threshold": 0.6
+    "paths": {
+        "videos_dir": "multimedia/videos",
+        "models_dir": "models",
+        "data_dir": "data"
     },
-    "storage": {
-      "path": "streaming/data/detections.jsonl",
-      "queue_size": 128,
-      "max_bytes": 10485760,
-      "max_files": 5,
-      "persist_no_detection_every": 10
+    "api": {
+        "base_url": "http://localhost:8080",
+        "registration_requests_endpoint": "/api/v1/registration-requests/",
+        "dispositivos_ping_endpoint": "/api/v1/dispositivos/ping",
+        "dispositivos_nombre_endpoint": "/api/v1/dispositivos/nombre",
+        "productos_endpoint": "/api/v1/productos",
+        "dispositivos_sector_endpoint": "/api/v1/dispositivos/sector",
+        "lotes_endpoint": "/api/v1/lotes"
     },
-    "reconnect": {
-      "initial_seconds": 1.0,
-      "max_seconds": 30.0
+    "device": {
+        "hostname": "smartcheck-rbpi-02",
+        "ping_interval_seconds": 60.0,
+        "registration_poll_interval_seconds": 5.0
+    },
+    "lote": {
+        "habilitado": true,
+        "cierre_sin_detecciones_segundos": 30.0,
+        "flush_segundos": 2.0,
+        "max_eventos_por_envio": 50,
+        "cola_eventos": 512,
+        "max_pendientes": 5000,
+        "refresco_catalogo_segundos": 300.0,
+        "reintento_inicial_segundos": 1.0,
+        "reintento_maximo_segundos": 30.0
     }
-  },
-  "device": {
-    "api_base_url": "",
-    "auth_audience": "",
-    "horno_id": "",
-    "producto_id": "",
-    "ping_interval_seconds": 10.0
-  },
-  "models": {
-    "default_model_id": "yolo11n-coco",
-    "npu_model_id": "yolov8s-hailo",
-    "catalog": [
-      {
-        "model_id": "yolo11n-coco",
-        "label": "YOLOv11 Original (COCO)",
-        "model_path": "ai_training/models/yolo11n.onnx",
-        "names_path": "ai_training/models/class.names"
-      },
-      {
-        "model_id": "tostadas-v1",
-        "label": "YOLOv11 Tostadas V1 (Custom)",
-        "model_path": "ai_training/models/tostadas_v1.onnx",
-        "names_path": "ai_training/models/tostadas_v1.names"
-      },
-      {
-        "model_id": "tostadas-v2",
-        "label": "YOLOv11 Tostadas V2 (Custom)",
-        "model_path": "ai_training/models/tostadas_v2.onnx",
-        "names_path": "ai_training/models/tostadas_v2.names"
-      },
-      {
-        "model_id": "yolov8s-hailo",
-        "label": "YOLOv8s NPU (Hailo-8L COCO)",
-        "model_path": "/usr/share/hailo-models/yolov8s_h8l.hef",
-        "names_path": "ai_training/models/class.names"
-      }
-    ]
-  },
-  "paths": {
-    "videos_dir": "multimedia/videos",
-    "models_dir": "ai_training/models",
-    "data_dir": "streaming/data"
-  },
-  "api": {
-    "host": "127.0.0.1",
-    "port": 8000,
-    "lote_endpoint": "http://localhost:8000/api/lotes/finalizar"
-  }
 }

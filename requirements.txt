@@ -1,9 +1,10 @@
-# Acotar la version: el postprocesamiento del detector ya no depende del
-# comportamiento de cv2.minMaxLoc sobre arrays 1D (cambia entre 4.x y 5.x),
-# pero conviene evitar saltos de version mayor no probados.
-opencv-python>=4.10,<6
-numpy
-PySide6
-requests
-cryptography
-PyJWT
+# Dependencias instalables con pip.
+#
+# En la Raspberry Pi algunas librerías vienen del sistema y NO deben instalarse
+# por pip (romperían el build con GStreamer/Hailo):
+#   - OpenCV (cv2): paquete del sistema (apt) / build propio.
+#   - hailo_platform: paquete de Hailo, a nivel sistema. Si la app corre en un
+#     venv, crearlo con --system-site-packages (ver AGENTS.md).
+PySide6>=6.5
+numpy>=1.24
+psutil>=5.9.6
