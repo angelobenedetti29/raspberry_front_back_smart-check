@@ -354,7 +354,11 @@ class Pipeline:
         try:
             while not self._parar.is_set():
                 self._aplicar_modelo_pendiente()
-                self._frame_nuevo.wait(timeout=0.2)
+                # Sin frame nuevo no se re-infere el anterior: si la captura se
+                # corta, el último frame con detecciones mantendría viva la
+                # inactividad y el lote nunca cerraría.
+                if not self._frame_nuevo.wait(timeout=0.2):
+                    continue
                 self._frame_nuevo.clear()
                 if self._parar.is_set():
                     break

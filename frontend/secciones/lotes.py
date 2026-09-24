@@ -700,6 +700,8 @@ class Lotes(SeccionBase):
         self._boton_finalizar.setText(
             "Finalizar ahora" if es_salida else "Finalizar lote"
         )
+        # Sólo la salida cierra el lote: en la entrada el botón no aplica.
+        self._boton_finalizar.setVisible(es_salida)
 
         if not es_salida:
             self._lote_cierre.hide()

@@ -1,9 +1,9 @@
 {
   "hostname": "smartcheck-rbpi-02",
-  "request_id": "req_MbAu38LiYdtL5u-EBVM94YnfW5d5NzR-GFTDbL4yzF0",
+  "request_id": "req_e-T6gizfpnHDzyrmr1CJR8H7wu-oFxuOsgNoecKznI0",
   "status": "APROBADO",
-  "device_id": "febee862-1d64-44d0-8db2-0213450bce74",
-  "secret": "HlhG4CwS0-mkCrCzvp8I8v-9ej37IwH4h3dvhOPusbY",
-  "created_at": "2026-09-24T01:58:24.721531+00:00",
-  "tipo": "ENTRADA_HORNO"
+  "device_id": "f980a3bf-d2b5-4d78-a8b0-6fc8a6406ce3",
+  "secret": "ucoAb0p1ZUMFDi_1joaaLru89ewT59QhxhH8qcXixho",
+  "created_at": "2026-09-24T01:46:01.073639+00:00",
+  "tipo": "SALIDA_HORNO"
 }
