@@ -1,0 +1,9 @@
+{
+  "hostname": "smartcheck-rbpi-01",
+  "request_id": "req_e-T6gizfpnHDzyrmr1CJR8H7wu-oFxuOsgNoecKznI0",
+  "status": "APROBADO",
+  "device_id": "f980a3bf-d2b5-4d78-a8b0-6fc8a6406ce3",
+  "secret": "ucoAb0p1ZUMFDi_1joaaLru89ewT59QhxhH8qcXixho",
+  "created_at": "2026-09-24T01:46:01.073639+00:00",
+  "tipo": "SALIDA_HORNO"
+}

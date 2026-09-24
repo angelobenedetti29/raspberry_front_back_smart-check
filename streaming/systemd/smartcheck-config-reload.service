@@ -1,6 +1,0 @@
-[Unit]
-Description=Reinicia el pipeline de streaming al cambiar config.json
-
-[Service]
-Type=oneshot
-ExecStart=/bin/systemctl --no-block restart streaming.service

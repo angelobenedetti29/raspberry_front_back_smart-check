@@ -1,0 +1,398 @@
+/* Tema oscuro "grafito de planta" para panel industrial 800x480.
+   Los colores siguen los tokens de frontend/nucleo/tema.py. */
+
+QWidget {
+    color: #ECEFF3;
+    font-family: "Carlito", "DejaVu Sans", sans-serif;
+    font-size: 15px;
+}
+
+QMainWindow,
+QWidget#central,
+QWidget#columnaContenido {
+    background-color: #101418;
+}
+
+/* ---------- Rail de navegación ---------- */
+
+QFrame#rail {
+    background-color: #171C22;
+    border-right: 1px solid #2A323B;
+}
+
+QLabel#marcaTitulo {
+    font-size: 19px;
+    font-weight: 600;
+}
+
+QLabel#marcaSubtitulo {
+    font-size: 12px;
+    color: #94A1AE;
+}
+
+QPushButton#navBoton {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    color: #94A1AE;
+    font-size: 15px;
+    text-align: left;
+    padding-left: 14px;
+    min-height: 56px;
+    max-height: 56px;
+}
+
+QPushButton#navBoton:hover {
+    background-color: #1F262E;
+    color: #ECEFF3;
+}
+
+QPushButton#navBoton:checked {
+    background-color: #123B3A;
+    border-left: 4px solid #3DD6D0;
+    color: #ECEFF3;
+    font-weight: 600;
+    padding-left: 10px;
+}
+
+/* ---------- Encabezado de sección ---------- */
+
+QFrame#encabezadoSeccion {
+    background-color: #101418;
+    border-bottom: 1px solid #2A323B;
+}
+
+QLabel#tituloSeccion {
+    font-size: 22px;
+    font-weight: 600;
+}
+
+QLabel#chipEstado {
+    font-size: 13px;
+    padding: 3px 12px;
+    border: 1px solid #2A323B;
+    border-radius: 11px;
+    background-color: #171C22;
+    color: #94A1AE;
+}
+
+QLabel#chipEstado[nivel="activo"] {
+    color: #3FE07A;
+    border-color: #2A5A3C;
+    background-color: #12241A;
+}
+
+QLabel#chipEstado[nivel="atencion"] {
+    color: #FFB020;
+    border-color: #5A4A22;
+    background-color: #241E12;
+}
+
+QLabel#chipEstado[nivel="inactivo"] {
+    color: #94A1AE;
+    border-color: #2A323B;
+    background-color: #171C22;
+}
+
+QLabel#chipEstado[nivel="sin_dato"] {
+    color: #66727E;
+    border-color: #2A323B;
+    background-color: #171C22;
+}
+
+/* ---------- Barra de estado inferior ---------- */
+
+QFrame#barraEstado {
+    background-color: #171C22;
+    border-top: 1px solid #2A323B;
+}
+
+QLabel[rol="muted"] {
+    color: #94A1AE;
+}
+
+QLabel[mono="true"] {
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+/* ---------- Área de contenido ---------- */
+
+QStackedWidget#stack {
+    background-color: #101418;
+}
+
+QScrollArea#scrollSeccion {
+    border: none;
+    background: transparent;
+}
+
+QScrollArea#scrollSeccion > QWidget#qt_scrollarea_viewport {
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #2A323B;
+    border-radius: 4px;
+    min-height: 28px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+
+/* ---------- Sección Inicio ---------- */
+
+QLabel[rol="display"] {
+    font-size: 28px;
+    font-weight: 600;
+}
+
+QLabel[rol="subtitulo"] {
+    font-size: 16px;
+    color: #94A1AE;
+}
+
+QLabel[rol="meta"] {
+    font-size: 13px;
+    color: #94A1AE;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+QLabel[rol="rotulo"] {
+    font-size: 13px;
+    font-weight: 600;
+    color: #94A1AE;
+}
+
+QFrame#tarjetaAcceso {
+    background-color: #171C22;
+    border: 1px solid #2A323B;
+    border-radius: 10px;
+}
+
+QFrame#tarjetaAcceso:hover {
+    background-color: #1F262E;
+    border-color: #3DD6D0;
+}
+
+QFrame#tarjetaAcceso:pressed {
+    background-color: #123B3A;
+}
+
+QLabel[rol="tileTitulo"] {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QLabel[rol="tileSub"] {
+    font-size: 13px;
+    color: #94A1AE;
+}
+
+QFrame#tarjetaEstado {
+    background-color: #171C22;
+    border: 1px solid #2A323B;
+    border-radius: 10px;
+}
+
+/* ---------- Tarjeta de dispositivo (Inicio) ---------- */
+
+QFrame#tarjetaDispositivo {
+    background-color: #171C22;
+    border: 1px solid #2A323B;
+    border-radius: 10px;
+}
+
+QLabel#hostDispositivo {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ECEFF3;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+QFrame#filaEstado {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #222A33;
+}
+
+QFrame#filaEstado[ultima="true"] {
+    border-bottom: none;
+}
+
+QLabel#etiquetaEstado {
+    font-size: 14px;
+    color: #ECEFF3;
+}
+
+QLabel#detalleEstado {
+    font-size: 13px;
+    color: #94A1AE;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+QLabel#puntoEstado {
+    font-size: 14px;
+}
+
+QLabel#puntoEstado[nivel="activo"] {
+    color: #3FE07A;
+}
+
+QLabel#puntoEstado[nivel="atencion"] {
+    color: #FFB020;
+}
+
+QLabel#puntoEstado[nivel="inactivo"] {
+    color: #66727E;
+}
+
+QLabel#puntoEstado[nivel="sin_dato"] {
+    color: #66727E;
+}
+
+/* ---------- Sección Métricas ---------- */
+
+/* Un envío fallido va en rojo: no es "atención", es un envío que no llegó. */
+QLabel#puntoEstado[nivel="error"] {
+    color: #FF5A5F;
+}
+
+/* Valor destacado: en Métricas el número es el dato, no un detalle secundario. */
+QLabel[rol="valorMetrica"] {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ECEFF3;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+/* Ficha de un envío en la tira de "últimos envíos". */
+QFrame#tileEnvio {
+    background-color: #171C22;
+    border: 1px solid #2A323B;
+    border-radius: 8px;
+}
+
+QFrame#tileEnvio[nivel="activo"] {
+    border-color: #2A5A3C;
+}
+
+QFrame#tileEnvio[nivel="error"] {
+    border-color: #5A2530;
+}
+
+/* ---------- Estados vacíos / placeholders ---------- */
+
+QFrame#estadoVacio {
+    background-color: #141A20;
+    border: 1px dashed #2A323B;
+    border-radius: 10px;
+}
+
+QLabel#vacioTitulo {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLabel#vacioTexto {
+    font-size: 14px;
+    color: #94A1AE;
+}
+
+QLabel#vacioDato {
+    font-size: 13px;
+    color: #3DD6D0;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+/* ---------- Botones de acción ---------- */
+
+QPushButton#botonPrimario {
+    background-color: #123B3A;
+    border: 1px solid #3DD6D0;
+    border-radius: 8px;
+    color: #3DD6D0;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 0px 18px;
+    min-height: 40px;
+}
+
+QPushButton#botonPrimario:hover {
+    background-color: #3DD6D0;
+    border-color: #3DD6D0;
+    color: #101418;
+}
+
+QPushButton#botonPrimario:pressed {
+    background-color: #1F262E;
+    border-color: #3DD6D0;
+    color: #3DD6D0;
+}
+
+QPushButton#botonPrimario:disabled {
+    background-color: #171C22;
+    border-color: #2A323B;
+    color: #66727E;
+}
+
+QPushButton#botonSecundario {
+    background-color: #1F262E;
+    border: 1px solid #2A323B;
+    border-radius: 8px;
+    color: #ECEFF3;
+    font-size: 14px;
+    padding: 0px 18px;
+    min-height: 40px;
+}
+
+QPushButton#botonSecundario:hover {
+    background-color: #1F262E;
+    border-color: #3DD6D0;
+    color: #3DD6D0;
+}
+
+QPushButton#botonSecundario:pressed {
+    background-color: #171C22;
+    border-color: #3DD6D0;
+    color: #ECEFF3;
+}
+
+QPushButton#botonSecundario:disabled {
+    background-color: #171C22;
+    border-color: #2A323B;
+    color: #66727E;
+}
+
+/* ---------- Desplegables ---------- */
+
+QComboBox QAbstractItemView {
+    background-color: #1F262E;
+    border: 1px solid #2A323B;
+    color: #ECEFF3;
+    selection-background-color: #123B3A;
+    selection-color: #ECEFF3;
+    outline: none;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 2px 8px;
+}
+
+QComboBoxPrivateContainer {
+    background-color: #1F262E;
+    border: 1px solid #2A323B;
+}
