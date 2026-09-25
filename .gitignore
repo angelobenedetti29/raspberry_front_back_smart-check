@@ -43,7 +43,9 @@ multimedia/output/
 # Hailo DFC intermediate files, datasets and YOLO training runs
 *.har
 *.npy
-ai_training/runs/
+backend/ai_training/runs/
+backend/ai_training/*.alls
+backend/ai_training/*_nms.json
 
 # Streaming pipeline runtime data
 streaming/data/*

@@ -1,0 +1,15 @@
+# Dependencias de la PC de ENTRENAMIENTO (GPU). NO van a la Raspberry.
+#
+# ultralytics arrastra torch/torchvision. También hacen falta onnx/onnxslim para
+# exportar (opset 11 + simplify) y validar el .onnx.
+#
+# El host de COMPILACIÓN (Linux/WSL2, Python 3.10) *no* necesita estas deps: sólo
+# el Dataflow Compiler de Hailo (que trae su numpy==1.26.4). No mezclar entornos.
+#
+# Toolchain verificado (generó el HEF funcional): yolo11n + export opset 11 +
+# DFC 3.34.0 (Hailo-8L). Cambiar Ultralytics/DFC puede cambiar los nombres de
+# capas del HAR (conv51/54, ...): si `compile_hailo` falla con "Invalid scope
+# name", revalidá los índices con el parser antes de reusar los defaults.
+ultralytics
+onnx
+onnxslim
