@@ -3,9 +3,9 @@
 Sólo funciona donde exista `hailo_platform`, así que el import es perezoso y este
 módulo se carga recién cuando el motor resuelto es NPU.
 
-El NMS y la normalización vienen **compilados dentro del HEF** (ver
-`ai_training/models/tostadas_v2.alls`): acá no se re-implementan y no se divide
-la entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
+El NMS y la normalización vienen **compilados dentro del HEF** (ver el `.alls`
+que genera `backend/ai_training/compilar_hailo.py`): acá no se re-implementan y
+no se divide la entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
 usan `FormatType.FLOAT32`— dejaría un modelo que no detecta nada.
 """
 
@@ -293,7 +293,10 @@ class DetectorYoloHailo:
         rgb = cv2.cvtColor(redimensionado, cv2.COLOR_BGR2RGB)
         entrada = np.expand_dims(rgb, axis=0)
         salidas = montaje.pipeline.infer({montaje.entrada.name: entrada})
-        return salidas[montaje.salida.name]
+        # La salida de un HEF con NMS viene envuelta por batch: el [0] es la
+        # lista de detecciones por clase. Sin desenvolverla, `_validar_salida` la
+        # rechaza y `detectar_frame` leería el batch como si fuera la clase 0.
+        return salidas[montaje.salida.name][0]
 
     def _validar_salida(self) -> None:
         """Corre una inferencia en negro y verifica la forma de la salida.
