@@ -26,20 +26,6 @@ env/
 .vscode/
 .idea/
 
-# Large media files
-multimedia/videos/
-*.mp4
-*.avi
-*.mkv
-
-# Generated inference artifacts
-multimedia/output/
-
-# Model binaries (not versioned: generate them from ai_training/)
-*.onnx
-*.hef
-*.pt
-
 # Hailo DFC intermediate files, datasets and YOLO training runs
 *.har
 *.npy
