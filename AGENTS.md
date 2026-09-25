@@ -3,7 +3,9 @@
 App de escritorio para control de calidad en Raspberry Pi 5 (entorno industrial).
 Frontend PySide6 + backend Python.
 
-Dependencias: `requirements.txt` (pip). En la Raspberry, OpenCV (`cv2`) y
+Dependencias: `requirements.txt` (pip); las de entrenamiento y compilación van
+aparte en `backend/ai_training/requirements-training.txt` y **no** se instalan en
+la Raspberry. En la Raspberry, OpenCV (`cv2`) y
 `hailo_platform` vienen del sistema y **no** se instalan por pip (rompen el build
 con GStreamer/Hailo). Los secretos viven en `.env` (plantilla en `.env.example`),
 nunca en `config.json`. No hay build ni linter configurados: no asumas comandos
@@ -71,7 +73,14 @@ de lint/build.
   backend (`cliente.py`). `LoteService` corre en su hilo; el rol (ENTRADA abre el
   lote con el primer `alta`, SALIDA reporta y cierra por inactividad) sale de
   `TipoDispositivo`.
-- `backend/ai_training/` — bajo demanda; `run.py` no lo arranca.
+- `backend/ai_training/` — herramientas de entrenamiento/exportación/compilación,
+  **bajo demanda**: `run.py` no lo arranca y la app no lo importa. `rutas.py`
+  centraliza ROOT/config; `calibrar.py` arma `calib_dataset.npy`; `entrenar.py`
+  entrena y exporta a ONNX + `.names`; `compilar_hailo.py` compila ONNX → HEF con
+  el DFC; `validar.py` valida con el detector real del pipeline. Los
+  `scripts/*.py` son los CLIs (`python -m backend.ai_training.scripts.<x>`, con la
+  raíz del repo como CWD). Guía y flujo completo en
+  `backend/ai_training/compile_instructions.md`.
 - `frontend/nucleo/` — los `controlador*.py` son los puertos que consumen las
   secciones y los `adaptador*.py` los únicos que importan `backend.*`
   (`adaptador.py` → `backend.streaming`, `adaptador_config.py` → `backend.config`,
@@ -171,3 +180,5 @@ el stream publicado a `stream.capture.fps` (30).
   `tests/frontend` (vacías) y el `.gitignore` contempla `.pytest_cache/`/`.ruff_cache/`,
   pero no hay archivos de test ni config de pytest/ruff.
 - La ruta NPU y la captura real no están verificadas en dev (ver la sección anterior).
+- El entrenamiento real (Ultralytics/torch) y la compilación HEF (DFC) tampoco son
+  verificables en dev: ver `backend/ai_training/compile_instructions.md`.
