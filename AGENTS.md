@@ -7,9 +7,9 @@ Dependencias: `requirements.txt` (pip); las de entrenamiento y compilación van
 aparte en `backend/ai_training/requirements-training.txt` y **no** se instalan en
 la Raspberry. En la Raspberry, OpenCV (`cv2`) y
 `hailo_platform` vienen del sistema y **no** se instalan por pip (rompen el build
-con GStreamer/Hailo). Los secretos viven en `.env` (plantilla en `.env.example`),
-nunca en `config.json`. No hay build ni linter configurados: no asumas comandos
-de lint/build.
+con GStreamer/Hailo). El único secreto (el `secret` del dispositivo) no vive en
+`config.json` sino en `device.json` (ignorado por git). No hay build ni linter
+configurados: no asumas comandos de lint/build.
 
 ## Reglas para agentes
 
@@ -23,8 +23,9 @@ de lint/build.
 
 ## Ejecutar
 
-- Instalar dependencias: `pip install -r requirements.txt`; copiar `.env.example`
-  a `.env` y completar (código de enrolamiento y carpeta de identidad).
+- Instalar dependencias: `pip install -r requirements.txt`. El alta del
+  dispositivo se dispara desde la UI; el `secret` que devuelve el backend queda
+  en `device.json`.
 - `python run.py` — entrypoint único. Carga `config.json`, arranca los cuatro
   servicios de backend en hilos (`StreamingService`, `DeviceService`,
   `MonitorService`, `LoteService`) y corre la GUI en el hilo principal (Qt lo
@@ -108,9 +109,8 @@ de lint/build.
 
 - `config.json` vive en la raíz y se versiona. Las rutas relativas se resuelven contra
   el ROOT del proyecto (derivado de `backend/config.py`), **nunca** contra el CWD.
-- Los secretos **no** van acá: el código de enrolamiento y la carpeta de identidad
-  salen de `.env`, y el secret que devuelve el backend se guarda en `device*.json`
-  (ambos ignorados por git).
+- El `secret` del dispositivo **no** va acá: lo devuelve el backend al aprobar el
+  alta y se guarda en `device*.json` (ignorado por git).
 - No dupliques rutas en el JSON: el loader compone `stream.storage.path` (=
   `paths.data_dir` + `stream.storage.file`) y `catalog[].model_path/names_path`.
   `api.base_url` es sólo esquema + host + puerto (sin `/` final); las rutas de los
