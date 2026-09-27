@@ -7,6 +7,11 @@ El NMS y la normalización vienen **compilados dentro del HEF** (ver el `.alls`
 que genera `backend/ai_training/compilar_hailo.py`): acá no se re-implementan y
 no se divide la entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
 usan `FormatType.FLOAT32`— dejaría un modelo que no detecta nada.
+
+El NMS del HEF es **por clase**: no suprime entre clases. Para que un mismo objeto
+no salga a la vez con dos etiquetas contradictorias (p. ej. TCQ y TCOK) se aplica
+además un NMS class-agnostic aguas arriba, igual que hace el detector de CPU. La
+nota sobre no dividir por 255 sigue vigente.
 """
 
 from __future__ import annotations
@@ -175,8 +180,9 @@ class DispositivoHailo:
 class DetectorYoloHailo:
     """Detector YOLO que corre en la NPU Hailo.
 
-    No recibe `nms_threshold` a propósito: el NMS está compilado en el HEF y no
-    hay nada que configurar del lado de Python.
+    Recibe `nms_threshold` para el NMS class-agnostic que se aplica aguas arriba
+    del NMS por clase que ya trae el HEF, y evitar que un mismo objeto aparezca
+    dos veces con clases contradictorias (p. ej. TCQ y TCOK).
 
     No es seguro para uso concurrente; el dueño (el hilo de inferencia del
     pipeline) serializa las llamadas y también la liberación.
@@ -191,6 +197,7 @@ class DetectorYoloHailo:
         *,
         image_size: int,
         confidence_threshold: float,
+        nms_threshold: float,
         class_thresholds: Mapping[str, float],
     ) -> None:
         modelo = Path(modelo_path)
@@ -211,6 +218,7 @@ class DetectorYoloHailo:
         self.nombres = etiquetas
         self.image_size = int(image_size)
         self.confidence_threshold = float(confidence_threshold)
+        self.nms_threshold = float(nms_threshold)
         self.class_thresholds: Mapping[str, float] = dict(class_thresholds)
         self._lock = threading.Lock()
         self._montaje: MontajeHailo | None = None
@@ -231,14 +239,21 @@ class DetectorYoloHailo:
         )
 
     def detectar_frame(self, frame: np.ndarray) -> list[ResultadoDeteccion]:
-        """Detecta objetos en un frame BGR. Devuelve [] si el detector fue liberado."""
+        """Detecta objetos en un frame BGR. Devuelve [] si el detector fue liberado.
+
+        El HEF ya aplica su NMS por clase; acá se agrega un NMS class-agnostic para
+        que un mismo objeto no aparezca dos veces con clases contradictorias (p.
+        ej. TCQ y TCOK), coherente con el detector de CPU.
+        """
         with self._lock:
             if self._montaje is None or frame is None or frame.size == 0:
                 return []
             alto, ancho = frame.shape[:2]
             crudas = self._inferir_crudo(frame)
 
-        resultados: list[ResultadoDeteccion] = []
+        cajas: list[list[int]] = []
+        confianzas: list[float] = []
+        etiquetas: list[str] = []
         for clase_id, filas in enumerate(crudas):
             etiqueta = self._etiqueta(clase_id)
             umbral = self._umbral(etiqueta)
@@ -250,18 +265,36 @@ class DetectorYoloHailo:
                     continue
                 # Las coordenadas vienen normalizadas a [0, 1] sobre la entrada
                 # del modelo, no en píxeles del frame.
-                resultados.append(
-                    ResultadoDeteccion(
-                        label=etiqueta,
-                        confianza=confianza,
-                        bbox=(
-                            int(xmin * ancho),
-                            int(ymin * alto),
-                            int((xmax - xmin) * ancho),
-                            int((ymax - ymin) * alto),
-                        ),
-                    )
+                cajas.append(
+                    [
+                        int(xmin * ancho),
+                        int(ymin * alto),
+                        int((xmax - xmin) * ancho),
+                        int((ymax - ymin) * alto),
+                    ]
                 )
+                confianzas.append(confianza)
+                etiquetas.append(etiqueta)
+
+        if not cajas:
+            return []
+
+        indices = cv2.dnn.NMSBoxes(
+            cajas, confianzas, self._umbral_minimo(), self.nms_threshold
+        )
+        resultados: list[ResultadoDeteccion] = []
+        for indice in indices:  # type: ignore[union-attr]
+            # OpenCV 4.x devolvía índices anidados ([[i], [j]]) y 5.x planos.
+            valor = indice[0] if isinstance(indice, (list, np.ndarray)) else indice
+            i = int(valor)
+            left, top, caja_ancho, caja_alto = cajas[i]
+            resultados.append(
+                ResultadoDeteccion(
+                    label=etiquetas[i],
+                    confianza=confianzas[i],
+                    bbox=(left, top, caja_ancho, caja_alto),
+                )
+            )
         return resultados
 
     def liberar(self) -> None:
@@ -337,3 +370,13 @@ class DetectorYoloHailo:
     def _umbral(self, etiqueta: str) -> float:
         """Umbral de la clase; las claves de config están en minúscula."""
         return self.class_thresholds.get(etiqueta.lower(), self.confidence_threshold)
+
+    def _umbral_minimo(self) -> float:
+        """Menor umbral por clase.
+
+        El pre-filtro del NMS usa este valor y no el global: filtrar con un umbral
+        más alto descartaría cajas válidas antes de que el NMS pueda decidir.
+        """
+        if not self.class_thresholds:
+            return self.confidence_threshold
+        return min(self.class_thresholds.values())
