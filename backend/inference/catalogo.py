@@ -143,6 +143,7 @@ def construir_detector(entrada: ModelEntry, inferencia: InferenceConfig) -> Dete
             entrada.names_path,
             image_size=inferencia.image_size,
             confidence_threshold=inferencia.confidence_threshold,
+            nms_threshold=inferencia.nms_threshold,
             class_thresholds=entrada.class_thresholds,
         )
 
