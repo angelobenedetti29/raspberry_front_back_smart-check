@@ -21,6 +21,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from backend.inference.base import DetectorYoloBase
 from backend.inference.detector import (
     ErrorCargaModelo,
     MotorInferencia,
@@ -33,12 +34,6 @@ logger = logging.getLogger(__name__)
 _COLUMNAS_POST_NMS = 5
 _FORMATO_ENTRADA = "UINT8"
 _FORMATO_SALIDA = "FLOAT32"
-
-
-def _leer_nombres(path: Path) -> tuple[str, ...]:
-    """Lee un archivo `.names`: una clase por línea, ignorando líneas vacías."""
-    contenido = path.read_text(encoding="utf-8")
-    return tuple(linea.strip() for linea in contenido.splitlines() if linea.strip())
 
 
 def _soltar_grupo(grupo: Any) -> None:
@@ -172,7 +167,7 @@ class DispositivoHailo:
             return MontajeHailo(hef, grupo, entradas[0], salidas[0], pipeline, pila)
 
 
-class DetectorYoloHailo:
+class DetectorYoloHailo(DetectorYoloBase):
     """Detector YOLO que corre en la NPU Hailo.
 
     No recibe `nms_threshold` a propósito: el NMS está compilado en el HEF y no
@@ -193,29 +188,18 @@ class DetectorYoloHailo:
         confidence_threshold: float,
         class_thresholds: Mapping[str, float],
     ) -> None:
-        modelo = Path(modelo_path)
-        nombres = Path(nombres_path)
+        super().__init__(
+            modelo_path,
+            nombres_path,
+            image_size=image_size,
+            confidence_threshold=confidence_threshold,
+            class_thresholds=class_thresholds,
+        )
 
-        if not modelo.is_file():
-            raise ErrorCargaModelo(f"No se encontró el modelo: {modelo}")
-        if not nombres.is_file():
-            raise ErrorCargaModelo(
-                f"No se encontró el archivo de nombres de clase: {nombres}"
-            )
-
-        etiquetas = _leer_nombres(nombres)
-        if not etiquetas:
-            raise ErrorCargaModelo(f"El archivo de nombres está vacío: {nombres}")
-
-        self.modelo_path = modelo
-        self.nombres = etiquetas
-        self.image_size = int(image_size)
-        self.confidence_threshold = float(confidence_threshold)
-        self.class_thresholds: Mapping[str, float] = dict(class_thresholds)
         self._lock = threading.Lock()
         self._montaje: MontajeHailo | None = None
 
-        self._montaje = DispositivoHailo.obtener().montar(modelo)
+        self._montaje = DispositivoHailo.obtener().montar(self.modelo_path)
         try:
             self._validar_salida()
         except ErrorCargaModelo:
@@ -224,8 +208,8 @@ class DetectorYoloHailo:
 
         logger.info(
             "Detector Hailo cargado: %s (%d clases, entrada %dx%d)",
-            modelo.name,
-            len(etiquetas),
+            self.modelo_path.name,
+            len(self.nombres),
             self.image_size,
             self.image_size,
         )
@@ -241,12 +225,12 @@ class DetectorYoloHailo:
         resultados: list[ResultadoDeteccion] = []
         for clase_id, filas in enumerate(crudas):
             etiqueta = self._etiqueta(clase_id)
-            umbral = self._umbral(etiqueta)
+            umbral = self._umbral_de_indice(clase_id)
             for fila in filas:
                 ymin, xmin, ymax, xmax, confianza = (
                     float(valor) for valor in fila[:_COLUMNAS_POST_NMS]
                 )
-                if confianza < umbral:
+                if confianza <= umbral:
                     continue
                 # Las coordenadas vienen normalizadas a [0, 1] sobre la entrada
                 # del modelo, no en píxeles del frame.
@@ -327,13 +311,3 @@ class DetectorYoloHailo:
                 len(crudas),
                 len(self.nombres),
             )
-
-    def _etiqueta(self, clase_id: int) -> str:
-        """Nombre de la clase, con reserva explícita si el `.names` no la cubre."""
-        if 0 <= clase_id < len(self.nombres):
-            return self.nombres[clase_id]
-        return f"class_{clase_id}"
-
-    def _umbral(self, etiqueta: str) -> float:
-        """Umbral de la clase; las claves de config están en minúscula."""
-        return self.class_thresholds.get(etiqueta.lower(), self.confidence_threshold)

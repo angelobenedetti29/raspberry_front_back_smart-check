@@ -11,6 +11,10 @@ configuración en lugar de un mapa hardcodeado.
 El NMS es class-agnostic a propósito, como en la referencia: para tostadas un
 objeto es una sola clase, así que suprimir entre clases evita que la misma
 tostada salga dos veces con etiquetas contradictorias (p. ej. TCQ y TCOK).
+
+El postprocesado resuelve el tensor de salida completo con numpy y no fila por
+fila: recorrer en Python las ~8400 predicciones de un YOLO a 640 era el costo
+dominante del paso y retenía el GIL, compitiendo con el lazo de producción.
 """
 
 from __future__ import annotations
@@ -18,19 +22,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
+from backend.inference.base import DetectorYoloBase
 from backend.inference.detector import (
     ErrorCargaModelo,
     MotorInferencia,
     ResultadoDeteccion,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +39,7 @@ logger = logging.getLogger(__name__)
 _ATRIBUTOS_BASE = 4
 
 
-def _leer_nombres(path: Path) -> tuple[str, ...]:
-    """Lee un archivo `.names`: una clase por línea, ignorando líneas vacías."""
-    contenido = path.read_text(encoding="utf-8")
-    return tuple(linea.strip() for linea in contenido.splitlines() if linea.strip())
-
-
-class DetectorYoloOpenCV:
+class DetectorYoloOpenCV(DetectorYoloBase):
     """Detector YOLO sobre ONNX en CPU.
 
     No es seguro para uso concurrente; el dueño del detector (el hilo de
@@ -63,39 +58,36 @@ class DetectorYoloOpenCV:
         nms_threshold: float,
         class_thresholds: Mapping[str, float],
     ) -> None:
-        modelo = Path(modelo_path)
-        nombres = Path(nombres_path)
-
-        if not modelo.is_file():
-            raise ErrorCargaModelo(f"No se encontró el modelo: {modelo}")
-        if not nombres.is_file():
-            # No se cae a nombres por defecto a propósito: rotular todas las
-            # clases con nombres ajenos al modelo es peor que no arrancar.
-            raise ErrorCargaModelo(
-                f"No se encontró el archivo de nombres de clase: {nombres}"
-            )
-
-        etiquetas = _leer_nombres(nombres)
-        if not etiquetas:
-            raise ErrorCargaModelo(f"El archivo de nombres está vacío: {nombres}")
+        super().__init__(
+            modelo_path,
+            nombres_path,
+            image_size=image_size,
+            confidence_threshold=confidence_threshold,
+            class_thresholds=class_thresholds,
+        )
 
         try:
-            net = cv2.dnn.readNet(str(modelo))
+            net = cv2.dnn.readNet(str(self.modelo_path))
         except cv2.error as exc:
-            raise ErrorCargaModelo(f"No se pudo cargar el modelo {modelo}: {exc}") from exc
+            raise ErrorCargaModelo(
+                f"No se pudo cargar el modelo {self.modelo_path}: {exc}"
+            ) from exc
 
-        self.modelo_path = modelo
-        self.nombres = etiquetas
-        self.image_size = int(image_size)
-        self.confidence_threshold = float(confidence_threshold)
         self.nms_threshold = float(nms_threshold)
-        self.class_thresholds: Mapping[str, float] = dict(class_thresholds)
+        # Tabla de umbrales por índice de clase, para resolver el filtro de todo
+        # el tensor de una vez. Sin clases declaradas no hay tabla y se usa el
+        # global para todas.
+        self._tabla_umbrales = (
+            np.asarray(self._umbrales_por_clase, dtype=np.float32)
+            if self._umbrales_por_clase
+            else None
+        )
         self._net: cv2.dnn.Net | None = net
 
         logger.info(
             "Detector ONNX cargado: %s (%d clases, entrada %dx%d)",
-            modelo.name,
-            len(etiquetas),
+            self.modelo_path.name,
+            len(self.nombres),
             self.image_size,
             self.image_size,
         )
@@ -116,48 +108,43 @@ class DetectorYoloOpenCV:
         )
         net.setInput(blob)
         preds = net.forward()
-        # (1, 4 + clases, N) -> (1, N, 4 + clases)
-        preds = preds.transpose((0, 2, 1))
+        # (1, 4 + clases, N) -> (N, 4 + clases)
+        preds = preds[0].transpose()
+
+        xywh = preds[:, :_ATRIBUTOS_BASE]
+        scores = preds[:, _ATRIBUTOS_BASE:]
+        # np.argmax y no cv2.minMaxLoc: en OpenCV 5 el índice del pico cambia de
+        # eje según cómo se convierta el array a Mat. El detector de referencia
+        # usaba minMaxLoc y terminaba etiquetando toda tostada como quemada.
+        clases = scores.argmax(axis=1)
+        confianzas = scores[np.arange(scores.shape[0]), clases]
+
+        seleccion = confianzas > self._umbrales(clases)
+        if not seleccion.any():
+            return []
+
+        xywh = xywh[seleccion]
+        confianzas = confianzas[seleccion]
+        clases = clases[seleccion]
 
         factor_x = ancho / self.image_size
         factor_y = alto / self.image_size
 
-        cajas: list[list[int]] = []
-        confianzas: list[float] = []
-        clases: list[int] = []
-
-        for fila in preds[0]:
-            scores = fila[_ATRIBUTOS_BASE:]
-            # np.argmax y no cv2.minMaxLoc: en OpenCV 5 el índice del pico cambia
-            # de eje según cómo se convierta el array a Mat. El detector de
-            # referencia usaba minMaxLoc y terminaba etiquetando toda tostada
-            # como quemada.
-            clase_id = int(np.argmax(scores))
-            confianza = float(scores[clase_id])
-            if confianza <= self._umbral(clase_id):
-                continue
-
-            # La salida trae (centro_x, centro_y, ancho, alto) en el espacio del
-            # modelo, sin normalizar.
-            centro_x, centro_y, caja_ancho, caja_alto = (float(v) for v in fila[:_ATRIBUTOS_BASE])
-            cajas.append(
-                [
-                    int((centro_x - 0.5 * caja_ancho) * factor_x),
-                    int((centro_y - 0.5 * caja_alto) * factor_y),
-                    int(caja_ancho * factor_x),
-                    int(caja_alto * factor_y),
-                ]
+        # La salida trae (centro_x, centro_y, ancho, alto) en el espacio del
+        # modelo, sin normalizar.
+        cajas = np.column_stack(
+            (
+                (xywh[:, 0] - 0.5 * xywh[:, 2]) * factor_x,
+                (xywh[:, 1] - 0.5 * xywh[:, 3]) * factor_y,
+                xywh[:, 2] * factor_x,
+                xywh[:, 3] * factor_y,
             )
-            confianzas.append(confianza)
-            clases.append(clase_id)
-
-        if not cajas:
-            return []
+        ).astype(int).tolist()
 
         indices = cv2.dnn.NMSBoxes(
-            cajas, confianzas, self._umbral_minimo(), self.nms_threshold
+            cajas, confianzas.tolist(), self._umbral_minimo(), self.nms_threshold
         )
-        return self._armar(indices, cajas, confianzas, clases)
+        return self._armar(indices, cajas, confianzas.tolist(), clases.tolist())
 
     def liberar(self) -> None:
         """Suelta la red. Idempotente; tras liberar, `detectar_frame` devuelve []."""
@@ -165,26 +152,14 @@ class DetectorYoloOpenCV:
 
     # --- internos ---
 
-    def _etiqueta(self, clase_id: int) -> str:
-        """Nombre de la clase, con reserva explícita si el `.names` no la cubre."""
-        if 0 <= clase_id < len(self.nombres):
-            return self.nombres[clase_id]
-        return f"class_{clase_id}"
-
-    def _umbral(self, clase_id: int) -> float:
-        """Umbral de la clase; las claves de config están en minúscula."""
-        clave = self._etiqueta(clase_id).lower()
-        return self.class_thresholds.get(clave, self.confidence_threshold)
-
-    def _umbral_minimo(self) -> float:
-        """Menor umbral por clase.
-
-        El pre-filtro de NMS usa este valor y no el global: filtrar con un umbral
-        más alto descartaría cajas válidas antes de que el NMS pueda decidir.
-        """
-        if not self.class_thresholds:
-            return self.confidence_threshold
-        return min(self.class_thresholds.values())
+    def _umbrales(self, clases: np.ndarray) -> np.ndarray:
+        """Umbral efectivo de cada fila según su clase (vectorizado)."""
+        umbrales = np.full(clases.shape, self.confidence_threshold, dtype=np.float32)
+        tabla = self._tabla_umbrales
+        if tabla is not None:
+            dentro = clases < tabla.size
+            umbrales[dentro] = tabla[clases[dentro]]
+        return umbrales
 
     def _armar(
         self,
