@@ -1,0 +1,14 @@
+[Error] Unsupported release - 26.04. Only 20.04 22.04 24.04 are supported.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Error] Requirement python3-tk not found.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Error] Requirement graphviz not found.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Error] Requirement libgraphviz-dev not found.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Error] Requirement python3.10-dev not found.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Error] The SDK requires 16 GB of RAM (32 GB recommended), while this system has only 9 GB.
+[Error] See full log: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/.install_logs/hailo_installation_log_2026.09.28T04:03:05.log
+[Info] No GPU connected.
+[Info] No response - exitting.

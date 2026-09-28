@@ -21,6 +21,10 @@ config.json.lock
 .venv/
 venv/
 env/
+.venv_ia
+.venv_wsl
+venv_ia/
+venv_wsl/
 
 # IDE files
 .vscode/
