@@ -1,0 +1,18 @@
+HAILO System requirements check - log
+
+ Missing package: python3-tk
+ Missing package: graphviz
+ Missing package: libgraphviz-dev
+ Missing package: python3.10-dev
+X |  Insufficient RAM: 16 GB of RAM are required, only 9 GB available.
+V |  CPU architecture x86_64 is supported.
+V |  Required avx CPU flag is supported.
+  |  GPU Requirements are not checked- no GPU connected.
+V |  Environment variable CC is unset.
+V |  Environment variable CXX is unset.
+V |  Environment variable LD is unset.
+V |  Environment variable AS is unset.
+V |  Environment variable AR is unset.
+V |  Environment variable LN is unset.
+V |  Environment variable DUMP is unset.
+V |  Environment variable CPY is unset.
