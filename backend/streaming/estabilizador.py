@@ -13,6 +13,9 @@ La solución copia la semántica del `ToastTracker` de la referencia:
   centros. El matching es codicioso y una a una.
 - Confirmación de "quemada" recién tras `_FRAMES_CONFIRMAR_QUEMADA` frames
   consecutivos con una etiqueta quemada; una detección OK corta la racha.
+- Confirmación de la pista recién tras `_FRAMES_CONFIRMAR_PISTA` frames
+  consecutivos vistos: hasta entonces es tentativa, no se dibuja ni cuenta como
+  producto. Una pista tentativa que se pierde se descarta en silencio.
 - Una vez quemada, la pista NO vuelve a OK (latch anti-parpadeo).
 - La pista sigue reportándose unos frames perdidos antes de desaparecer.
 
@@ -43,6 +46,10 @@ _FRAMES_VISIBLE_PERDIDA = 3
 _FRAMES_MAX_PERDIDA = 10
 # Frames consecutivos con etiqueta quemada para confirmar el estado "burnt".
 _FRAMES_CONFIRMAR_QUEMADA = 3
+# Frames consecutivos en los que una pista debe verse para confirmarse y emitir
+# `alta`. Antes es tentativa: un falso positivo de un frame no abre lote ni
+# cuenta como producto.
+_FRAMES_CONFIRMAR_PISTA = 2
 
 
 def _es_quemada(label: str) -> bool:
@@ -79,6 +86,8 @@ class _Pista:
     estado: str = "ok"
     racha_quemada: int = 0
     frames_desde_visto: int = 0
+    racha_visto: int = 1
+    confirmada: bool = False
 
 
 class EstabilizadorDetecciones:
@@ -128,10 +137,14 @@ class EstabilizadorDetecciones:
             pistas_asignadas.add(indice_pista)
             detecciones_usadas.add(indice_deteccion)
             self._actualizar(self._pistas[indice_pista], crudas[indice_deteccion])
+            self._confirmar_pista(self._pistas[indice_pista])
 
         for indice_pista, pista in enumerate(self._pistas):
             if indice_pista not in pistas_asignadas:
                 pista.frames_desde_visto += 1
+                # La confirmación exige frames consecutivos: una pista que
+                # parpadea no debe confirmarse.
+                pista.racha_visto = 0
 
         for indice_deteccion, deteccion in enumerate(crudas):
             if indice_deteccion in detecciones_usadas:
@@ -145,17 +158,20 @@ class EstabilizadorDetecciones:
             )
             self._siguiente_id += 1
             self._confirmar_quemada(pista)
-            self._eventos.append(
-                EventoPista("alta", pista.id, pista.label, pista.confianza, pista.bbox)
-            )
+            self._confirmar_pista(pista)
             self._pistas.append(pista)
 
         vivas: list[_Pista] = []
         for pista in self._pistas:
             if pista.frames_desde_visto > _FRAMES_MAX_PERDIDA:
-                self._eventos.append(
-                    EventoPista("baja", pista.id, pista.label, pista.confianza, pista.bbox)
-                )
+                # Sólo las confirmadas se cierran con `baja`; una tentativa que se
+                # pierde se descarta en silencio.
+                if pista.confirmada:
+                    self._eventos.append(
+                        EventoPista(
+                            "baja", pista.id, pista.label, pista.confianza, pista.bbox
+                        )
+                    )
             else:
                 vivas.append(pista)
         self._pistas = vivas
@@ -167,7 +183,7 @@ class EstabilizadorDetecciones:
                 bbox=pista.bbox,
             )
             for pista in self._pistas
-            if pista.frames_desde_visto <= _FRAMES_VISIBLE_PERDIDA
+            if pista.confirmada and pista.frames_desde_visto <= _FRAMES_VISIBLE_PERDIDA
         ]
 
     def eventos(self) -> list[EventoPista]:
@@ -184,9 +200,12 @@ class EstabilizadorDetecciones:
         Los eventos quedan pendientes para el próximo `eventos()`.
         """
         for pista in self._pistas:
-            self._eventos.append(
-                EventoPista("baja", pista.id, pista.label, pista.confianza, pista.bbox)
-            )
+            if pista.confirmada:
+                self._eventos.append(
+                    EventoPista(
+                        "baja", pista.id, pista.label, pista.confianza, pista.bbox
+                    )
+                )
         self._pistas.clear()
         self._siguiente_id = 1
 
@@ -195,6 +214,7 @@ class EstabilizadorDetecciones:
         pista.bbox = deteccion.bbox
         pista.confianza = deteccion.confianza
         pista.frames_desde_visto = 0
+        pista.racha_visto += 1
 
         if pista.estado == "burnt":
             # Una tostada quemada no se des-quema: la etiqueta queda latcheada.
@@ -237,6 +257,19 @@ class EstabilizadorDetecciones:
             pista.estado = "burnt"
             return True
         return False
+
+    def _confirmar_pista(self, pista: _Pista) -> None:
+        """Confirma la pista y emite ``alta`` una sola vez.
+
+        La pista se confirma recién tras `_FRAMES_CONFIRMAR_PISTA` frames
+        consecutivos vistos. Antes de eso es tentativa: no se dibuja, no abre
+        lote y, si se pierde, no se reporta.
+        """
+        if not pista.confirmada and pista.racha_visto >= _FRAMES_CONFIRMAR_PISTA:
+            pista.confirmada = True
+            self._eventos.append(
+                EventoPista("alta", pista.id, pista.label, pista.confianza, pista.bbox)
+            )
 
     @staticmethod
     def _iou(

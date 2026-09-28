@@ -15,6 +15,9 @@ tostada salga dos veces con etiquetas contradictorias (p. ej. TCQ y TCOK).
 El postprocesado resuelve el tensor de salida completo con numpy y no fila por
 fila: recorrer en Python las ~8400 predicciones de un YOLO a 640 era el costo
 dominante del paso y retenía el GIL, compitiendo con el lazo de producción.
+
+El preprocesado usa letterbox (ver `preprocesado.py`) en vez de deformar a
+cuadrado, para que el modelo vea la misma geometría que en el entrenamiento.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from backend.inference.detector import (
     MotorInferencia,
     ResultadoDeteccion,
 )
+from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +102,9 @@ class DetectorYoloOpenCV(DetectorYoloBase):
         if net is None or frame is None or frame.size == 0:
             return []
 
-        alto, ancho = frame.shape[:2]
+        lienzo, escala, pad_x, pad_y = letterbox(frame, self.image_size)
         blob = cv2.dnn.blobFromImage(
-            frame,
+            lienzo,
             1 / 255.0,
             (self.image_size, self.image_size),
             swapRB=True,
@@ -127,17 +131,15 @@ class DetectorYoloOpenCV(DetectorYoloBase):
         confianzas = confianzas[seleccion]
         clases = clases[seleccion]
 
-        factor_x = ancho / self.image_size
-        factor_y = alto / self.image_size
-
         # La salida trae (centro_x, centro_y, ancho, alto) en el espacio del
-        # modelo, sin normalizar.
+        # modelo letterboxeado: se quita el relleno y se divide por la escala
+        # uniforme para volver a píxeles del frame original.
         cajas = np.column_stack(
             (
-                (xywh[:, 0] - 0.5 * xywh[:, 2]) * factor_x,
-                (xywh[:, 1] - 0.5 * xywh[:, 3]) * factor_y,
-                xywh[:, 2] * factor_x,
-                xywh[:, 3] * factor_y,
+                (xywh[:, 0] - 0.5 * xywh[:, 2] - pad_x) / escala,
+                (xywh[:, 1] - 0.5 * xywh[:, 3] - pad_y) / escala,
+                xywh[:, 2] / escala,
+                xywh[:, 3] / escala,
             )
         ).astype(int).tolist()
 

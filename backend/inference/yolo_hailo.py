@@ -27,6 +27,7 @@ from backend.inference.detector import (
     MotorInferencia,
     ResultadoDeteccion,
 )
+from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
 
@@ -219,8 +220,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         with self._lock:
             if self._montaje is None or frame is None or frame.size == 0:
                 return []
-            alto, ancho = frame.shape[:2]
-            crudas = self._inferir_crudo(frame)
+            crudas, escala, pad_x, pad_y = self._inferir_crudo(frame)
 
         resultados: list[ResultadoDeteccion] = []
         for clase_id, filas in enumerate(crudas):
@@ -233,17 +233,17 @@ class DetectorYoloHailo(DetectorYoloBase):
                 if confianza <= umbral:
                     continue
                 # Las coordenadas vienen normalizadas a [0, 1] sobre la entrada
-                # del modelo, no en píxeles del frame.
+                # letterboxeada: a píxeles del input, se quita el relleno y se
+                # divide por la escala para volver al frame original.
+                x1 = (xmin * self.image_size - pad_x) / escala
+                y1 = (ymin * self.image_size - pad_y) / escala
+                x2 = (xmax * self.image_size - pad_x) / escala
+                y2 = (ymax * self.image_size - pad_y) / escala
                 resultados.append(
                     ResultadoDeteccion(
                         label=etiqueta,
                         confianza=confianza,
-                        bbox=(
-                            int(xmin * ancho),
-                            int(ymin * alto),
-                            int((xmax - xmin) * ancho),
-                            int((ymax - ymin) * alto),
-                        ),
+                        bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
                     )
                 )
         return resultados
@@ -264,23 +264,21 @@ class DetectorYoloHailo(DetectorYoloBase):
         if montaje is not None:
             montaje.cerrar()
 
-    def _inferir_crudo(self, frame: np.ndarray) -> Any:
-        """Corre la NPU y devuelve el tensor crudo de salida."""
+    def _inferir_crudo(
+        self, frame: np.ndarray
+    ) -> tuple[Any, float, int, int]:
+        """Corre la NPU y devuelve el tensor crudo y los parámetros del letterbox."""
         montaje = self._montaje
         if montaje is None:
-            return []
-        redimensionado = cv2.resize(
-            frame,
-            (self.image_size, self.image_size),
-            interpolation=cv2.INTER_NEAREST,
-        )
-        rgb = cv2.cvtColor(redimensionado, cv2.COLOR_BGR2RGB)
+            return [], 1.0, 0, 0
+        lienzo, escala, pad_x, pad_y = letterbox(frame, self.image_size)
+        rgb = cv2.cvtColor(lienzo, cv2.COLOR_BGR2RGB)
         entrada = np.expand_dims(rgb, axis=0)
         salidas = montaje.pipeline.infer({montaje.entrada.name: entrada})
         # La salida de un HEF con NMS viene envuelta por batch: el [0] es la
         # lista de detecciones por clase. Sin desenvolverla, `_validar_salida` la
         # rechaza y `detectar_frame` leería el batch como si fuera la clase 0.
-        return salidas[montaje.salida.name][0]
+        return salidas[montaje.salida.name][0], escala, pad_x, pad_y
 
     def _validar_salida(self) -> None:
         """Corre una inferencia en negro y verifica la forma de la salida.
@@ -291,7 +289,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         propia.
         """
         prueba = np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
-        crudas = self._inferir_crudo(prueba)
+        crudas, _, _, _ = self._inferir_crudo(prueba)
 
         if not isinstance(crudas, (list, tuple)) or not crudas:
             raise ErrorCargaModelo(
