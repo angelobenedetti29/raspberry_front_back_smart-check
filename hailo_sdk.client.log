@@ -122,3 +122,65 @@
 2026-09-28 05:02:08,924 - INFO - compiler_cli.py:86 - Compilation complete
 2026-09-28 05:02:08,979 - INFO - compiler_cli.py:91 - Saved HEF to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining.hef
 2026-09-28 05:02:12,008 - INFO - client_runner.py:1881 - Saved HAR to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_compiled.har
+2026-09-28 19:56:49,109 - WARNING - __init__.py:56 - Cannot use graphviz, so no visualizations will be created
+2026-09-28 19:56:49,152 - INFO - main.py:34 - Current Time: 19:56:49, 09/28/26
+2026-09-28 19:56:50,161 - INFO - main.py:46 - CPU: Architecture: , Model: 11th Gen Intel(R) Core(TM) i5-11400 @ 2.60GHz, Number Of Cores: 12, Utilization: 0.0%
+2026-09-28 19:56:50,162 - INFO - main.py:50 - Memory: Total: 7GB, Available: 6GB
+2026-09-28 19:56:50,163 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.18.33.1-microsoft-standard-WSL2
+2026-09-28 19:56:50,164 - INFO - main.py:55 - Hailo DFC Version: 3.34.0
+2026-09-28 19:56:50,165 - INFO - main.py:60 - HailoRT Version: Not Installed
+2026-09-28 19:56:50,265 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-09-28 19:56:50,266 - INFO - main.py:109 - Running `hailo parser onnx /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/models/tostadas_retraining_v3.onnx --hw-arch hailo8l --net-name tostadas_retraining_v3 --har-path /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.har --end-node-names /model.23/cv2.0/cv2.0.2/Conv /model.23/cv3.0/cv3.0.2/Conv /model.23/cv2.1/cv2.1.2/Conv /model.23/cv3.1/cv3.1.2/Conv /model.23/cv2.2/cv2.2.2/Conv /model.23/cv3.2/cv3.2.2/Conv -y`
+2026-09-28 19:56:50,297 - INFO - parser.py:158 - Translation started on ONNX model tostadas_retraining_v3
+2026-09-28 19:56:50,566 - INFO - parser.py:193 - Restored ONNX model tostadas_retraining_v3 (completion time: 00:00:00.27)
+2026-09-28 19:56:50,736 - INFO - parser.py:216 - Extracted ONNXRuntime meta-data for Hailo model (completion time: 00:00:00.44)
+2026-09-28 19:56:51,370 - INFO - parser.py:367 - Start nodes mapped from original model: 'images': 'tostadas_retraining_v3/input_layer1'.
+2026-09-28 19:56:51,371 - INFO - parser.py:368 - End nodes mapped from original model: '/model.23/cv2.0/cv2.0.2/Conv', '/model.23/cv3.0/cv3.0.2/Conv', '/model.23/cv2.1/cv2.1.2/Conv', '/model.23/cv3.1/cv3.1.2/Conv', '/model.23/cv2.2/cv2.2.2/Conv', '/model.23/cv3.2/cv3.2.2/Conv'.
+2026-09-28 19:56:51,461 - INFO - parser.py:289 - Translation completed on ONNX model tostadas_retraining_v3 (completion time: 00:00:01.16)
+2026-09-28 19:56:52,683 - INFO - client_runner.py:1881 - Saved HAR to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.har
+2026-09-28 19:56:58,349 - WARNING - __init__.py:56 - Cannot use graphviz, so no visualizations will be created
+2026-09-28 19:56:59,398 - INFO - client_runner.py:501 - Loading model script commands to tostadas_retraining_v3 from /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.alls
+2026-09-28 19:56:59,408 - INFO - commands.py:4272 - ParsedPerformanceParam command, setting optimization_level(max=2)
+2026-09-28 19:57:00,481 - INFO - nms_postprocess.py:1108 - The activation function of layer tostadas_retraining_v3/conv54 was replaced by a Sigmoid
+2026-09-28 19:57:00,481 - INFO - nms_postprocess.py:1108 - The activation function of layer tostadas_retraining_v3/conv65 was replaced by a Sigmoid
+2026-09-28 19:57:00,482 - INFO - nms_postprocess.py:1108 - The activation function of layer tostadas_retraining_v3/conv80 was replaced by a Sigmoid
+2026-09-28 19:57:00,724 - INFO - calib_set_generator.py:130 - Found model with 3 input channels, using real RGB images for calibration instead of sampling random data.
+2026-09-28 19:57:01,005 - IMPORTANT - sdk_backend.py:1133 - Starting Model Optimization
+2026-09-28 19:57:01,125 - WARNING - mo_config.py:168 - Reducing optimization level to 0 (the accuracy won't be optimized and compression won't be used) because there's less data than the recommended amount (1024), and there's no available GPU
+2026-09-28 19:57:01,126 - WARNING - mo_config.py:233 - Running model optimization with zero level of optimization is not recommended for production use and might lead to suboptimal accuracy results
+2026-09-28 19:57:01,128 - INFO - mo_script_parser.py:91 - Model received quantization params from the hn
+2026-09-28 19:57:04,659 - INFO - algorithm_base.py:149 - MatmulDecompose skipped
+2026-09-28 19:57:04,784 - INFO - algorithm_base.py:152 - Starting Mixed Precision
+2026-09-28 19:57:05,281 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Mixed Precision is done (completion time is 00:00:00.49)
+2026-09-28 19:57:05,518 - INFO - algorithm_base.py:149 - LayerNorm Decomposition skipped
+2026-09-28 19:57:06,281 - INFO - algorithm_base.py:152 - Starting Statistics Collector
+2026-09-28 19:57:06,287 - INFO - stats_collection.py:89 - Using dataset with 64 entries for calibration
+2026-09-28 19:57:40,439 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Statistics Collector is done (completion time is 00:00:34.15)
+2026-09-28 19:57:41,680 - INFO - algorithm_base.py:152 - Starting Fix zp_comp Encoding
+2026-09-28 19:57:41,682 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Fix zp_comp Encoding is done (completion time is 00:00:00.00)
+2026-09-28 19:57:41,683 - INFO - algorithm_base.py:152 - Starting Matmul Equalization
+2026-09-28 19:57:41,700 - INFO - algorithm_base.py:168 - Model Optimization Algorithm Matmul Equalization is done (completion time is 00:00:00.02)
+2026-09-28 19:57:41,702 - INFO - algorithm_base.py:152 - Starting MatmulDecomposeFix
+2026-09-28 19:57:41,703 - INFO - algorithm_base.py:168 - Model Optimization Algorithm MatmulDecomposeFix is done (completion time is 00:00:00.00)
+2026-09-28 19:58:08,907 - INFO - algorithm_base.py:149 - Finetune encoding skipped
+2026-09-28 19:58:08,911 - INFO - algorithm_base.py:149 - Bias Correction skipped
+2026-09-28 19:58:08,928 - INFO - algorithm_base.py:149 - Adaround skipped
+2026-09-28 19:58:08,943 - INFO - algorithm_base.py:149 - Quantization-Aware Fine-Tuning skipped
+2026-09-28 19:58:19,959 - INFO - algorithm_base.py:149 - Layer Noise Analysis skipped
+2026-09-28 19:58:29,278 - IMPORTANT - sdk_backend.py:1145 - Model Optimization is done
+2026-09-28 19:58:31,266 - INFO - client_runner.py:1881 - Saved HAR to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3_quantized.har
+2026-09-28 19:58:36,200 - WARNING - __init__.py:56 - Cannot use graphviz, so no visualizations will be created
+2026-09-28 19:58:36,214 - INFO - main.py:34 - Current Time: 19:58:36, 09/28/26
+2026-09-28 19:58:37,222 - INFO - main.py:46 - CPU: Architecture: , Model: 11th Gen Intel(R) Core(TM) i5-11400 @ 2.60GHz, Number Of Cores: 12, Utilization: 0.0%
+2026-09-28 19:58:37,223 - INFO - main.py:50 - Memory: Total: 7GB, Available: 5GB
+2026-09-28 19:58:37,224 - INFO - main.py:54 - System info: OS: Linux, Kernel: 6.18.33.1-microsoft-standard-WSL2
+2026-09-28 19:58:37,226 - INFO - main.py:55 - Hailo DFC Version: 3.34.0
+2026-09-28 19:58:37,227 - INFO - main.py:60 - HailoRT Version: Not Installed
+2026-09-28 19:58:37,315 - INFO - main.py:76 - PCIe: No Hailo PCIe device was found
+2026-09-28 19:58:37,316 - INFO - main.py:109 - Running `hailo compiler --hw-arch hailo8l /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3_quantized.har --output-dir /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training --model-script /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.alls`
+2026-09-28 19:58:42,018 - INFO - client_runner.py:501 - Loading model script commands to tostadas_retraining_v3 from /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.alls
+2026-09-28 19:58:42,029 - INFO - commands.py:4272 - ParsedPerformanceParam command, setting optimization_level(max=2)
+2026-09-28 19:58:42,059 - INFO - compiler_cli.py:81 - Compiling network
+2026-09-28 20:26:48,216 - INFO - compiler_cli.py:86 - Compilation complete
+2026-09-28 20:26:48,258 - INFO - compiler_cli.py:91 - Saved HEF to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3.hef
+2026-09-28 20:26:50,499 - INFO - client_runner.py:1881 - Saved HAR to: /mnt/d/ProyectoFinal_SmartCheck/raspberry_front_back_smart-check/backend/ai_training/tostadas_retraining_v3_compiled.har

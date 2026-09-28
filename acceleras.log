@@ -4,3 +4,6 @@
 2026-09-28 04:30:56,494 - INFO - __init__.py:28 - No GPU chosen and no suitable GPU found, falling back to CPU.
 2026-09-28 04:31:13,539 - INFO - __init__.py:28 - No GPU chosen and no suitable GPU found, falling back to CPU.
 2026-09-28 04:32:09,278 - INFO - activation_op.py:1813 - activation fitting started for tostadas_retraining/reduce_sum_softmax1/act_op
+2026-09-28 19:56:41,815 - INFO - __init__.py:28 - No GPU chosen and no suitable GPU found, falling back to CPU.
+2026-09-28 19:56:54,763 - INFO - __init__.py:28 - No GPU chosen and no suitable GPU found, falling back to CPU.
+2026-09-28 19:57:43,380 - INFO - activation_op.py:1813 - activation fitting started for tostadas_retraining_v3/reduce_sum_softmax1/act_op
