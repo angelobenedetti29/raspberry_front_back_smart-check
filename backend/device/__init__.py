@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from backend.config import AppConfig
 from backend.device.almacen import AlmacenDispositivo, EstadoDispositivo, ErrorAlmacen
@@ -14,6 +15,7 @@ from backend.device.cliente import (
     ClienteRegistro,
     ErrorRegistro,
 )
+from backend.device.servidor import ServidorRenombre
 from backend.device.tipos import ErrorTipoDispositivo, TipoDispositivo
 
 logger = logging.getLogger(__name__)
@@ -54,11 +56,28 @@ class DeviceService:
         self._config = config
         self._hostname = config.device.hostname
         self._intervalo = config.device.registration_poll_interval_seconds
+        # URL pública (esqueme + host + puerto) que el Go usa para alcanzar
+        # nuestro servidor de renombre. Se manda al alta como `rename_url` y,
+        # si la Pi ya está aprobada, se sincroniza con un PATCH cuando cambia.
+        # `local_port` es la cara local del túnel: si la URL sale por cloudflared,
+        # este puerto debe coincidir con el `--url http://localhost:PUERTO`.
+        self._url = config.device.public_url.strip()
+        self._local_port = config.device.local_port
+        bind_host, bind_port = self._derivar_bind(
+            self._url,
+            config.device.listen_address,
+            self._local_port,
+        )
         self._cliente = ClienteRegistro(
-            config.api.base_url, config.api.registration_requests_endpoint
+            config.api.base_url,
+            config.api.registration_requests_endpoint,
+            url=self._url,
         )
         self._cliente_dispositivo = ClienteDispositivo(
             config.api.base_url, config.api.dispositivos_nombre_endpoint
+        )
+        self._cliente_rename_url = ClienteDispositivo(
+            config.api.base_url, config.api.dispositivos_rename_url_endpoint
         )
         self._almacen = AlmacenDispositivo(Path(config.paths.root) / "device.json")
 
@@ -70,6 +89,7 @@ class DeviceService:
         self._request_id: str | None = None
         self._device_id: str | None = None
         self._secret: str | None = None
+        self._rename_token: str | None = None
         self._created_at: str | None = None
         self._mensaje: str | None = None
         # Tipo elegido por el operador al registrar; propiedad del dispositivo
@@ -81,21 +101,108 @@ class DeviceService:
         # El alta no es automática: el hilo solo pide registro cuando el
         # operador lo dispara (o cuando retoma una solicitud ya persistida).
         self._solicitado = False
+        # Si quedó una rename_url que el backend todavía no conoce (porque el
+        # operador la editó en Configuración y la Pi ya estaba aprobada), el
+        # lazo principal la manda al Go con backoff infinito. Se sincroniza
+        # apenas el endpoint del backend esté disponible; mientras tanto, la
+        # Pi sigue atendiendo renombres en el bind local ya re-arrancado.
+        self._url_pendiente: str | None = None
+        self._url_backoff_segundos: float = 5.0
+        self._endpoint_rename_url_ausente: bool = False
 
         self._recuperar_estado_guardado()
+
+        # Servidor HTTP local del push de renombre Go→Pi (arranca en start()).
+        # Escucha en el host:puerto derivado de device.public_url (o en el
+        # bind legacy listen_address/local_port si no hay URL). Se reemplaza
+        # en runtime si la UI cambia device.public_url o device.local_port
+        # (ver `actualizar_tunel`).
+        self._servidor = ServidorRenombre(
+            self,
+            bind_host,
+            bind_port,
+        )
+
+    @staticmethod
+    def _local_host(hostname: str) -> bool:
+        """True si el host es local (loopback); cualquier otro es remoto.
+
+        `urlsplit` devuelve el IPv6 loopback sin corchetes (`::1`), por eso se
+        normaliza antes de comparar.
+        """
+        host = hostname.strip().strip("[]").lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    @staticmethod
+    def _derivar_bind(
+        url: str,
+        listen_address: str,
+        local_port: int,
+    ) -> tuple[str, int]:
+        """Decide en qué (host, puerto) escuchar según `device.public_url`.
+
+        Misma semántica que el `__init__` original: una URL vacía cae al bind
+        legacy (`listen_address` + `local_port`); un host local se bindea tal
+        cual; un host remoto (túnel) cae a loopback porque la Pi no puede
+        bindear el dominio público. Es una función pura: no toca sockets, no
+        lee config, sólo parsea; la usa tanto `__init__` como `actualizar_tunel`
+        para que cambiar la URL o el puerto re-arranque el servidor con el
+        mismo criterio que eligió al arrancar.
+        """
+        url_normalizada = url.strip()
+        parsed = None
+        if url_normalizada:
+            try:
+                parsed = urlsplit(url_normalizada)
+            except ValueError:
+                parsed = None
+            # Sin esquema y sin netloc no hay URL utilizable: fallback legacy.
+            if parsed is not None and not parsed.scheme and not parsed.netloc:
+                parsed = None
+        if parsed is None:
+            return listen_address, local_port
+        host = (parsed.hostname or "").strip().lower()
+        if not host:
+            return listen_address, local_port
+        if DeviceService._local_host(host):
+            # Host local: bind directo (p. ej. localhost:8090).
+            bind_host = host
+        else:
+            # Host remoto (dominio de túnel): la Pi no puede bindearlo, así
+            # que escucha en loopback y cloudflared reenvía el tráfico ahí.
+            bind_host = "127.0.0.1"
+        try:
+            puerto_url = parsed.port
+        except ValueError:
+            puerto_url = None
+        if puerto_url is not None:
+            return bind_host, puerto_url
+        if DeviceService._local_host(host):
+            # Host local: el puerto del scheme tiene sentido.
+            if parsed.scheme == "http":
+                return bind_host, 80
+            if parsed.scheme == "https":
+                return bind_host, 443
+            return bind_host, local_port
+        # Host remoto (túnel cloudflared, etc): el puerto del scheme es el
+        # público (443 en quick tunnels), pero el bind local lo decide el
+        # túnel. Caemos al `local_port` configurado como fallback.
+        return bind_host, local_port
 
     # --- Protocolo Service ---
 
     def start(self) -> None:
-        """Arranca el hilo de registro (idempotente)."""
+        """Arranca el hilo de registro y el servidor de renombre (idempotente)."""
         if self._thread is not None:
             return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
         self._thread.start()
+        self._servidor.start()
 
     def stop(self) -> None:
         """Señaliza el cese, despierta al hilo y lo espera (bloquea)."""
+        self._servidor.stop()
         self._stop_event.set()
         self._despertar.set()
         if self._thread is not None:
@@ -110,8 +217,22 @@ class DeviceService:
         Si ya hay un request_id pendiente, el hilo retoma el polling de ese
         mismo request en vez de crear uno nuevo. El tipo es obligatorio y se
         valida antes de disparar nada; si es inválido, el fallo queda en el
-        estado sin despertar al hilo.
+        estado sin despertar al hilo. La `device.public_url` también es
+        obligatoria para poder dar el alta, ya que es lo que el backend guarda
+        como `rename_url` para enviar los renombres: si está vacía, el alta
+        falla con un mensaje claro y el hilo no se despierta.
         """
+        # Requisito al alta: el backend guarda `rename_url` para mandar el
+        # push de renombre a esta Pi. Sin URL no podemos registrar.
+        if not self._url:
+            mensaje = (
+                "No se puede registrar: device.public_url está vacío. Levantá "
+                "el túnel cloudflared, pegá la URL pública en config.json > "
+                "device.public_url y reiniciá la app antes de reintentar."
+            )
+            logger.warning("device: %s", mensaje)
+            self._marcar_error(mensaje)
+            return
         try:
             tipo_valido = TipoDispositivo.desde(tipo)
         except ErrorTipoDispositivo as exc:
@@ -133,6 +254,7 @@ class DeviceService:
             self._request_id = None
             self._device_id = None
             self._secret = None
+            self._rename_token = None
             self._created_at = None
             self._mensaje = None
             self._hostname_sincronizado = self._hostname
@@ -157,6 +279,7 @@ class DeviceService:
             self._request_id = None
             self._device_id = None
             self._secret = None
+            self._rename_token = None
             self._created_at = None
             self._mensaje = motivo
             self._hostname_sincronizado = self._hostname
@@ -181,6 +304,165 @@ class DeviceService:
                 tipo=self._tipo,
             )
 
+    # --- Push de renombre desde el backend Go ---
+
+    def secret(self) -> str | None:
+        """Devuelve el secret del dispositivo (sólo lectura, con lock breve)."""
+        with self._lock:
+            return self._secret
+
+    def device_id(self) -> str | None:
+        """Devuelve el device_id asignado por el backend (sólo lectura, lock breve).
+
+        Lo usa `ServidorRenombre` para validar que el `device_id` del path
+        del push Go→Pi coincide con el del dispositivo aprobado localmente
+        (defensa en profundidad: el `rename_token` ya autentica, pero evita
+        aceptar un push dirigido a otro UUID).
+        """
+        with self._lock:
+            return self._device_id
+
+    def rename_token(self) -> str | None:
+        """Token de autenticación del push de renombre Go→Pi (lock breve).
+
+        Es distinto del `secret`: lo usa el servidor de renombre para validar
+        el Bearer del backend Go, mientras que el `secret` autentica a la Pi
+        contra los endpoints del Go.
+        """
+        with self._lock:
+            return self._rename_token
+
+    def aplicar_renombre_externo(self, nombre: str) -> None:
+        """Aplica un renombre que viene del backend Go (push).
+
+        A diferencia del flujo Pi→Go, acá el origen del cambio es el Go: ya
+        está sincronizado por construcción, así que seteo _hostname y
+        _hostname_sincronizado juntos para que el hilo de registro no lo
+        re-pushee. Se reescribe config.json (consistencia en disco) y se
+        re-persiste device.json para que un reinicio no revierta el nombre
+        desde el estado guardado; la UI ve el cambio en el próximo snapshot.
+        """
+        nombre_limpio = nombre.strip()
+        if not nombre_limpio:
+            raise ValueError("El nombre del dispositivo no puede estar vacío")
+        # Releer config crudo, mutar device.hostname, guardar atómicamente.
+        from backend.config import guardar_config, leer_config_cruda
+
+        crudo = leer_config_cruda()
+        dispositivo = crudo.get("device", {})
+        if not isinstance(dispositivo, dict):
+            raise RuntimeError("config.json: 'device' no es un objeto JSON")
+        dispositivo["hostname"] = nombre_limpio
+        crudo["device"] = dispositivo
+        guardar_config(crudo)  # valida + escribe atómico; levanta ConfigError si rompe
+        with self._lock:
+            self._hostname = nombre_limpio
+            self._hostname_sincronizado = nombre_limpio
+            self._mensaje = None
+        # Refrescar device.json con el nombre nuevo (fuera del lock: _persistir
+        # toma el lock brevemente). Sin esto, al reiniciar la Pi retomaría el
+        # hostname viejo y lo re-sincronizaría contra el Go.
+        self._persistir()
+        # El hilo ya estaba durmiendo en _despertar: no hace falta despertarlo
+        # explícitamente porque _renombre_pendiente va a devolver False.
+
+    # --- Cambio de device.public_url / device.local_port en caliente ------------
+
+    def actualizar_tunel(self, public_url: str, local_port: int) -> None:
+        """Aplica un cambio de `device.public_url` y/o `device.local_port` sin reiniciar.
+
+        La llama `AdaptadorConfig` después de que el operador guardó la
+        sección Configuración con valores distintos a los del arranque. Hace
+        dos cosas, en este orden:
+
+        1. **Re-bind local**: si la URL pública o el puerto local cambiaron,
+           re-deriva el host:puerto del servidor de renombre con la misma
+           regla que `__init__` y lo reemplaza por una instancia nueva de
+           `ServidorRenombre` (`start`/`stop` idempotentes). Si el bind nuevo
+           falla con `OSError` (puerto ocupado, sin permisos), se hace rollback
+           al servidor anterior y ni `self._url` ni `self._local_port`
+           cambian: nada se rompe en el resto de la app.
+        2. **Sync con el Go**: si la URL pública cambió y la Pi ya está
+           aprobada, agenda la URL como pendiente para que el lazo principal
+           la mande al endpoint `dispositivos_rename_url_endpoint` con
+           backoff infinito. Si el endpoint todavía no existe en el Go, el
+           sync va a fallar transitoriamente y se reintenta hasta que
+           aparezca.
+
+        Es seguro llamarla antes de `start()`: el `_servidor` se reasigna
+        también sin haber arrancado; `start()` igual lo levanta en el bind
+        derivado al final de `__init__`.
+        """
+        nueva_url = public_url.strip()
+        # Snapshot bajo lock para comparar sin re-entrar al lock durante el bind.
+        with self._lock:
+            url_actual = self._url
+            puerto_actual = self._local_port
+        url_cambia = nueva_url != url_actual
+        puerto_cambia = local_port != puerto_actual
+        if not (url_cambia or puerto_cambia):
+            return  # noop: el operador "guardó" sin tocar el par efectivo.
+
+        bind_host, bind_port = self._derivar_bind(
+            nueva_url,
+            self._config.device.listen_address,
+            local_port,
+        )
+
+        # 1) Re-bind local. stop() sobre el servidor actual, instancia nueva
+        #    con el bind derivado, start() de la nueva. Si start() falla,
+        #    conservamos la instancia vieja para no dejar al push sin puerto.
+        servidor_viejo = self._servidor
+        servidor_nuevo = ServidorRenombre(self, bind_host, bind_port)
+        try:
+            servidor_nuevo.start()
+        except Exception as exc:
+            logger.warning(
+                "device: no se pudo re-bindear el servidor de renombre a %s:%s: %s",
+                bind_host,
+                bind_port,
+                exc,
+            )
+            with self._lock:
+                self._mensaje = (
+                    f"No se pudo aplicar la nueva configuración local: {exc}. "
+                    "El servidor de renombre sigue escuchando en la URL anterior."
+                )
+            return  # rollback implícito: self._servidor no se reasignó.
+
+        # El nuevo arrancó OK: bajamos el viejo y reasignamos.
+        servidor_viejo.stop()
+        self._servidor = servidor_nuevo
+        logger.info(
+            "device: servidor de renombre re-bindado a %s:%s",
+            bind_host,
+            bind_port,
+        )
+
+        # 2) Actualizar estado y agendar sync con el Go si la URL cambió.
+        with self._lock:
+            self._url = nueva_url
+            self._local_port = local_port
+            mensaje_anterior = self._mensaje
+            if url_cambia and self._estado is EstadoRegistro.APROBADO and self._secret is not None:
+                self._url_pendiente = nueva_url
+                # Si había un mensaje de error viejo, lo pisamos con el de sync;
+                # si no, lo dejamos en None hasta el primer intento.
+                if mensaje_anterior is None or "rename_url" not in mensaje_anterior:
+                    self._mensaje = (
+                        "Sincronizando la nueva URL con el backend…"
+                    )
+                self._url_backoff_segundos = 5.0
+                self._endpoint_rename_url_ausente = False
+                debe_despertar = True
+            else:
+                # No aprobado todavía, o sólo cambió el puerto local: la URL
+                # queda lista para el próximo alta manual; no hay nada que
+                # sincronizar contra el Go ahora.
+                debe_despertar = False
+        if debe_despertar:
+            self._despertar.set()
+
     # --- Recuperación al arrancar ---
 
     def _recuperar_estado_guardado(self) -> None:
@@ -196,6 +478,7 @@ class DeviceService:
             self._request_id = guardado.request_id or None
             self._device_id = guardado.device_id
             self._secret = guardado.secret
+            self._rename_token = guardado.rename_token
             self._created_at = guardado.created_at
             self._hostname_sincronizado = guardado.hostname
             self._tipo = guardado.tipo
@@ -235,6 +518,20 @@ class DeviceService:
                 logger.exception("device: error inesperado")
                 self._marcar_error(str(exc))
 
+            # Sincronización de la rename_url pendiente con el backend. Si el
+            # endpoint todavía no existe, se reintenta con backoff infinito;
+            # si está todo al día, _hay_url_pendiente() corta en seguida.
+            if self._hay_url_pendiente():
+                try:
+                    self._sincronizar_url()
+                except Exception as exc:  # noqa: BLE001 - el hilo no debe morir
+                    logger.exception("device: sincronizar url inesperado")
+                with self._lock:
+                    espera = self._url_backoff_segundos
+                self._despertar.wait(timeout=espera)
+                self._despertar.clear()
+                continue
+
             if self._estado is EstadoRegistro.APROBADO and not self._renombre_pendiente():
                 self._despertar.wait()  # ya registrado: esperar comando explícito
                 self._despertar.clear()
@@ -247,6 +544,11 @@ class DeviceService:
         # aunque el registro ya esté aprobado. Se consulta fuera del lock
         # porque _renombre_pendiente toma el mismo lock (no reentrante).
         if self._renombre_pendiente():
+            return True
+        # Una rename_url pendiente de sincronizar con el Go también exige
+        # trabajar: sin esto, una Pi aprobada se queda colgada esperando
+        # un comando explícito hasta que llegue el primer ping.
+        if self._hay_url_pendiente():
             return True
         with self._lock:
             # Ya registrado: no hay nada que sondear hasta que el operador
@@ -274,6 +576,20 @@ class DeviceService:
                 self._estado is EstadoRegistro.APROBADO
                 and self._secret is not None
                 and self._hostname_sincronizado != self._hostname
+            )
+
+    def _hay_url_pendiente(self) -> bool:
+        """True si hay una `rename_url` que el Go todavía no conoce.
+
+        Sólo tiene sentido sincronizarla si la Pi ya está aprobada: antes del
+        alta, la URL se manda dentro del payload del alta mismo. Se consulta
+        fuera del lock de los trabajadores para evitar self-deadlock.
+        """
+        with self._lock:
+            return (
+                self._estado is EstadoRegistro.APROBADO
+                and self._secret is not None
+                and self._url_pendiente is not None
             )
 
     def _solicitar(self) -> None:
@@ -305,6 +621,49 @@ class DeviceService:
         self._persistir()
         logger.info("device: nombre sincronizado como %s", nombre)
 
+    def _sincronizar_url(self) -> None:
+        """Manda la `rename_url` pendiente al endpoint del backend.
+
+        Llamada por el lazo principal cuando `_hay_url_pendiente()`. Backoff
+        infinito: arranca en 5 s, se duplica hasta un tope de 300 s, y se
+        resetea al concretarse. Si el backend todavía no expone el endpoint,
+        responde 404 (o 405); eso se loguea una sola vez por corrida (no cada
+        5 s) pero el reintento sigue.
+        """
+        with self._lock:
+            url = self._url_pendiente
+            secret = self._secret
+            backoff = self._url_backoff_segundos
+            ya_aviso_endpoint_ausente = self._endpoint_rename_url_ausente
+        if url is None or secret is None:
+            return
+        try:
+            self._cliente_rename_url.actualizar_rename_url(secret, url)
+        except ErrorRegistro as exc:
+            with self._lock:
+                # 404/405: el endpoint todavía no existe en el Go. Log una vez
+                # por corrida; después seguimos en silencio a nivel info.
+                if exc.codigo in (404, 405):
+                    if not ya_aviso_endpoint_ausente:
+                        logger.warning(
+                            "device: el backend no expone aún "
+                            "dispositivos_rename_url_endpoint (%s); se reintenta "
+                            "con backoff hasta que esté disponible.",
+                            exc,
+                        )
+                    self._endpoint_rename_url_ausente = True
+                else:
+                    logger.warning("device: reintento sync rename_url: %s", exc)
+                # Duplicar backoff, cap 300 s. Aplica a todos los fallos.
+                self._url_backoff_segundos = min(backoff * 2, 300.0)
+            return
+        with self._lock:
+            self._url_pendiente = None
+            self._url_backoff_segundos = 5.0
+            self._endpoint_rename_url_ausente = False
+            self._mensaje = None
+        logger.info("device: rename_url sincronizada con el backend")
+
     def _consultar(self) -> None:
         with self._lock:
             request_id = self._request_id
@@ -319,6 +678,7 @@ class DeviceService:
             with self._lock:
                 self._device_id = respuesta.device_id
                 self._secret = respuesta.secret
+                self._rename_token = respuesta.rename_token
                 self._estado = EstadoRegistro.APROBADO
                 self._mensaje = None
                 # Si el backend devuelve el tipo, ese manda; si no, se conserva
@@ -361,6 +721,7 @@ class DeviceService:
                 secret=self._secret,
                 created_at=self._created_at,
                 tipo=self._tipo,
+                rename_token=self._rename_token,
             )
         try:
             self._almacen.guardar(estado)

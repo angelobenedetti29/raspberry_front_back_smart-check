@@ -98,14 +98,18 @@
         "registration_requests_endpoint": "/api/v1/registration-requests/",
         "dispositivos_ping_endpoint": "/api/v1/dispositivos/ping",
         "dispositivos_nombre_endpoint": "/api/v1/dispositivos/nombre",
+        "dispositivos_rename_url_endpoint": "/api/v1/dispositivos/rename-url",
         "productos_endpoint": "/api/v1/productos",
         "dispositivos_sector_endpoint": "/api/v1/dispositivos/sector",
         "lotes_endpoint": "/api/v1/lotes"
     },
     "device": {
-        "hostname": "smartcheck-rbpi-03",
+        "hostname": "raspb-12",
         "ping_interval_seconds": 60.0,
-        "registration_poll_interval_seconds": 5.0
+        "registration_poll_interval_seconds": 5.0,
+        "public_url": "http://localhost:9000",
+        "listen_address": "127.0.0.1",
+        "local_port": 9000
     },
     "lote": {
         "habilitado": true,

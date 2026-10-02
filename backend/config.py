@@ -119,6 +119,12 @@ class ApiConfig:
     registration_requests_endpoint: str
     dispositivos_ping_endpoint: str
     dispositivos_nombre_endpoint: str
+    # Endpoint para que la Raspberry sincronice la `rename_url` después del alta
+    # (cuando el operador edita `device.public_url` desde Configuración con la
+    # Pi ya aprobada). El cliente hace PATCH autenticado con el `secret` del
+    # dispositivo. Si el backend todavía no lo implementa, la Pi reintenta con
+    # backoff infinito hasta que aparezca.
+    dispositivos_rename_url_endpoint: str
     productos_endpoint: str
     dispositivos_sector_endpoint: str
     lotes_endpoint: str
@@ -130,6 +136,21 @@ class DeviceConfig:
     hostname: str
     ping_interval_seconds: float
     registration_poll_interval_seconds: float
+    # Dirección e interfaz donde la Raspberry escucha el push de renombre del
+    # backend Go (servidor HTTP local del DeviceService). Es el bind de
+    # respaldo cuando `public_url` está vacía: el operador que no usa túnel
+    # expone el servidor directamente en una IP de la red local.
+    listen_address: str
+    # Puerto interno donde escucha el `ServidorRenombre`. Es la cara local del
+    # túnel: si la URL pública sale vía cloudflared, este puerto tiene que
+    # coincidir con el que se le pasa a `cloudflared --url http://localhost:PUERTO`.
+    # Se usa también como fallback cuando la URL es remota y no trae puerto.
+    local_port: int
+    # URL completa (esquema + host + puerto) que el backend Go usa para enviar
+    # los renombres a esta Raspberry. La Pi la manda como `rename_url` en el
+    # alta y de acá deriva el host:puerto de bind del servidor de renombre.
+    # Vacía = escuchar en `listen_address:local_port` (caso sin túnel).
+    public_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,6 +448,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     dispositivos_nombre_endpoint = _get(
         api_raw, "dispositivos_nombre_endpoint", str, "api"
     )
+    dispositivos_rename_url_endpoint = _get(
+        api_raw, "dispositivos_rename_url_endpoint", str, "api"
+    )
     productos_endpoint = _get(api_raw, "productos_endpoint", str, "api")
     dispositivos_sector_endpoint = _get(
         api_raw, "dispositivos_sector_endpoint", str, "api"
@@ -454,6 +478,11 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "'api.dispositivos_nombre_endpoint' debe empezar con '/', "
             f"no {dispositivos_nombre_endpoint!r}"
         )
+    if not dispositivos_rename_url_endpoint.startswith("/"):
+        raise ConfigError(
+            "'api.dispositivos_rename_url_endpoint' debe empezar con '/', "
+            f"no {dispositivos_rename_url_endpoint!r}"
+        )
     if not productos_endpoint.startswith("/"):
         raise ConfigError(
             "'api.productos_endpoint' debe empezar con '/', "
@@ -474,6 +503,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         registration_requests_endpoint=registration_requests_endpoint,
         dispositivos_ping_endpoint=dispositivos_ping_endpoint,
         dispositivos_nombre_endpoint=dispositivos_nombre_endpoint,
+        dispositivos_rename_url_endpoint=dispositivos_rename_url_endpoint,
         productos_endpoint=productos_endpoint,
         dispositivos_sector_endpoint=dispositivos_sector_endpoint,
         lotes_endpoint=lotes_endpoint,
@@ -488,16 +518,30 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     registration_poll_interval_seconds = _get(
         device_raw, "registration_poll_interval_seconds", float, "device"
     )
+    listen_address = _get(device_raw, "listen_address", str, "device")
+    local_port = _get(device_raw, "local_port", int, "device")
+    # Opcional y tolerante: ausente o vacío significa "usar el bind legacy".
+    public_url_raw = device_raw.get("public_url", "")
+    if not isinstance(public_url_raw, str):
+        raise ConfigError("'device.public_url' debe ser un string (o vacío)")
+    public_url = public_url_raw.strip()
     if ping_interval_seconds <= 0:
         raise ConfigError("'device.ping_interval_seconds' debe ser > 0")
     if registration_poll_interval_seconds <= 0:
         raise ConfigError(
             "'device.registration_poll_interval_seconds' debe ser > 0"
         )
+    if not listen_address.strip():
+        raise ConfigError("'device.listen_address' no puede estar vacío")
+    if not 1 <= local_port <= 65535:
+        raise ConfigError("'device.local_port' debe estar entre 1 y 65535")
     device = DeviceConfig(
         hostname=hostname.strip(),
         ping_interval_seconds=ping_interval_seconds,
         registration_poll_interval_seconds=registration_poll_interval_seconds,
+        listen_address=listen_address.strip(),
+        local_port=local_port,
+        public_url=public_url,
     )
 
     # --- lote ---

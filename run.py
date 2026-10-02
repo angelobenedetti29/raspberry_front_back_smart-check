@@ -100,8 +100,15 @@ def main() -> int:
     )
     controlador_monitor = AdaptadorMonitor(monitor)
     # La configuración se edita desde la UI, pero no necesita servicios
-    # arrancados: sólo lee y escribe el archivo.
-    controlador_config = AdaptadorConfig(config)
+    # arrancados: sólo lee y escribe el archivo. El callback conecta el
+    # guardado con el servicio de dispositivo para que un cambio del par
+    # túnel (`device.public_url` + `device.local_port`) re-arranque el bind
+    # del servidor de renombre y sincronice la nueva URL con el backend Go
+    # sin reiniciar la app.
+    controlador_config = AdaptadorConfig(
+        config,
+        on_device_tunel_changed=dispositivo.actualizar_tunel,
+    )
     # Los lotes se suscriben al streaming: arrancan después y, por el orden
     # inverso de apagado, se detienen antes que el streaming.
     lotes = LoteService(

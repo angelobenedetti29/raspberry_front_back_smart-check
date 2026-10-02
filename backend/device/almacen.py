@@ -29,6 +29,10 @@ class EstadoDispositivo:
     secret: str | None = None
     created_at: str | None = None
     tipo: TipoDispositivo | None = None
+    # Token con el que el backend Go autentica el push de renombre hacia el
+    # servidor local de la Pi. Lo entrega el backend al aprobar el alta; es
+    # distinto del `secret` del dispositivo. None en archivos legados.
+    rename_token: str | None = None
 
 
 class AlmacenDispositivo:
@@ -70,6 +74,9 @@ class AlmacenDispositivo:
                 device_id=data.get("device_id"),
                 secret=data.get("secret"),
                 created_at=data.get("created_at"),
+                # Archivo legado sin rename_token: None (el push quedará sin
+                # autenticar hasta el próximo alta).
+                rename_token=data.get("rename_token"),
             )
         except (KeyError, ErrorTipoDispositivo):
             return None

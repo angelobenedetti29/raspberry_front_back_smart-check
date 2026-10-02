@@ -1,19 +1,24 @@
 """Cliente HTTP contra los endpoints de sector, productos y lotes del backend Go.
 
-Usa sólo la stdlib (`urllib`), igual que `backend/device/cliente.py` y
-`backend/monitor/cliente.py`. Convierte cualquier fallo de red o HTTP en
-`ErrorLotes` para que el servicio decida si reintenta.
+Usa la capa HTTP compartida `backend/api` (sólo stdlib), igual que
+`backend/device/cliente.py` y `backend/monitor/cliente.py`. Convierte cualquier
+fallo de red, HTTP o de envelope en `ErrorLotes` para que el servicio decida si
+reintenta.
 
 No maneja reintentos ni estado: eso es responsabilidad del `LoteService`.
 """
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
 from typing import Any
 
+from backend.api import (
+    ClienteHTTP,
+    ErrorConexion,
+    ErrorFormato,
+    ErrorHttp,
+    desenvolver,
+)
 from backend.config import ApiConfig
 from backend.device.tipos import ErrorTipoDispositivo, TipoDispositivo
 from backend.lote.tipos import (
@@ -28,15 +33,13 @@ from backend.lote.tipos import (
     Sector,
 )
 
-_JSON = "application/json"
-
 
 class ClienteLotes:
     """Cliente de los endpoints de lotes. No reintenta: eso es del servicio."""
 
     def __init__(self, api: ApiConfig, timeout: float = 5.0) -> None:
         self._api = api
-        self._timeout = timeout
+        self._http = ClienteHTTP(api.base_url, timeout)
 
     # --- lectura ---
 
@@ -137,62 +140,23 @@ class ClienteLotes:
 
         Levanta `ErrorLotes` ante fallo de red, HTTP o envelope sin éxito.
         """
-        url = f"{self._api.base_url}{path}"
-        headers = {"Authorization": f"Bearer {secret}", "Accept": _JSON}
-        datos: bytes | None = None
-        if payload is not None:
-            datos = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            headers["Content-Type"] = _JSON
-
-        peticion = urllib.request.Request(url, data=datos, headers=headers, method=metodo)
         try:
-            with urllib.request.urlopen(peticion, timeout=self._timeout) as respuesta:
-                cuerpo = respuesta.read()
-        except urllib.error.HTTPError as exc:
-            raise ErrorLotes(exc.code, _detalle_error(exc)) from exc
-        except (urllib.error.URLError, OSError) as exc:
-            raise ErrorLotes(None, str(exc)) from exc
-
-        if not cuerpo:
+            data = self._http.peticion(metodo, path, payload=payload, token=secret)
+        except ErrorHttp as exc:
+            raise ErrorLotes(exc.codigo, exc.detalle) from exc
+        except ErrorConexion as exc:
+            raise ErrorLotes(None, exc.detalle) from exc
+        except ErrorFormato as exc:
+            raise ErrorLotes(None, exc.detalle) from exc
+        if data is None:
             raise ErrorLotes(None, "respuesta vacía del backend")
         try:
-            envelope = json.loads(cuerpo)
-        except json.JSONDecodeError as exc:
-            raise ErrorLotes(None, "respuesta del backend no es JSON") from exc
-        if not isinstance(envelope, dict):
-            raise ErrorLotes(None, "respuesta del backend no es un objeto JSON")
-        if not envelope.get("success", False):
-            detalle = str(
-                envelope.get("errors")
-                or envelope.get("error")
-                or envelope.get("message")
-                or "respuesta sin éxito"
-            )
-            raise ErrorLotes(None, detalle)
-        return envelope.get("data")
+            return desenvolver(data)
+        except ErrorFormato as exc:
+            raise ErrorLotes(None, exc.detalle) from exc
 
 
 # --- parseo de respuestas ---
-
-
-def _detalle_error(exc: urllib.error.HTTPError) -> str:
-    """Extrae el detalle de error del cuerpo de un HTTPError, si se puede."""
-    try:
-        cuerpo = exc.read().decode("utf-8", "replace")
-    except OSError:
-        return str(exc.reason or "error HTTP")
-    try:
-        datos = json.loads(cuerpo)
-    except json.JSONDecodeError:
-        return cuerpo.strip() or str(exc.reason or "error HTTP")
-    if isinstance(datos, dict):
-        return str(
-            datos.get("errors")
-            or datos.get("error")
-            or datos.get("message")
-            or cuerpo
-        )
-    return cuerpo
 
 
 def _texto_opcional(valor: object) -> str | None:

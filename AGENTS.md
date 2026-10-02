@@ -135,6 +135,14 @@ configurados: no asumas comandos de lint/build.
   (`MappingProxyType`), coherente con el `frozen=True` de los dataclasses.
 - `device.*`: `hostname` lógico (no vacío), `ping_interval_seconds` (telemetría del
   monitor) y `registration_poll_interval_seconds` (polling del alta), ambos > 0.
+  `url` (opcional, default `""`) es la URL completa (esquema + host + puerto) que el
+  Go usa para enviar los renombres a esta Pi: la Pi la manda como `rename_url` en el
+  alta y de ahí deriva el host:puerto de bind de su servidor local de renombre (host
+  local → ese host; host remoto/túnel → `127.0.0.1`, que es lo que reenvía
+  `cloudflared`; puerto explícito, o 80/443 según el esquema). `listen_address`/
+  `listen_port` son el bind de respaldo cuando `url` está vacía (suelen ser `0.0.0.0`,
+  no routable). El anuncio al Go es la `url` tal cual; el bind lo resuelve
+  `DeviceService`.
 - `lote.*`: `habilitado`, `cierre_sin_detecciones_segundos` (inactividad para cerrar),
   `flush_segundos` (debe ser < cierre), `max_eventos_por_envio` ∈ [1,100],
   `cola_eventos` ≥ 1, `max_pendientes` ≥ `max_eventos_por_envio`,

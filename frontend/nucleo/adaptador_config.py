@@ -9,9 +9,10 @@ Junto con `proveedor.py` es de los pocos módulos del frontend que importan
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from backend.config import ConfigError, guardar_config, leer_config_cruda
 from backend.device.almacen import AlmacenDispositivo
@@ -24,6 +25,8 @@ from frontend.nucleo.controlador_config import (
     ResultadoGuardadoUI,
     TipoCampo,
 )
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from backend.config import AppConfig
@@ -372,6 +375,27 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Nombre lógico con el que la Raspberry se identifica.",
     ),
     _CampoEsquema(
+        "device.public_url",
+        "Dispositivo",
+        "URL pública del túnel",
+        TipoCampo.TEXTO,
+        "URL completa con la que el backend alcanza esta Pi (ej.: "
+        "http://localhost:8090 en pruebas locales o "
+        "https://mi-tunel.trycloudflare.com con un túnel). Vacía = la Pi "
+        "escucha directo en listen_address:local_port sin túnel.",
+    ),
+    _CampoEsquema(
+        "device.local_port",
+        "Dispositivo",
+        "Puerto local",
+        TipoCampo.ENTERO,
+        "Puerto interno donde escucha el servidor de renombre. Si usás "
+        "cloudflared con `--url http://localhost:PUERTO`, tiene que "
+        "coincidir con ese PUERTO. Rango 1-65535.",
+        minimo=1,
+        maximo=65535,
+    ),
+    _CampoEsquema(
         "device.ping_interval_seconds",
         "Dispositivo",
         "Intervalo de ping (s)",
@@ -484,10 +508,22 @@ class AdaptadorConfig:
     La configuración cargada (`AppConfig`) se guarda sólo como referencia; los
     valores editables se leen siempre crudos desde disco para no perder lo que
     otra edición haya dejado en el archivo.
+
+    `on_device_tunel_changed` se invoca cuando un `guardar()` exitoso detecta
+    que cambió `device.public_url` o `device.local_port` respecto al valor
+    en disco. Es el único side-effect hacia backend que dispara el guardado:
+    permite re-bindear el `ServidorRenombre` y sincronizar la nueva URL con
+    el backend Go sin reiniciar la app. Si el guardado falla (validación o
+    disco), el callback no se llama.
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        on_device_tunel_changed: Callable[[str, int], None] | None = None,
+    ) -> None:
         self._config = config
+        self._on_device_tunel_changed = on_device_tunel_changed
 
     def campos(self) -> tuple[CampoConfigUI, ...]:
         """Resuelve el esquema contra el JSON crudo actual."""
@@ -495,7 +531,28 @@ class AdaptadorConfig:
         return tuple(self._campo(esquema, cruda) for esquema in _ESQUEMA)
 
     def guardar(self, valores: Mapping[str, object]) -> ResultadoGuardadoUI:
-        """Aplica los valores sobre una copia y guarda; no levanta excepciones."""
+        """Aplica los valores sobre una copia y guarda; no levanta excepciones.
+
+        Antes de tocar el JSON, captura `device.public_url` y `device.local_port`
+        actuales: si alguno difiere respecto al valor entrante, después del
+        guardado exitoso llama al callback `on_device_tunel_changed` con la
+        nueva URL y el nuevo puerto para que `DeviceService` re-arranque el
+        bind local y sincronice con el backend Go. No se dispara si el
+        guardado falló (validación o disco).
+        """
+        try:
+            cruda_pre = leer_config_cruda()
+            url_pre = str(_resolver(cruda_pre, "device.public_url") or "").strip()
+            puerto_pre_raw = _resolver(cruda_pre, "device.local_port")
+            if isinstance(puerto_pre_raw, bool):
+                puerto_pre = 0
+            elif isinstance(puerto_pre_raw, (int, float)):
+                puerto_pre = int(puerto_pre_raw)
+            else:
+                puerto_pre = 0
+        except (ConfigError, OSError):
+            url_pre = ""
+            puerto_pre = 0
         try:
             copia = copy.deepcopy(leer_config_cruda())
             for clave, valor in valores.items():
@@ -511,6 +568,35 @@ class AdaptadorConfig:
                 ok=False,
                 mensaje=f"No se pudo escribir la configuración: {exc}",
             )
+
+        # Notificar al backend el cambio de par túnel (URL pública + puerto
+        # local). Se hace después del guardado porque si el guardado falla el
+        # archivo no cambió: la Pi debe seguir con el bind y la URL viejos.
+        # El callback no debe levantar: si lo hace, lo registramos pero igual
+        # informamos éxito del guardado.
+        url_post = str(valores.get("device.public_url") or "").strip()
+        puerto_post_raw = valores.get("device.local_port")
+        if isinstance(puerto_post_raw, bool):
+            puerto_post = 0
+        elif isinstance(puerto_post_raw, (int, float)):
+            puerto_post = int(puerto_post_raw)
+        elif isinstance(puerto_post_raw, str):
+            try:
+                puerto_post = int(puerto_post_raw)
+            except ValueError:
+                puerto_post = 0
+        else:
+            puerto_post = 0
+        cambio_url = url_pre != url_post and bool(url_post)
+        cambio_puerto = puerto_pre != puerto_post and puerto_post > 0
+        if (cambio_url or cambio_puerto) and self._on_device_tunel_changed is not None:
+            try:
+                self._on_device_tunel_changed(url_post, puerto_post)
+            except Exception as exc:  # noqa: BLE001 - side-effect debe no romper
+                logger.warning(
+                    "config: no se pudo notificar el cambio de túnel: %s", exc
+                )
+
         return ResultadoGuardadoUI(
             ok=True,
             mensaje="Cambios guardados. Reiniciá la aplicación para aplicarlos.",
