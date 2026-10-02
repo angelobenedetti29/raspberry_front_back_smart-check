@@ -8,6 +8,11 @@ import logging
 import signal
 
 from backend.config import AppConfig, ConfigError, load_config
+from backend.control import ControlService
+from backend.control.sensores import (
+    AplicadorConsignaStub,
+    LectorSensoresStub,
+)
 from backend.device import DeviceService
 from backend.lote import LoteService
 from backend.monitor import MonitorService
@@ -116,7 +121,19 @@ def main() -> int:
     )
     controlador_lotes = AdaptadorLotes(lotes)
 
-    services = _start_services([streaming, dispositivo, monitor, lotes])
+    # Control automático (SCA-400): sólo aplica a Pi ENTRADA. El servicio se
+    # autodeshabilita si el tipo es SALIDA_HORNO. Hasta que exista driver
+    # real, se usan stubs (no leen ni escriben hardware).
+    control = ControlService(
+        config,
+        lector=LectorSensoresStub(),
+        aplicador=AplicadorConsignaStub(),
+        tipo_provider=lambda: dispositivo.estado().tipo,
+        secret_provider=dispositivo.secret,
+        on_credencial_invalida=dispositivo.invalidar_credencial,
+    )
+
+    services = _start_services([streaming, dispositivo, monitor, lotes, control])
     logger.info("Aplicación iniciada")
     try:
         return run_gui(

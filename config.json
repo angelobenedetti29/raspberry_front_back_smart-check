@@ -121,5 +121,13 @@
         "refresco_catalogo_segundos": 300.0,
         "reintento_inicial_segundos": 1.0,
         "reintento_maximo_segundos": 30.0
+    },
+    "control": {
+        "habilitado": true,
+        "publicar_telemetria_segundos": 5.0,
+        "poll_consigna_propuesta_segundos": 3.0,
+        "metricas_horno_endpoint": "/api/v1/lotes/{id}/metricas-horno",
+        "consigna_propuesta_endpoint": "/api/v1/lotes/{id}/consigna-propuesta",
+        "aplicar_consigna_endpoint": "/api/v1/lotes/{id}/aplicar-consigna"
     }
 }
