@@ -63,6 +63,8 @@ class StorageConfig:
     max_bytes: int
     max_files: int
     persist_no_detection_every: int
+    # Motor del almacén: "jsonl" (legacy) o "sqlite" (default para v1).
+    engine: str = "sqlite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,12 +362,21 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     filename = _get(storage_raw, "file", str, "stream.storage")
     if not filename:
         raise ConfigError("'stream.storage.file' no puede estar vacío")
+    # engine opcional: default sqlite (default robusto para v1). Acepta
+    # "jsonl" como compat.
+    engine = storage_raw.get("engine", "sqlite")
+    if not isinstance(engine, str) or engine not in {"sqlite", "jsonl"}:
+        raise ConfigError(
+            "'stream.storage.engine' debe ser 'sqlite' o 'jsonl', "
+            f"no {engine!r}"
+        )
     storage = StorageConfig(
         path=paths.data_dir / filename,
         queue_size=_get(storage_raw, "queue_size", int, "stream.storage"),
         max_bytes=_get(storage_raw, "max_bytes", int, "stream.storage"),
         max_files=_get(storage_raw, "max_files", int, "stream.storage"),
         persist_no_detection_every=_get(storage_raw, "persist_no_detection_every", int, "stream.storage"),
+        engine=engine,
     )
 
     # --- stream.reconnect ---

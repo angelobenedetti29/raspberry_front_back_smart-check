@@ -34,6 +34,7 @@
             "fps": 15
         },
         "storage": {
+            "engine": "sqlite",
             "file": "eventos.jsonl",
             "queue_size": 128,
             "max_bytes": 26214400,
