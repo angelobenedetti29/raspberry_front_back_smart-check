@@ -123,14 +123,66 @@ def _rotular(
     )
 
 
-def dibujar(frame_bgr: np.ndarray, detecciones: Sequence[ResultadoDeteccion]) -> None:
-    """Dibuja cajas y etiquetas sobre `frame_bgr`, modificándolo in place.
+def _rotular_linea(
+    frame_bgr: np.ndarray,
+    texto: str,
+    linea_y: int,
+    color: tuple[int, int, int],
+    escala: float,
+    grosor: int,
+    margen: int,
+) -> None:
+    """Escribe la etiqueta de la línea de conteo sobre el margen derecho."""
+    (ancho_texto, alto_texto), _ = cv2.getTextSize(
+        texto, _FUENTE, escala * 0.8, max(1, grosor - 1)
+    )
+    izquierda = max(10, frame_bgr.shape[1] - ancho_texto - 20)
+    linea_base = max(alto_texto + 4, linea_y - margen)
+    cv2.putText(
+        frame_bgr,
+        texto,
+        (izquierda, linea_base),
+        _FUENTE,
+        escala * 0.8,
+        color,
+        max(1, grosor - 1),
+        cv2.LINE_AA,
+    )
+
+
+def dibujar(
+    frame_bgr: np.ndarray,
+    detecciones: Sequence[ResultadoDeteccion],
+    *,
+    linea_conteo_y: int | None = None,
+) -> None:
+    """Dibuja cajas, etiquetas y la línea de conteo sobre `frame_bgr` in place.
 
     Se modifica in place para no sumar una copia por frame en la Pi: quien llame
     y necesite el frame limpio debe pasar una copia.
     """
     alto, ancho = frame_bgr.shape[:2]
     grosor, escala, margen = _metricas(alto)
+
+    if linea_conteo_y is not None and 0 < linea_conteo_y < alto:
+        color_linea = (230, 160, 40)
+        cv2.line(
+            frame_bgr,
+            (0, linea_conteo_y),
+            (ancho, linea_conteo_y),
+            color_linea,
+            max(1, grosor - 1),
+            cv2.LINE_AA,
+        )
+        _rotular_linea(
+            frame_bgr,
+            "LÍNEA DE CONTEO",
+            linea_conteo_y,
+            color_linea,
+            escala,
+            grosor,
+            margen,
+        )
 
     for deteccion in detecciones:
         left, top, caja_ancho, caja_alto = _recortar(deteccion.bbox, ancho, alto)

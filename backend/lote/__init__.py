@@ -300,22 +300,36 @@ class LoteService:
             )
 
     def _traducir(self, observado: EventoObservado) -> EventoDeteccion | None:
-        """Un evento por producto confirmado: quemado al `quemada`, ok/crudo al `baja`."""
+        """Un evento por producto confirmado: cruce de línea (o quemada/baja como fallback)."""
         evento = observado.evento
         clave = (observado.modelo_id, evento.pista_id)
-        if evento.tipo == "quemada":
-            if clave in self._reportadas:
-                return None
-            self._reportadas.add(clave)
-            self._ultimo_modelo = observado.modelo_id
-            return self._evento(observado, EstadoProducto.QUEMADO)
-        if evento.tipo == "baja":
+
+        # Con línea de conteo habilitada, el conteo oficial se produce al cruzar la meta.
+        if evento.tipo == "cruce":
             estado = clasificar_estado(evento.label)
             if clave in self._reportadas or estado is None:
                 return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
             return self._evento(observado, estado)
+
+        # Fallback si la línea de conteo está deshabilitada:
+        # quemado al confirmar 'quemada', ok/crudo al 'baja'.
+        if not self._config.stream.counting.enabled:
+            if evento.tipo == "quemada":
+                if clave in self._reportadas:
+                    return None
+                self._reportadas.add(clave)
+                self._ultimo_modelo = observado.modelo_id
+                return self._evento(observado, EstadoProducto.QUEMADO)
+            if evento.tipo == "baja":
+                estado = clasificar_estado(evento.label)
+                if clave in self._reportadas or estado is None:
+                    return None
+                self._reportadas.add(clave)
+                self._ultimo_modelo = observado.modelo_id
+                return self._evento(observado, estado)
+
         return None
 
     def _evento(

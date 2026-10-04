@@ -657,7 +657,7 @@ class EnVivo(SeccionBase):
         fps = f"{estado.fps:.0f} fps" if estado.fps > 0 else "sin medición"
         datos["rendimiento"].fijar(f"{fps} · {estado.frames} frames")
         ultima = estado.ultima_deteccion or "sin detecciones"
-        datos["detecciones"].fijar(f"{estado.detecciones} · {ultima}")
+        datos["detecciones"].fijar(f"{estado.activas} en cinta · {ultima}")
         datos["retraso"].fijar(
             f"{estado.retraso_ms} ms" if estado.retraso_ms else "—"
         )

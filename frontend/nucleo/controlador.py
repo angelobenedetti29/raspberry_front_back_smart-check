@@ -79,6 +79,7 @@ class EstadoUI:
     fps: float
     frames: int
     detecciones: int
+    activas: int
     ultima_deteccion: str
     """Formateada para mostrar (`"TCOK 0.82"`), vacía si todavía no hay."""
 

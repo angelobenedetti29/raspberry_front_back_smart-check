@@ -39,10 +39,12 @@ _DISTANCIA_MAX_PX = 150.0
 _BONUS_IOU = 1.0
 # Frames que una pista perdida sigue reportándose como visible (anti-parpadeo).
 _FRAMES_VISIBLE_PERDIDA = 3
-# Frames perdidos tras los cuales la pista se elimina.
-_FRAMES_MAX_PERDIDA = 10
+# Frames perdidos tras los cuales la pista se elimina (tolerancia a oclusiones).
+_FRAMES_MAX_PERDIDA = 25
 # Frames acumulados con etiqueta quemada para confirmar el estado "burnt".
 _FRAMES_CONFIRMAR_QUEMADA = 3
+# Frames mínimos de vida que debe tener una pista para confirmar el cruce (anti-ruido).
+_FRAMES_MINIMOS_CRUCE = 3
 
 
 def _es_quemada(label: str) -> bool:
@@ -55,10 +57,11 @@ def _es_quemada(label: str) -> bool:
 class EventoPista:
     """Evento de ciclo de vida de una pista, para contar productos a posteriori.
 
-    ``tipo`` es ``"alta" | "quemada" | "cambio" | "baja"``. Contar productos es
-    agrupar los ``baja`` por ``label`` final; ``quemada`` marca la transición
-    irreversible y ``cambio`` las transiciones entre clases no quemadas (p. ej.
-    crudo → ok).
+    ``tipo`` es ``"alta" | "cruce" | "quemada" | "cambio" | "baja"``. Contar
+    productos con línea virtual es registrar los eventos ``cruce`` (o los
+    ``baja`` como fallback si la línea no está habilitada); ``quemada`` marca la
+    transición irreversible y ``cambio`` las transiciones entre clases no
+    quemadas (p. ej. crudo → ok).
     """
 
     tipo: str
@@ -70,12 +73,16 @@ class EventoPista:
 
 @dataclass(slots=True)
 class _Pista:
-    """Estado temporal de una caja: id, clase, racha de quemado y pérdida."""
+    """Estado temporal de una caja: id, clase, racha de quemado, pérdida y cruce."""
 
     id: int
     bbox: tuple[int, int, int, int]
     label: str
     confianza: float
+    centro_y_prev: float
+    centro_y: float
+    cruzada: bool = False
+    frames_vistos: int = 1
     estado: str = "ok"
     racha_quemada: int = 0
     frames_desde_visto: int = 0
@@ -88,12 +95,24 @@ class EstabilizadorDetecciones:
     cercanía de centros) y conserva su etiqueta hasta confirmar "quemada" por
     `_FRAMES_CONFIRMAR_QUEMADA` frames acumulados. La quemada es irreversible
     en la vida de la pista, así que la clase no parpadea aunque el detector dude.
+    Si se configura `linea_conteo_y`, emite un evento ``cruce`` exactamente una
+    vez cuando el centroide atraviesa la línea hacia abajo.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, linea_conteo_y: int | None = None) -> None:
+        self._linea_y = linea_conteo_y
         self._pistas: list[_Pista] = []
         self._siguiente_id = 1
         self._eventos: list[EventoPista] = []
+
+    @property
+    def linea_y(self) -> int | None:
+        """Coordenada Y de la línea virtual de conteo, o None si está deshabilitada."""
+        return self._linea_y
+
+    @linea_y.setter
+    def linea_y(self, valor: int | None) -> None:
+        self._linea_y = valor
 
     def estabilizar(
         self, detecciones: Sequence[ResultadoDeteccion]
@@ -136,11 +155,19 @@ class EstabilizadorDetecciones:
         for indice_deteccion, deteccion in enumerate(crudas):
             if indice_deteccion in detecciones_usadas:
                 continue
+            nuevo_centro_y = deteccion.bbox[1] + deteccion.bbox[3] / 2.0
+            # Si nace ya por debajo de la línea, se inicializa como cruzada para
+            # no duplicar conteo si fue una fragmentación tardía.
+            ya_paso = self._linea_y is not None and nuevo_centro_y >= self._linea_y
             pista = _Pista(
                 id=self._siguiente_id,
                 bbox=deteccion.bbox,
                 label=deteccion.label,
                 confianza=deteccion.confianza,
+                centro_y_prev=nuevo_centro_y,
+                centro_y=nuevo_centro_y,
+                cruzada=ya_paso,
+                frames_vistos=1,
                 racha_quemada=1 if _es_quemada(deteccion.label) else 0,
             )
             self._siguiente_id += 1
@@ -195,6 +222,23 @@ class EstabilizadorDetecciones:
         pista.bbox = deteccion.bbox
         pista.confianza = deteccion.confianza
         pista.frames_desde_visto = 0
+        pista.frames_vistos += 1
+
+        nuevo_centro_y = deteccion.bbox[1] + deteccion.bbox[3] / 2.0
+        pista.centro_y_prev = pista.centro_y
+        pista.centro_y = nuevo_centro_y
+
+        # Chequear cruce de línea virtual hacia abajo
+        if (
+            self._linea_y is not None
+            and not pista.cruzada
+            and pista.frames_vistos >= _FRAMES_MINIMOS_CRUCE
+            and pista.centro_y_prev < self._linea_y <= pista.centro_y
+        ):
+            pista.cruzada = True
+            self._eventos.append(
+                EventoPista("cruce", pista.id, pista.label, pista.confianza, pista.bbox)
+            )
 
         if pista.estado == "burnt":
             # Una tostada quemada no se des-quema: la etiqueta queda latcheada.

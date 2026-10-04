@@ -44,6 +44,7 @@ class EstadoStreaming:
     frames_publicados: int
     fps: float
     detecciones: int
+    activas: int
     ultima_deteccion: ResultadoDeteccion | None
     # Si la inferencia va más lenta que la captura, las cajas publicadas
     # corresponden a un frame anterior. Se expone para no mentir en la UI.
@@ -91,6 +92,7 @@ class RegistroEstado:
             frames_publicados=0,
             fps=0.0,
             detecciones=0,
+            activas=0,
             ultima_deteccion=None,
             retraso_inferencia_ms=0,
             modelo_id=modelo_id,
