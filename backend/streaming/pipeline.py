@@ -91,7 +91,14 @@ class Pipeline:
         # --- dueño el lazo de inferencia ---
         self._detector: Detector | None = None
         self._almacen: AlmacenDetecciones | None = None
-        self._estabilizador = EstabilizadorDetecciones()
+        self._linea_conteo_y = (
+            config.stream.counting.line_y
+            if config.stream.counting.enabled
+            else None
+        )
+        self._estabilizador = EstabilizadorDetecciones(
+            linea_conteo_y=self._linea_conteo_y
+        )
         self._modelo_actual: str | None = None
         # Para el cierre de lote: segundos desde la última detección.
         self._inicio_monotonic = time.monotonic()
@@ -229,10 +236,12 @@ class Pipeline:
         self._ventana_frames += 1
 
         # El original queda limpio para el lazo de inferencia: dibujar sobre él
-        # le metería cajas al detector. Sin detecciones no hay copia que hacer.
-        if modo is ModoPublicacion.INFERENCIA and detecciones:
+        # le metería cajas al detector.
+        if modo is ModoPublicacion.INFERENCIA and (
+            detecciones or self._linea_conteo_y is not None
+        ):
             anotado = frame.copy()
-            dibujar(anotado, detecciones)
+            dibujar(anotado, detecciones, linea_conteo_y=self._linea_conteo_y)
         else:
             anotado = frame
 
@@ -473,6 +482,7 @@ class Pipeline:
                 self._ultima_deteccion_monotonic = time.monotonic()
 
         self._registro.actualizar(
+            activas=len(detecciones),
             ultima_deteccion=detecciones[0] if detecciones else None,
             retraso_inferencia_ms=retraso_ms,
         )

@@ -52,6 +52,7 @@ class AdaptadorStreaming:
             fps=estado.fps,
             frames=estado.frames_publicados,
             detecciones=estado.detecciones,
+            activas=estado.activas,
             ultima_deteccion=(
                 estado.ultima_deteccion.etiqueta if estado.ultima_deteccion else ""
             ),
