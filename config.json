@@ -50,7 +50,7 @@
         }
     },
     "models": {
-        "default_model_id": "tostadas-v2",
+        "default_model_id": "tostadas-v3",
         "catalog": [
             {
                 "model_id": "yolo11n-coco",
@@ -80,6 +80,20 @@
                 "class_thresholds": {
                     "tcq": 0.3,
                     "tcok": 0.6
+                }
+            },
+            {
+                "model_id": "tostadas-v3",
+                "producto_id": null,
+                "label": "YOLOv11 Tostadas V3 (Retraining)",
+                "file": "tostadas_retraining_v3.onnx",
+                "names_file": "tostadas_retraining_v3.names",
+                "class_thresholds": {
+                    "tcq": 0.45,
+                    "tcok": 0.55,
+                    "chaq": 0.45,
+                    "chaok": 0.55,
+                    "chacr": 0.50
                 }
             },
             {
