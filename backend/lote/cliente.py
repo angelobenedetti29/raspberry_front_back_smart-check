@@ -221,6 +221,9 @@ def _lote(raw: dict) -> Lote:
         inactividad_segundos=float(raw.get("inactividad_segundos", 0.0) or 0.0),
         cerrado_en=_texto_opcional(raw.get("cerrado_en")),
         motivo_cierre=_texto_opcional(raw.get("motivo_cierre")),
+        modo=str(raw.get("modo", "MANUAL")),
+        horno2_habilitado=bool(raw.get("horno2_habilitado", False)),
+        iniciado_manualmente=bool(raw.get("iniciado_manualmente", False)),
     )
 
 

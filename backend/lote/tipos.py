@@ -112,6 +112,11 @@ class Lote:
     inactividad_segundos: float
     cerrado_en: str | None = None
     motivo_cierre: str | None = None
+    # SCA-400: control automático/supervisión. Los defaults preservan
+    # compatibilidad con lotes previos al feature.
+    modo: str = "MANUAL"
+    horno2_habilitado: bool = False
+    iniciado_manualmente: bool = False
 
 
 @dataclass(frozen=True, slots=True)

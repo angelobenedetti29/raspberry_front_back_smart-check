@@ -63,6 +63,8 @@ class StorageConfig:
     max_bytes: int
     max_files: int
     persist_no_detection_every: int
+    # Motor del almacén: "jsonl" (legacy) o "sqlite" (default para v1).
+    engine: str = "sqlite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +178,23 @@ class LoteConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ControlConfig:
+    """Subsección `control` (SCA-400).
+
+    Si la sección no existe en el config, AppConfig.control queda en None y el
+    ControlService se deshabilita (la Pi sólo detecta, no publica telemetría
+    ni aplica consignas). Mantener compat con configs viejos.
+    """
+
+    habilitado: bool
+    publicar_telemetria_segundos: float
+    poll_consigna_propuesta_segundos: float
+    metricas_horno_endpoint: str
+    consigna_propuesta_endpoint: str
+    aplicar_consigna_endpoint: str
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     paths: PathsConfig
     stream: StreamConfig
@@ -183,6 +202,9 @@ class AppConfig:
     api: ApiConfig
     device: DeviceConfig
     lote: LoteConfig
+    # SCA-400: control automático / supervisión. None si el config viejo no
+    # tiene la sección (compat).
+    control: ControlConfig | None = None
 
 
 def resolve_path(value: str | Path, base: Path) -> Path:
@@ -340,12 +362,21 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     filename = _get(storage_raw, "file", str, "stream.storage")
     if not filename:
         raise ConfigError("'stream.storage.file' no puede estar vacío")
+    # engine opcional: default sqlite (default robusto para v1). Acepta
+    # "jsonl" como compat.
+    engine = storage_raw.get("engine", "sqlite")
+    if not isinstance(engine, str) or engine not in {"sqlite", "jsonl"}:
+        raise ConfigError(
+            "'stream.storage.engine' debe ser 'sqlite' o 'jsonl', "
+            f"no {engine!r}"
+        )
     storage = StorageConfig(
         path=paths.data_dir / filename,
         queue_size=_get(storage_raw, "queue_size", int, "stream.storage"),
         max_bytes=_get(storage_raw, "max_bytes", int, "stream.storage"),
         max_files=_get(storage_raw, "max_files", int, "stream.storage"),
         persist_no_detection_every=_get(storage_raw, "persist_no_detection_every", int, "stream.storage"),
+        engine=engine,
     )
 
     # --- stream.reconnect ---
@@ -594,6 +625,50 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "'lote.reintento_inicial_segundos'"
         )
 
+    # --- control (SCA-400) — opcional para compat con configs viejos ---
+    control: ControlConfig | None = None
+    control_raw = data.get("control")
+    if isinstance(control_raw, dict):
+        control = ControlConfig(
+            habilitado=_get(control_raw, "habilitado", bool, "control"),
+            publicar_telemetria_segundos=_get(
+                control_raw, "publicar_telemetria_segundos", float, "control"
+            ),
+            poll_consigna_propuesta_segundos=_get(
+                control_raw, "poll_consigna_propuesta_segundos", float, "control"
+            ),
+            metricas_horno_endpoint=_get(
+                control_raw, "metricas_horno_endpoint", str, "control"
+            ),
+            consigna_propuesta_endpoint=_get(
+                control_raw, "consigna_propuesta_endpoint", str, "control"
+            ),
+            aplicar_consigna_endpoint=_get(
+                control_raw, "aplicar_consigna_endpoint", str, "control"
+            ),
+        )
+        if control.publicar_telemetria_segundos <= 0:
+            raise ConfigError(
+                "'control.publicar_telemetria_segundos' debe ser > 0"
+            )
+        if control.poll_consigna_propuesta_segundos <= 0:
+            raise ConfigError(
+                "'control.poll_consigna_propuesta_segundos' debe ser > 0"
+            )
+        for campo in (
+            "metricas_horno_endpoint",
+            "consigna_propuesta_endpoint",
+            "aplicar_consigna_endpoint",
+        ):
+            if not getattr(control, campo).startswith("/"):
+                raise ConfigError(
+                    f"'control.{campo}' debe empezar con '/'"
+                )
+            if "{id}" not in getattr(control, campo):
+                raise ConfigError(
+                    f"'control.{campo}' debe contener el placeholder '{{id}}'"
+                )
+
     return AppConfig(
         paths=paths,
         stream=stream,
@@ -601,6 +676,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         api=api,
         device=device,
         lote=lote,
+        control=control,
     )
 
 

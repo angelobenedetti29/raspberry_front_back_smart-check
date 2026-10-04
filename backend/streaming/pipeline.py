@@ -30,6 +30,7 @@ from backend.streaming.estabilizador import EstabilizadorDetecciones, EventoPist
 from backend.streaming.estado import EstadoModelo, ModoPublicacion, RegistroEstado
 from backend.streaming.publisher import PublicadorFFmpeg
 from backend.streaming.storage import AlmacenDetecciones
+from backend.streaming.storage_sqlite import AlmacenSQLite
 from backend.streaming.suscripcion import EventoObservado, RegistroSuscriptores
 
 if TYPE_CHECKING:
@@ -43,6 +44,14 @@ _ESPERA_OCIOSO = 0.1
 _ESPERA_SIN_FRAME = 0.02
 _INTERVALO_CONSOLIDACION = 1.0
 _TIMEOUT_JOIN = 5.0
+
+
+def _crear_almacen(storage, *, fuente: str, modelo: str):
+    """Fábrica del almacén: engine del config (sqlite | jsonl)."""
+    engine = getattr(storage, "engine", "jsonl")
+    if engine == "sqlite":
+        return AlmacenSQLite(storage, fuente=fuente, modelo=modelo)
+    return AlmacenDetecciones(storage, fuente=fuente, modelo=modelo)
 
 
 class Pipeline:
@@ -90,7 +99,7 @@ class Pipeline:
 
         # --- dueño el lazo de inferencia ---
         self._detector: Detector | None = None
-        self._almacen: AlmacenDetecciones | None = None
+        self._almacen: AlmacenDetecciones | AlmacenSQLite | None = None
         self._estabilizador = EstabilizadorDetecciones()
         self._modelo_actual: str | None = None
         # Para el cierre de lote: segundos desde la última detección.
@@ -438,7 +447,7 @@ class Pipeline:
             self._almacen.detener()
             self._almacen = None
 
-        almacen = AlmacenDetecciones(
+        almacen = _crear_almacen(
             self._config.stream.storage,
             fuente=self._fuente_actual,
             modelo=model_id,
