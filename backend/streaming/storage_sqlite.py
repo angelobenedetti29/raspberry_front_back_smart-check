@@ -1,13 +1,13 @@
 """Persistencia de eventos de detección en SQLite, con rotación por tamaño.
 
-Espejo del `AlmacenDetecciones` JSONL: misma interfaz, misma semántica
-(una fila por evento, latido periódico cuando no hay eventos, rotación
-cuando la DB supera el máximo). Cambia el motor: SQLite con WAL para
-mejor resiliencia ante cortes de energía del entorno de planta.
+Una fila por evento (`alta`/`cambio`/`quemada`/`baja` de pista, más un
+`latido` periódico cuando no hay eventos). Rotación cuando la DB supera
+`max_bytes`: cierra, mueve a `eventos.N.db` y abre una nueva.
 
-El JSONL queda soportado vía el flag `engine` del config; la migración es
-in-place con un único importador que al detectar el engine legacy lee el
-eventos.jsonl existente, lo inserta en la DB nueva, y elimina el archivo.
+SQLite con WAL y `synchronous=NORMAL` minimiza la pérdida de filas ante
+cortes de energía del entorno de planta. La escritura es sincrónica
+dentro de `registrar()` para que el `commit` acompañe al evento antes de
+devolver: preferimos descartar antes que acumular backlog en memoria.
 """
 
 from __future__ import annotations
@@ -63,9 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_eventos_label ON eventos(label);
 class AlmacenSQLite:
     """Escribe eventos de detección en SQLite (WAL) con rotación por tamaño.
 
-    Mantiene la interfaz pública de AlmacenDetecciones para que el pipeline
-    no cambie. La rotación cierra la DB actual, la mueve a eventos.N.db
-    y abre una nueva. Con WAL se minimiza la pérdida ante cortes.
+    La rotación cierra la DB actual, la mueve a eventos.N.db y abre una
+    nueva. Con WAL se minimiza la pérdida ante cortes de energía.
     """
 
     def __init__(self, storage: StorageConfig, *, fuente: str, modelo: str) -> None:
@@ -74,7 +73,12 @@ class AlmacenSQLite:
         self._modelo = modelo
         # Conexión perezosa: la abrimos al primer registrar().
         self._conn: sqlite3.Connection | None = None
-        self._lock = threading.Lock()
+        # RLock (no Lock): los helpers `_anotar_error` / `_limpiar_error`
+        # también toman el lock y se invocan desde `_encolar` mientras ya lo
+        # tenemos. Con `Lock` eso deadlockea en el primer evento; con RLock
+        # se re-entra sin problema. El mismo lock sigue protegiendo el
+        # acceso al `Connection` compartido desde el hilo escritor.
+        self._lock = threading.RLock()
         self._parar = threading.Event()
         self._hilo: threading.Thread | None = None
         self._frames_sin_eventos = 0
@@ -262,56 +266,3 @@ class AlmacenSQLite:
                 logger.info("Almacén SQLite: rotando por tamaño")
                 self._rotar()
             self._parar.wait(2.0)
-
-
-def importar_jsonl_legacy(path: Path) -> int:
-    """Importa un eventos.jsonl legacy al SQLite destino.
-
-    Devuelve la cantidad de filas importadas. El .jsonl queda borrado
-    después de una importación exitosa para no duplicar.
-
-    Pensado para llamarse una sola vez desde una migración controlada
-    (no se ejecuta automáticamente).
-    """
-    if not path.exists():
-        return 0
-    target = path.with_suffix(".db")
-    conn = sqlite3.connect(str(target), timeout=10.0)
-    conn.executescript(_SCHEMA_SQL)
-    n = 0
-    try:
-        with path.open(encoding=_ENCODING) as f:
-            for linea in f:
-                linea = linea.strip()
-                if not linea:
-                    continue
-                try:
-                    d = json.loads(linea)
-                except json.JSONDecodeError:
-                    continue
-                conn.execute(
-                    """
-                    INSERT INTO eventos
-                        (ts, frame, modelo, fuente, tipo, pista, label, confianza, bbox, activas)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        d.get("ts"),
-                        d.get("frame"),
-                        d.get("modelo"),
-                        d.get("fuente"),
-                        d.get("tipo"),
-                        d.get("pista"),
-                        d.get("label"),
-                        d.get("confianza"),
-                        json.dumps(d.get("bbox"), ensure_ascii=False) if d.get("bbox") is not None else None,
-                        d.get("activas"),
-                    ),
-                )
-                n += 1
-        conn.commit()
-        path.unlink()
-        logger.info("Almacén: importados %d eventos desde %s", n, path)
-    finally:
-        conn.close()
-    return n

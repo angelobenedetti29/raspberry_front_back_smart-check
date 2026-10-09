@@ -6,14 +6,14 @@ y levanta la interfaz gráfica en el hilo principal.
 
 import logging
 import signal
+from pathlib import Path
 
 from backend.config import AppConfig, ConfigError, load_config
 from backend.control import ControlService
-from backend.control.sensores import (
-    AplicadorConsignaStub,
-    LectorSensoresStub,
-)
+from backend.control.sensores import crear_aplicador, crear_lector
 from backend.device import DeviceService
+from backend.http import ServidorHTTP
+from backend.http.routers import construir_router_renombre
 from backend.lote import LoteService
 from backend.monitor import MonitorService
 from backend.monitor.acelerador import habilitar_monitor_hailo
@@ -22,6 +22,7 @@ from backend.streaming import StreamingService
 from frontend.app import request_gui_quit, run_gui
 from frontend.nucleo.adaptador import AdaptadorStreaming
 from frontend.nucleo.adaptador_config import AdaptadorConfig
+from frontend.nucleo.adaptador_control import AdaptadorControl
 from frontend.nucleo.adaptador_dispositivo import AdaptadorDispositivo
 from frontend.nucleo.adaptador_lotes import AdaptadorLotes
 from frontend.nucleo.adaptador_monitor import AdaptadorMonitor
@@ -100,40 +101,90 @@ def main() -> int:
     controlador = AdaptadorStreaming(config, streaming)
     dispositivo = DeviceService(config)
     controlador_dispositivo = AdaptadorDispositivo(dispositivo)
+    # Servidor HTTP general de la app (FastAPI + uvicorn embebido). El bind
+    # sale de device.public_url / device.local_port con la misma regla que usaba
+    # el DeviceService para su servidor de renombre; hoy monta sólo el router
+    # del push de renombre del backend Go, pero admite routers nuevos.
+    bind_host, bind_port = DeviceService.derivar_bind(
+        config.device.public_url,
+        config.device.listen_address,
+        config.device.local_port,
+    )
+    servidor_http = ServidorHTTP(
+        routers=[construir_router_renombre(dispositivo)],
+        bind_host=bind_host,
+        bind_port=bind_port,
+    )
     monitor = MonitorService(
         config, on_credencial_invalida=dispositivo.invalidar_credencial
     )
     controlador_monitor = AdaptadorMonitor(monitor)
+
+    def _al_cambiar_tunel(nueva_url: str, nuevo_puerto: int) -> None:
+        """Re-bindea el servidor HTTP y agenda la URL para el sync con el Go.
+
+        Si el re-bind falla (puerto ocupado, sin permisos), no se sincroniza la
+        URL nueva con el backend Go: la Pi sigue anunciando la anterior.
+        """
+        bind_host_nuevo, bind_port_nuevo = DeviceService.derivar_bind(
+            nueva_url, config.device.listen_address, nuevo_puerto
+        )
+        try:
+            servidor_http.rebind(bind_host_nuevo, bind_port_nuevo)
+        except Exception:
+            logger.exception(
+                "http: no se pudo re-bindear el servidor; URL no sincronizada"
+            )
+            return
+        dispositivo.actualizar_tunel(nueva_url, nuevo_puerto)
+
     # La configuración se edita desde la UI, pero no necesita servicios
     # arrancados: sólo lee y escribe el archivo. El callback conecta el
-    # guardado con el servicio de dispositivo para que un cambio del par
-    # túnel (`device.public_url` + `device.local_port`) re-arranque el bind
-    # del servidor de renombre y sincronice la nueva URL con el backend Go
-    # sin reiniciar la app.
+    # guardado con el servidor HTTP y el servicio de dispositivo para que un
+    # cambio del par túnel (`device.public_url` + `device.local_port`)
+    # re-bindee el servidor y sincronice la nueva URL con el backend Go sin
+    # reiniciar la app.
     controlador_config = AdaptadorConfig(
         config,
-        on_device_tunel_changed=dispositivo.actualizar_tunel,
+        on_device_tunel_changed=_al_cambiar_tunel,
     )
-    # Los lotes se suscriben al streaming: arrancan después y, por el orden
-    # inverso de apagado, se detienen antes que el streaming.
-    lotes = LoteService(
-        config, streaming, on_credencial_invalida=dispositivo.invalidar_credencial
-    )
-    controlador_lotes = AdaptadorLotes(lotes)
-
     # Control automático (SCA-400): sólo aplica a Pi ENTRADA. El servicio se
     # autodeshabilita si el tipo es SALIDA_HORNO. Hasta que exista driver
-    # real, se usan stubs (no leen ni escriben hardware).
+    # real, se usan stubs (no leen ni escriben hardware). Se construye antes
+    # que LoteService para cablear los callbacks reactivos (on_lote_abierto,
+    # on_lote_cerrado, actualizar_modo) — sin esto, control sólo descubría
+    # lotes por su propio polling.
     control = ControlService(
         config,
-        lector=LectorSensoresStub(),
-        aplicador=AplicadorConsignaStub(),
+        lector=crear_lector(config.control.sensores),
+        aplicador=crear_aplicador(config.control.actuadores),
         tipo_provider=lambda: dispositivo.estado().tipo,
         secret_provider=dispositivo.secret,
         on_credencial_invalida=dispositivo.invalidar_credencial,
     )
+    # Adaptador UI: traduce el dict de ControlService.estado() a dataclasses
+    # propias del frontend (frontend/nucleo/adaptador_control.py). Único
+    # módulo del frontend que importa backend.control.
+    controlador_control = AdaptadorControl(control)
 
-    services = _start_services([streaming, dispositivo, monitor, lotes, control])
+    # Los lotes se suscriben al streaming: arrancan después y, por el orden
+    # inverso de apagado, se detienen antes que el streaming. Los callbacks
+    # que apuntan a control hacen que el cambio de modo sea reactivo (sin
+    # esperar al próximo /lotes/abierto); el polling de control sigue como
+    # respaldo por si el callback falla.
+    lotes = LoteService(
+        config,
+        streaming,
+        on_credencial_invalida=dispositivo.invalidar_credencial,
+        on_lote_abierto=control.on_lote_abierto,
+        on_lote_cerrado=control.on_lote_cerrado,
+        on_modo_actualizado=control.actualizar_modo,
+    )
+    controlador_lotes = AdaptadorLotes(lotes)
+
+    services = _start_services(
+        [streaming, dispositivo, monitor, lotes, control, servidor_http]
+    )
     logger.info("Aplicación iniciada")
     try:
         return run_gui(
@@ -143,6 +194,7 @@ def main() -> int:
             controlador_monitor,
             controlador_config,
             controlador_lotes,
+            controlador_control,
         )
     finally:
         _stop_services(services)

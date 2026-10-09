@@ -10,6 +10,7 @@ from frontend.main_window import MainWindow
 from frontend.nucleo import tema
 from frontend.nucleo.controlador import ControladorStreaming
 from frontend.nucleo.controlador_config import ControladorConfig
+from frontend.nucleo.controlador_control import ControladorControl
 from frontend.nucleo.controlador_dispositivo import ControladorDispositivo
 from frontend.nucleo.controlador_lotes import ControladorLotes
 from frontend.nucleo.controlador_monitor import ControladorMonitor
@@ -33,6 +34,7 @@ def run_gui(
     controlador_monitor: ControladorMonitor,
     controlador_config: ControladorConfig,
     controlador_lotes: ControladorLotes,
+    controlador_control: ControladorControl,
 ) -> int:
     """Crea la QApplication, muestra la ventana y corre el loop de eventos.
 
@@ -50,6 +52,7 @@ def run_gui(
         controlador_monitor,
         controlador_config,
         controlador_lotes,
+        controlador_control,
     )
     window.show()
 

@@ -40,6 +40,9 @@ _MAX_DECIMAL = 1_000_000.0
 
 _CLAVE_RTSP = "stream.publisher.rtsp_transport"
 _CLAVE_MODELO = "models.default_model_id"
+_CLAVE_DRIVER_SENSORES = "control.sensores.driver"
+_CLAVE_DRIVER_ACTUADORES = "control.actuadores.driver"
+_CLAVE_LOTES_MODO_ENDPOINT = "control.lotes_modo_endpoint"
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,13 +273,6 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
     ),
     # Almacenamiento
     _CampoEsquema(
-        "stream.storage.file",
-        "Almacenamiento",
-        "Archivo de eventos",
-        TipoCampo.TEXTO,
-        "Nombre del log de eventos dentro de la carpeta de datos.",
-    ),
-    _CampoEsquema(
         "stream.storage.queue_size",
         "Almacenamiento",
         "Tamaño de cola",
@@ -499,6 +495,32 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         decimales=1,
         paso=1.0,
     ),
+    # Control (SCA-400)
+    _CampoEsquema(
+        _CLAVE_DRIVER_SENSORES,
+        "Control",
+        "Driver de sensores",
+        TipoCampo.OPCION,
+        'Backend del lector de sensores. "stub" no requiere PLC real; '
+        '"modbus_rtu" y "modbus_tcp" requieren hardware Modbus cableado.',
+    ),
+    _CampoEsquema(
+        _CLAVE_DRIVER_ACTUADORES,
+        "Control",
+        "Driver de actuadores",
+        TipoCampo.OPCION,
+        'Backend del PLC que recibe las consignas. "stub" no escribe '
+        'hardware; "modbus_rtu"/"modbus_tcp" usan el mismo PLC que sensores '
+        'o uno distinto según la sección.',
+    ),
+    _CampoEsquema(
+        _CLAVE_LOTES_MODO_ENDPOINT,
+        "Control",
+        "Endpoint de cambio de modo",
+        TipoCampo.TEXTO,
+        "Ruta que la Pi usa para sincronizar el modo del lote con el "
+        'backend (ej.: "/api/v1/lotes/{id}/modo").',
+    ),
 )
 
 
@@ -512,7 +534,8 @@ class AdaptadorConfig:
     `on_device_tunel_changed` se invoca cuando un `guardar()` exitoso detecta
     que cambió `device.public_url` o `device.local_port` respecto al valor
     en disco. Es el único side-effect hacia backend que dispara el guardado:
-    permite re-bindear el `ServidorRenombre` y sincronizar la nueva URL con
+    permite re-bindear el servidor HTTP local (`backend.http.ServidorHTTP`) y
+    sincronizar la nueva URL con
     el backend Go sin reiniciar la app. Si el guardado falla (validación o
     disco), el callback no se llama.
     """
@@ -677,11 +700,17 @@ class AdaptadorConfig:
     def _opciones(
         clave: str, cruda: dict
     ) -> tuple[tuple[str, object], ...]:
-        """Opciones de los combos: transporte RTSP y catálogo de modelos."""
+        """Opciones de los combos: transporte RTSP, drivers Modbus y modelos."""
         if clave == _CLAVE_RTSP:
             return (("TCP", "tcp"), ("UDP", "udp"))
         if clave == _CLAVE_MODELO:
             return _opciones_modelos(cruda)
+        if clave in (_CLAVE_DRIVER_SENSORES, _CLAVE_DRIVER_ACTUADORES):
+            return (
+                ("Stub (sin hardware)", "stub"),
+                ("Modbus RTU (RS-485)", "modbus_rtu"),
+                ("Modbus TCP (Ethernet)", "modbus_tcp"),
+            )
         return ()
 
 

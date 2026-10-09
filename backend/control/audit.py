@@ -1,0 +1,161 @@
+"""Audit log append-only de decisiones de control (SCA-400).
+
+Persiste cada decisión aplicada por el `ControlService` (o descartada por
+dedup / buffered por SUPERVISION / con fallo de ack al backend) a un
+JSONL rotado por tamaño. El `decision_id` del backend es la llave de
+reconciliación: si el log rotó, el post-mortem puede cruzar este archivo
+con el backend para reconstruir qué se aplicó al PLC.
+
+Concurrencia: una sola instancia por `ControlService`. Escritura
+síncrona para minimizar la pérdida ante cortes de energía (mismo
+principio que `AlmacenSQLite` y `ColaDLQ`).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from backend.control.tipos import SetpointPropuesto
+
+logger = logging.getLogger(__name__)
+
+
+# Resultados posibles del ciclo de decisión. El string viaja literal al
+# JSONL para que un parser externo (jq, log shipper) pueda filtrar.
+ResultadoDecision = Literal[
+    "aplicada",          # el setpoint se aplicó al PLC y el ack al backend fue OK
+    "descartada_dup",    # mismo decision_id dentro del TTL: no se aplica
+    "buffered",          # SUPERVISION aplaza: queda pendiente de `aplicar_pendiente`
+    "fallo_ack",         # se aplicó al PLC pero el ack al backend falló
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _CfgAudit:
+    path: Path
+    max_bytes: int
+    max_files: int
+
+
+def _ahora_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+class AuditorConsignas:
+    """Escribe entradas de audit append-only a un archivo JSONL rotado.
+
+    Uso:
+        auditor = AuditorConsignas(Path("data/control_audit.jsonl"),
+                                   max_bytes=5_242_880, max_files=5)
+        auditor.decision_aplicada(lote_id="L-1", propuesta=setpoint,
+                                  resultado="aplicada")
+
+    La rotación es best-effort: si la línea no entra en el archivo
+    principal, se mueve a `.1` (y los backups se desplazan). El
+    esquema del archivo es estable: un objeto JSON por línea con
+    campos fijos para que un parser externo lo consuma.
+    """
+
+    def __init__(self, path: Path, *, max_bytes: int, max_files: int) -> None:
+        if max_bytes <= 0:
+            raise ValueError("max_bytes debe ser > 0")
+        if max_files <= 0:
+            raise ValueError("max_files debe ser > 0")
+        self._cfg = _CfgAudit(path=path, max_bytes=max_bytes, max_files=max_files)
+        self._lock = threading.Lock()
+        self._error = ""
+
+    @property
+    def error(self) -> str:
+        """Último fallo de apertura/escritura. Vacío si el auditor está sano."""
+        with self._lock:
+            return self._error
+
+    @property
+    def path(self) -> Path:
+        """Ruta del archivo principal del audit."""
+        return self._cfg.path
+
+    # --- escritura ---
+
+    def decision_aplicada(
+        self,
+        lote_id: str,
+        propuesta: SetpointPropuesto,
+        *,
+        resultado: ResultadoDecision,
+        detalle: str = "",
+    ) -> None:
+        """Persiste una decisión de control al audit log.
+
+        `resultado` indica el camino que tomó: aplicada, descartada por
+        dedup, buffered en SUPERVISION, o aplicada al PLC con fallo de
+        ack al backend. `detalle` agrega contexto libre (ej: "ttl
+        expirado" para un descartada_dup).
+        """
+        entrada = {
+            "ts": _ahora_iso(),
+            "lote_id": lote_id,
+            "decision_id": propuesta.decision_id,
+            "aplicado_por": propuesta.aplicado_por,
+            "ventana": propuesta.ventana,
+            "resultado": resultado,
+            "detalle": detalle,
+            "temp_horno_1": round(propuesta.temp_horno_1, 3),
+            "temp_horno_2": (
+                round(propuesta.temp_horno_2, 3)
+                if propuesta.temp_horno_2 is not None
+                else None
+            ),
+            "velocidad_cinta": round(propuesta.velocidad_cinta, 4),
+        }
+        linea = json.dumps(entrada, ensure_ascii=False) + "\n"
+        linea_bytes = linea.encode("utf-8")
+
+        with self._lock:
+            self._cfg.path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if self._debe_rotar(len(linea_bytes)):
+                    self._rotar()
+                with self._cfg.path.open("a", encoding="utf-8") as fh:
+                    fh.write(linea)
+                self._error = ""
+            except OSError as exc:
+                self._error = f"No se pudo escribir en {self._cfg.path}: {exc}"
+                logger.warning("Audit: %s", exc)
+
+    # --- rotación ---
+
+    def _tamano_actual(self) -> int:
+        try:
+            return self._cfg.path.stat().st_size
+        except OSError:
+            return 0
+
+    def _debe_rotar(self, tamano_linea: int) -> bool:
+        if self._cfg.max_bytes <= 0:
+            return False
+        actual = self._tamano_actual()
+        return actual > 0 and actual + tamano_linea > self._cfg.max_bytes
+
+    def _rotar(self) -> None:
+        """Rota: el actual pasa a `.1`, conservando `max_files` en total."""
+        ruta = self._cfg.path
+        backups = max(0, self._cfg.max_files - 1)
+        if backups == 0:
+            ruta.unlink(missing_ok=True)
+            return
+        ruta.with_name(f"{ruta.name}.{backups}").unlink(missing_ok=True)
+        for indice in range(backups - 1, 0, -1):
+            origen = ruta.with_name(f"{ruta.name}.{indice}")
+            if origen.exists():
+                origen.replace(ruta.with_name(f"{ruta.name}.{indice + 1}"))
+        if ruta.exists():
+            ruta.replace(ruta.with_name(f"{ruta.name}.1"))

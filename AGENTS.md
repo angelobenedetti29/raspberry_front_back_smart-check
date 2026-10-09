@@ -26,10 +26,10 @@ configurados: no asumas comandos de lint/build.
 - Instalar dependencias: `pip install -r requirements.txt`. El alta del
   dispositivo se dispara desde la UI; el `secret` que devuelve el backend queda
   en `device.json`.
-- `python run.py` — entrypoint único. Carga `config.json`, arranca los cuatro
-  servicios de backend en hilos (`StreamingService`, `DeviceService`,
-  `MonitorService`, `LoteService`) y corre la GUI en el hilo principal (Qt lo
-  exige).
+- `python run.py` — entrypoint único. Carga `config.json`, arranca los servicios
+  de backend en hilos (`StreamingService`, `DeviceService`, `MonitorService`,
+  `LoteService`, `ControlService` y `ServidorHTTP`) y corre la GUI en el hilo
+  principal (Qt lo exige).
 - GUI sin display (verificación): `QT_QPA_PLATFORM=offscreen python run.py`
   (bloquea en el loop de Qt; usar `timeout`).
 - Requiere Python 3.10+ (`str | None`, `slots=True`). Objetivo: Bookworm / 3.11
@@ -52,19 +52,33 @@ configurados: no asumas comandos de lint/build.
   con las últimas detecciones que dejó el de inferencia.
   - `capture.py` — frames BGR normalizados a `capture.width × height`, de cámara o
     archivo; `publisher.py` — ffmpeg como subproceso hacia MediaMTX (hilo escritor
-    + hilo supervisor); `storage.py` — JSONL por evento con rotación;
-    `estabilizador.py` — latch anti-parpadeo por pista y eventos de ciclo de vida;
+    + hilo supervisor); `storage_sqlite.py` — SQLite (WAL) por evento con rotación
+    por tamaño; `estabilizador.py` — latch anti-parpadeo por pista y eventos de
+    ciclo de vida;
     `suscripcion.py` — buzón acotado por el que el streaming difunde eventos sin
     bloquear la inferencia; `estado.py` — instantáneas inmutables para la UI.
 - `backend/inference/` — motor de inferencia intercambiable. `detector.py` es el
   puerto; `catalogo.py` resuelve qué motor y qué archivo se cargan (con el
   auto-redirect `.onnx` → `.hef`); `yolo_opencv.py` (CPU, `cv2.dnn`) y
   `yolo_hailo.py` (NPU, sólo en la Pi) son los adaptadores.
+- `backend/http/` — servidor HTTP general de la app, basado en FastAPI + uvicorn
+  embebido. `servidor.py` expone `ServidorHTTP` (cumple el Protocol `Service`):
+  bindea el socket, monta los `APIRouter` que recibe y los corre en un hilo
+  daemon; `stop()` señaliza `should_exit` y espera al hilo; `rebind(host, port)`
+  lo reemplaza por uno nuevo en otro bind (lo usa `run.py` cuando cambia
+  `device.public_url` o `device.local_port` desde Configuración). `routers/`
+  trae los routers enchufables: hoy sólo `renombre.py` (push de renombre del
+  backend Go a la Pi); mañana cualquier módulo puede sumar el suyo sin tocar
+  `ServidorHTTP`.
 - `backend/device/` — registro de la Raspberry contra el backend Go remoto:
   `cliente.py` (HTTP con `urllib`), `almacen.py` (`device.json` en la raíz, guarda
   el secret), `tipos.py` (`TipoDispositivo`: ENTRADA_HORNO/SALIDA_HORNO) y
   `__init__.py` (`DeviceService`, hilo con polling; el alta la dispara el
-  operador, nunca es automática).
+  operador, nunca es automática). El servidor HTTP local del push de renombre
+  **no** vive acá: lo levanta `run.py` con `backend.http.ServidorHTTP` y el
+  router `backend.http.routers.renombre`; este módulo sólo expone
+  `derivar_bind(...)` (público) para que `run.py` calcule el bind y
+  `aplicar_renombre_externo` para que el router aplique el cambio.
 - `backend/monitor/` — telemetría: `recolector.py` lee CPU/RAM/disco/temperatura
   con psutil y `acelerador.py` la utilización de la NPU (puerto
   `FuenteAceleradorIA`; hoy sólo Hailo). `MonitorService` envía por HTTP cada
@@ -111,18 +125,19 @@ configurados: no asumas comandos de lint/build.
   el ROOT del proyecto (derivado de `backend/config.py`), **nunca** contra el CWD.
 - El `secret` del dispositivo **no** va acá: lo devuelve el backend al aprobar el
   alta y se guarda en `device*.json` (ignorado por git).
-- No dupliques rutas en el JSON: el loader compone `stream.storage.path` (=
-  `paths.data_dir` + `stream.storage.file`) y `catalog[].model_path/names_path`.
-  `api.base_url` es sólo esquema + host + puerto (sin `/` final); las rutas de los
-  recursos van como endpoints nombrados (`api.*_endpoint`, todos empezando con `/`):
-  registro, ping, nombre, productos, sector y lotes.
+- No dupliques rutas en el JSON: el loader compone `catalog[].model_path/names_path`
+  desde `paths.models_dir`, y `stream.storage.path` queda fijo en
+  `paths.data_dir/eventos.db`. `api.base_url` es sólo esquema + host + puerto (sin
+  `/` final); las rutas de los recursos van como endpoints nombrados
+  (`api.*_endpoint`, todos empezando con `/`): registro, ping, nombre, productos,
+  sector y lotes.
 - `paths.models_dir` (`models/`) debe existir o el loader falla, y es la base de
   `catalog[].file/names_file`. `paths.data_dir` (`data/`) es salida en runtime (el log
   de eventos) y se crea bajo demanda; `paths.videos_dir` (`multimedia/videos/`) es la
   base de los archivos que puede tomar `stream.capture.source`.
-- `data/eventos.jsonl` es un log **por evento**, no por frame: una línea por cada
-  `alta`/`quemada`/`cambio`/`baja` de pista, más un `latido` periódico. Contar
-  productos es agrupar los `baja` por su `label` final. Rota por tamaño
+- `data/eventos.db` es la DB SQLite (WAL) **por evento**, no por frame: una fila
+  por cada `alta`/`quemada`/`cambio`/`baja` de pista, más un `latido` periódico.
+  Contar productos es agrupar los `baja` por su `label` final. Rota por tamaño
   (`stream.storage.max_bytes` × `stream.storage.max_files`), y
   `stream.storage.persist_no_detection_every` es la cadencia del latido en frames.
 - El loader valida integridad referencial: `models.default_model_id` debe existir en

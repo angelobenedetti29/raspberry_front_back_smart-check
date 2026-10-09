@@ -1,22 +1,219 @@
-"""Sección Horno y cinta: línea de entrada (contenido pendiente).
+"""Sección Horno y cinta (SCA-400): línea de entrada del horno.
 
-Es una sección del grupo ENTRADA: sólo aparece en el rail cuando el dispositivo
-registrado es de entrada de horno. Todavía no muestra temperaturas ni velocidad
-de cinta; el panel vacío deja claro que el contenido está pendiente.
+Muestra el estado actual del horno (T1, T2, velocidad de cinta), el setpoint
+objetivo con tolerancia, el modo de control seleccionado, una propuesta
+pendiente de aplicar (cuando el operario pidió aplazar) y la cola de los
+últimos setpoints aplicados. Consume `ctx.controlador_control` (Protocol +
+dataclasses UI); no importa `backend.*`.
 """
 
 from __future__ import annotations
 
+import time
+from collections import deque
+from dataclasses import dataclass
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QPainter, QPen
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from frontend.nucleo.contrato import ContextoApp, GrupoSeccion, SeccionBase
+from frontend.nucleo.controlador_control import (
+    ETIQUETAS_MODO,
+    LecturaHornoUI,
+    ModoControlUI,
+    SetpointUI,
+)
 from frontend.nucleo.iconos import icono
 from frontend.nucleo.tema import color
 
+# --- constantes visuales / tolerancias --------------------------------------
+
+_VALOR_SIN_DATO = "—"
+_TOLERANCIA_TEMP_C = 10.0  # matchea LimitesAplicacion.delta_temp_max_c
+_TOLERANCIA_VEL = 0.05  # matchea LimitesAplicacion.delta_vel_max
+_PASO_Y_TEMP = 25.0
+_PASO_Y_VEL = 0.10
+_VENTANA_MINUTOS = 600.0  # 10 min de historial para el mini-chart
+_HISTORIAL_APLICADOS_MAX = 10
+_PASO_POLL_MS = 1000  # el bus emite cada 1s; usamos esto para el countdown
+_ALTURA_CHART = 90
+_ALTURA_BOTON_MODO = 56
+_ALTURA_BOTON_APLICAR = 48
+
+
+@dataclass
+class _Muestra:
+    """Una muestra cacheada para el mini-chart."""
+    timestamp: float  # time.monotonic()
+    valor: float
+
+
+# --- mini-chart ---------------------------------------------------------------
+
+
+class _HornoMiniChart(QFrame):
+    """Serie numérica con línea de objetivo punteada y banda de tolerancia.
+
+    El cache vive en la sección (no en el chart) para poder limpiarlo al
+    cambiar de lote. El chart sólo guarda la referencia al cache.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("hornoMiniChart")
+        self.setMinimumHeight(_ALTURA_CHART)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Referencias mutables que el dueño (sección) actualiza.
+        self._muestras: deque[_Muestra] = deque()
+        self._objetivo: float | None = None
+        self._tolerancia: float = 0.0
+        self._paso_y: float = _PASO_Y_TEMP
+        self._vacio_ms: str = "Acumulando muestras…"
+
+    def configurar(
+        self,
+        objetivo: float | None,
+        tolerancia: float,
+        paso_y: float,
+        vacio_ms: str,
+    ) -> None:
+        """Setea objetivo + tolerancia + paso del eje Y. Llama update()."""
+        self._objetivo = objetivo
+        self._tolerancia = tolerancia
+        self._paso_y = paso_y
+        self._vacio_ms = vacio_ms
+        self.update()
+
+    def asignar_cache(self, muestras: deque[_Muestra]) -> None:
+        """Conecta el cache de la sección. No copia: vive afuera."""
+        self._muestras = muestras
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - API Qt
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            self._pintar(painter)
+        finally:
+            painter.end()
+
+    def _pintar(self, painter: QPainter) -> None:
+        rect = self.rect().adjusted(8, 6, -8, -6)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        # Filtrar muestras válidas y dentro de la ventana de 10 min.
+        ahora = time.monotonic()
+        muestras = [
+            m for m in self._muestras if ahora - m.timestamp <= _VENTANA_MINUTOS
+        ]
+        # Estado vacío: <2 muestras o todas None.
+        if len(muestras) < 2:
+            self._pintar_centrado(painter, rect, self._vacio_ms)
+            return
+        valores = [m.valor for m in muestras]
+        min_v = min(valores)
+        max_v = max(valores)
+        if self._objetivo is not None:
+            min_v = min(min_v, self._objetivo - self._tolerancia)
+            max_v = max(max_v, self._objetivo + self._tolerancia)
+        if min_v == max_v:
+            min_v -= 1
+            max_v += 1
+        # Redondeo a múltiplos del paso para que los ticks queden prolijos.
+        y_min = (min_v // self._paso_y) * self._paso_y
+        y_max = ((max_v // self._paso_y) + 1) * self._paso_y
+        if y_min == y_max:
+            y_max = y_min + self._paso_y
+        # Banda de tolerancia si hay objetivo.
+        if self._objetivo is not None and self._tolerancia > 0:
+            banda_color = QColor_accent_alpha(0x4D)
+            painter.fillRect(
+                int(rect.x()),
+                int(self._y_a_px(self._objetivo + self._tolerancia, y_min, y_max, rect)),
+                int(rect.width()),
+                int(
+                    self._y_a_px(self._objetivo - self._tolerancia, y_min, y_max, rect)
+                    - self._y_a_px(self._objetivo + self._tolerancia, y_min, y_max, rect)
+                ),
+                banda_color,
+            )
+        # Grid horizontal.
+        grid_color = QColor_from_named_colors("#2A323B")
+        tick = y_min
+        while tick <= y_max + 1e-9:
+            y_px = self._y_a_px(tick, y_min, y_max, rect)
+            painter.setPen(QPen(grid_color, 1))
+            painter.drawLine(int(rect.x()), int(y_px), int(rect.right()), int(y_px))
+            tick += self._paso_y
+        # Línea de objetivo punteada.
+        if self._objetivo is not None:
+            muted_color = QColor_from_named_colors("#94A1AE")
+            painter.setPen(QPen(muted_color, 1, Qt.PenStyle.DotLine))
+            y_obj = self._y_a_px(self._objetivo, y_min, y_max, rect)
+            painter.drawLine(int(rect.x()), int(y_obj), int(rect.right()), int(y_obj))
+        # Serie accent.
+        accent_color = QColor_from_named_colors("#3DD6D0")
+        painter.setPen(QPen(accent_color, 2))
+        x_step = rect.width() / max(1, _VENTANA_MINUTOS - 0)  # width por segundo
+        # Mapear timestamps: t = ahora - (ahora - timestamp) → más reciente a la derecha
+        puntos = [
+            (
+                rect.right() - int((ahora - m.timestamp) * (rect.width() / _VENTANA_MINUTOS)),
+                self._y_a_px(m.valor, y_min, y_max, rect),
+            )
+            for m in muestras
+        ]
+        for i in range(len(puntos) - 1):
+            painter.drawLine(
+                int(puntos[i][0]), int(puntos[i][1]),
+                int(puntos[i + 1][0]), int(puntos[i + 1][1]),
+            )
+
+    def _pintar_centrado(self, painter: QPainter, rect, texto: str) -> None:
+        color_texto = QColor_from_named_colors("#94A1AE")
+        painter.setPen(color_texto)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, texto)
+
+    def _y_a_px(self, valor: float, y_min: float, y_max: float, rect) -> float:
+        if y_max == y_min:
+            return rect.y() + rect.height() / 2
+        frac = (valor - y_min) / (y_max - y_min)
+        # y crece hacia abajo en Qt
+        return rect.y() + (1 - frac) * rect.height()
+
+
+# --- helpers de color (importación tardía para no acoplar) -------------------
+
+
+def QColor_from_named_colors(nombre: str):
+    from PySide6.QtGui import QColor
+
+    return QColor(nombre)
+
+
+def QColor_accent_alpha(alpha: int):
+    from PySide6.QtGui import QColor
+
+    c = QColor("#3DD6D0")
+    c.setAlpha(alpha)
+    return c
+
+
+# --- la sección -------------------------------------------------------------
+
 
 class HornoYCinta(SeccionBase):
-    """Pantalla del horno y la cinta de entrada, todavía sin contenido."""
+    """Pantalla del horno y la cinta de entrada."""
 
     id = "horno_cinta"
     titulo = "Horno y cinta"
@@ -25,7 +222,19 @@ class HornoYCinta(SeccionBase):
 
     def __init__(self, ctx: ContextoApp, parent: QWidget | None = None) -> None:
         super().__init__(ctx, parent)
+        # Cache de lecturas por tarjeta (10 min de historial).
+        self._cache_temp: deque[_Muestra] = deque()
+        self._cache_vel: deque[_Muestra] = deque()
+        # Cola de últimos N aplicados con timestamp del tick del bus.
+        self._historial: deque[tuple[float, SetpointUI]] = deque(maxlen=_HISTORIAL_APLICADOS_MAX)
+        self._ultimo_decision_id: str | None = None
+        # Última vez que llegó estado_actualizado (para el countdown).
+        self._ultimo_refresh: float = time.monotonic()
+        # ID del feedback timer para auto-ocultar.
+        self._feedback_timer_ms: int = 0
         self._construir()
+        self.ctx.bus.estado_actualizado.connect(self._al_actualizar_estado)
+        self._refrescar()
 
     # --- construcción ---
 
@@ -34,41 +243,539 @@ class HornoYCinta(SeccionBase):
         layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(10)
 
-        subtitulo = QLabel("Estado del horno y la cinta de entrada.")
-        subtitulo.setProperty("rol", "subtitulo")
-        layout.addWidget(subtitulo)
+        # Banner de aviso cuando el driver es stub (sin hardware).
+        self._banner_aviso = QLabel(
+            "Driver en modo stub: no hay comunicación con sensores."
+        )
+        self._banner_aviso.setObjectName("hornoBannerAviso")
+        self._banner_aviso.setVisible(False)
+        layout.addWidget(self._banner_aviso)
 
-        layout.addWidget(self._construir_pendiente(), 1)
+        layout.addWidget(self._construir_tarjeta_lote())
+        layout.addWidget(self._construir_tarjeta_temp())
+        layout.addWidget(self._construir_tarjeta_cinta())
+        layout.addWidget(self._construir_tarjeta_modo())
+        self._boton_aplicar = QPushButton()
+        self._boton_aplicar.setObjectName("hornoBotonAplicar")
+        self._boton_aplicar.setVisible(False)
+        self._boton_aplicar.clicked.connect(self._aplicar_pendiente_click)
+        layout.addWidget(self._boton_aplicar)
+        self._feedback = QLabel("")
+        self._feedback.setObjectName("hornoFeedback")
+        self._feedback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._feedback.setVisible(False)
+        layout.addWidget(self._feedback)
+        layout.addWidget(self._construir_tarjeta_historial())
+        layout.addStretch(1)
 
-    def _construir_pendiente(self) -> QFrame:
-        """Panel vacío: aclara que el contenido de la sección está pendiente."""
+    def _construir_tarjeta_lote(self) -> QFrame:
         marco = QFrame()
-        marco.setObjectName("estadoVacio")
-
+        marco.setObjectName("hornoTarjetaLote")
         layout = QVBoxLayout(marco)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(6)
-
-        glifo = QLabel()
-        glifo.setPixmap(
-            icono("herramienta", color=color("texto_muted"), px=36).pixmap(36, 36)
-        )
-        glifo.setFixedSize(36, 36)
-
-        titulo = QLabel("Contenido pendiente")
-        titulo.setObjectName("vacioTitulo")
-        titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        texto = QLabel(
-            "Esta sección todavía no está implementada.\n"
-            "Por ahora sólo ocupa un lugar en la navegación."
-        )
-        texto.setObjectName("vacioTexto")
-        texto.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        layout.addStretch(1)
-        layout.addWidget(glifo, 0, Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(titulo)
-        layout.addWidget(texto)
-        layout.addStretch(1)
+        # Header: producto + chip modo.
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self._lote_producto = QLabel("Esperando lote…")
+        self._lote_producto.setProperty("rol", "tileTitulo")
+        header.addWidget(self._lote_producto, 1)
+        self._lote_chip = QLabel("")
+        self._lote_chip.setObjectName("chipEstado")
+        header.addWidget(self._lote_chip, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(header)
+        # Meta: ventana del setpoint.
+        self._lote_ventana = QLabel("")
+        self._lote_ventana.setProperty("rol", "meta")
+        layout.addWidget(self._lote_ventana)
+        # Cuerpo: countdown + barra.
+        self._lote_countdown = QLabel("")
+        self._lote_countdown.setProperty("rol", "meta")
+        layout.addWidget(self._lote_countdown)
+        self._lote_progreso = QProgressBar()
+        self._lote_progreso.setObjectName("hornoProgresoPoll")
+        self._lote_progreso.setRange(0, 1000)
+        self._lote_progreso.setTextVisible(False)
+        layout.addWidget(self._lote_progreso)
         return marco
+
+    def _construir_tarjeta_temp(self) -> QFrame:
+        marco = QFrame()
+        marco.setObjectName("hornoTarjetaTemp")
+        layout = QVBoxLayout(marco)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        rotulo = QLabel("Temperatura")
+        rotulo.setProperty("rol", "rotulo")
+        header.addWidget(rotulo, 1)
+        self._temp_delta = QLabel("")
+        self._temp_delta.setProperty("rol", "valorMetrica")
+        header.addWidget(self._temp_delta, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._temp_semaforo = QLabel("●")
+        self._temp_semaforo.setObjectName("puntoEstado")
+        self._temp_semaforo.setProperty("nivel", "sin_dato")
+        header.addWidget(self._temp_semaforo, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(header)
+        # Valor grande T1 + unidad.
+        fila_t1 = QHBoxLayout()
+        fila_t1.setSpacing(6)
+        self._temp_valor = QLabel(_VALOR_SIN_DATO)
+        self._temp_valor.setProperty("rol", "display")
+        fila_t1.addWidget(self._temp_valor)
+        self._temp_unidad = QLabel("°C")
+        self._temp_unidad.setProperty("rol", "meta")
+        fila_t1.addWidget(self._temp_unidad, 0, Qt.AlignmentFlag.AlignBottom)
+        fila_t1.addStretch(1)
+        layout.addLayout(fila_t1)
+        self._temp_meta = QLabel("")
+        self._temp_meta.setProperty("rol", "meta")
+        layout.addWidget(self._temp_meta)
+        # Mini-chart.
+        self._chart_temp = _HornoMiniChart()
+        layout.addWidget(self._chart_temp)
+        # Fila T2 (oculta si no hay horno 2).
+        self._fila_t2 = self._construir_fila("T2 horno", ocultar=True)
+        layout.addWidget(self._fila_t2)
+        return marco
+
+    def _construir_tarjeta_cinta(self) -> QFrame:
+        marco = QFrame()
+        marco.setObjectName("hornoTarjetaCinta")
+        layout = QVBoxLayout(marco)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        rotulo = QLabel("Cinta")
+        rotulo.setProperty("rol", "rotulo")
+        header.addWidget(rotulo, 1)
+        self._cinta_delta = QLabel("")
+        self._cinta_delta.setProperty("rol", "valorMetrica")
+        header.addWidget(self._cinta_delta, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._cinta_semaforo = QLabel("●")
+        self._cinta_semaforo.setObjectName("puntoEstado")
+        self._cinta_semaforo.setProperty("nivel", "sin_dato")
+        header.addWidget(self._cinta_semaforo, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(header)
+        fila_v = QHBoxLayout()
+        fila_v.setSpacing(6)
+        self._cinta_valor = QLabel(_VALOR_SIN_DATO)
+        self._cinta_valor.setProperty("rol", "display")
+        fila_v.addWidget(self._cinta_valor)
+        self._cinta_unidad = QLabel("m/s")
+        self._cinta_unidad.setProperty("rol", "meta")
+        fila_v.addWidget(self._cinta_unidad, 0, Qt.AlignmentFlag.AlignBottom)
+        fila_v.addStretch(1)
+        layout.addLayout(fila_v)
+        self._cinta_meta = QLabel("")
+        self._cinta_meta.setProperty("rol", "meta")
+        layout.addWidget(self._cinta_meta)
+        self._chart_vel = _HornoMiniChart()
+        layout.addWidget(self._chart_vel)
+        return marco
+
+    def _construir_tarjeta_modo(self) -> QFrame:
+        marco = QFrame()
+        marco.setObjectName("hornoTarjetaModo")
+        layout = QVBoxLayout(marco)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        header = QLabel("Modo de control")
+        header.setProperty("rol", "rotulo")
+        layout.addWidget(header)
+        fila = QHBoxLayout()
+        fila.setSpacing(8)
+        self._botones_modo: dict[ModoControlUI, QPushButton] = {}
+        for m in (ModoControlUI.MANUAL, ModoControlUI.SUPERVISION, ModoControlUI.AUTOMATICO):
+            boton = QPushButton(ETIQUETAS_MODO[m])
+            boton.setObjectName("hornoBotonModo")
+            boton.setProperty("modoColor", _modo_color(m))
+            boton.setProperty("modoActivo", "false")
+            boton.setMinimumHeight(_ALTURA_BOTON_MODO)
+            boton.setCursor(Qt.CursorShape.PointingHandCursor)
+            boton.clicked.connect(lambda _checked=False, modo=m: self._cambiar_modo_click(modo))
+            self._botones_modo[m] = boton
+            fila.addWidget(boton, 1)
+        layout.addLayout(fila)
+        return marco
+
+    def _construir_tarjeta_historial(self) -> QFrame:
+        marco = QFrame()
+        marco.setObjectName("hornoTarjetaHistorial")
+        layout = QVBoxLayout(marco)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
+        header = QLabel("Últimos setpoints aplicados")
+        header.setProperty("rol", "rotulo")
+        layout.addWidget(header)
+        self._historial_contenedor = QVBoxLayout()
+        self._historial_contenedor.setSpacing(0)
+        layout.addLayout(self._historial_contenedor)
+        return marco
+
+    def _construir_fila(self, etiqueta: str, *, ocultar: bool = False) -> QFrame:
+        """Fila etiqueta + valor + semáforo, reutilizable (estilo metricas.py)."""
+        marco = QFrame()
+        marco.setObjectName("filaEstado")
+        if ocultar:
+            marco.setVisible(False)
+        layout = QHBoxLayout(marco)
+        layout.setContentsMargins(0, 4, 0, 4)
+        punto = QLabel("●")
+        punto.setObjectName("puntoEstado")
+        punto.setProperty("nivel", "sin_dato")
+        layout.addWidget(punto)
+        et = QLabel(etiqueta)
+        et.setObjectName("etiquetaEstado")
+        layout.addWidget(et, 1)
+        detalle = QLabel(_VALOR_SIN_DATO)
+        detalle.setObjectName("detalleEstado")
+        layout.addWidget(detalle, 0, Qt.AlignmentFlag.AlignRight)
+        # Guardamos referencias para refrescar.
+        marco.setProperty("_punto", punto)
+        marco.setProperty("_detalle", detalle)
+        return marco
+
+    # --- refresh ---
+
+    def _al_actualizar_estado(self, _snapshot: object) -> None:
+        self._refrescar()
+
+    def _refrescar(self) -> None:
+        snap = self.ctx.controlador_control.estado()
+        ahora = time.monotonic()
+        self._actualizar_banner(snap)
+        self._actualizar_lote(snap, ahora)
+        self._actualizar_temperatura(snap, ahora)
+        self._actualizar_cinta(snap, ahora)
+        self._actualizar_modo(snap)
+        self._actualizar_aplicar_pendiente(snap)
+        self._actualizar_historial(snap, ahora)
+
+    def _actualizar_banner(self, snap) -> None:
+        """Stub banner sólo si el driver es stub y estamos habilitados."""
+        from backend.config import ModbusDriverConfig  # type: ignore
+        driver = self.ctx.config.control.sensores.driver
+        self._banner_aviso.setVisible(driver == "stub" and snap.habilitado)
+
+    def _actualizar_lote(self, snap, ahora: float) -> None:
+        if not snap.habilitado:
+            self._lote_producto.setText("Control deshabilitado")
+            self._lote_chip.setText("deshabilitado")
+            self._lote_chip.setProperty("nivel", "inactivo")
+            self._lote_ventana.setText("")
+            self._lote_countdown.setText("")
+            self._lote_progreso.setValue(0)
+            self._repolish(self._lote_chip)
+            return
+        if not snap.enganchado:
+            self._lote_producto.setText("Esperando lote…")
+            self._lote_chip.setText("sin lote")
+            self._lote_chip.setProperty("nivel", "sin_dato")
+            self._lote_ventana.setText("")
+            self._lote_countdown.setText("")
+            self._lote_progreso.setValue(0)
+            self._repolish(self._lote_chip)
+            return
+        # Enganchado: producto (fallback a label del modelo), chip modo, ventana.
+        modelo_id = self.ctx.config.models.default_model_id
+        modelo_label = next(
+            (m.label for m in self.ctx.config.models.catalog if m.model_id == modelo_id),
+            modelo_id,
+        )
+        self._lote_producto.setText(modelo_label)
+        self._lote_chip.setText(snap.modo.value)
+        self._lote_chip.setProperty("nivel", "activo")
+        self._lote_ventana.setText(
+            f"ventana: {snap.ultimo_setpoint.ventana}"
+            if snap.ultimo_setpoint and snap.ultimo_setpoint.ventana
+            else ""
+        )
+        # Countdown al próximo poll.
+        intervalo = max(0.1, self.ctx.config.control.poll_consigna_propuesta_segundos)
+        delta = ahora - self._ultimo_refresh
+        self._ultimo_refresh = ahora
+        restante = max(0.0, intervalo - delta)
+        self._lote_countdown.setText(f"Próxima consigna en {formato_mmss(restante)}")
+        self._lote_progreso.setValue(
+            int(restante / intervalo * self._lote_progreso.maximum())
+        )
+        self._repolish(self._lote_chip)
+
+    def _actualizar_temperatura(self, snap, ahora: float) -> None:
+        lectura = snap.ultima_lectura
+        objetivo = snap.ultimo_setpoint
+        t1 = lectura.temp_horno_1 if lectura else None
+        t2 = lectura.temp_horno_2 if lectura else None
+        obj_t1 = objetivo.temp_horno_1 if objetivo else None
+        # Big value + unidad.
+        if t1 is None:
+            self._temp_valor.setText(_VALOR_SIN_DATO)
+            self._temp_unidad.setVisible(False)
+            delta_txt = _VALOR_SIN_DATO
+            nivel = "sin_dato"
+        else:
+            self._temp_unidad.setVisible(True)
+            self._temp_valor.setText(f"{t1:.1f}")
+            if obj_t1 is None:
+                delta_txt = _VALOR_SIN_DATO
+                nivel = "sin_dato"
+            else:
+                d = t1 - obj_t1
+                delta_txt = f"Δ {d:+.1f}°C"
+                nivel = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
+        self._temp_delta.setText(delta_txt)
+        self._temp_semaforo.setProperty("nivel", nivel)
+        self._repolish(self._temp_semaforo)
+        # Meta: objetivo + tolerancia.
+        if obj_t1 is None:
+            self._temp_meta.setText("Sin setpoint" if snap.enganchado else "")
+        else:
+            self._temp_meta.setText(
+                f"Objetivo {obj_t1:.0f} °C  ±{_TOLERANCIA_TEMP_C:.0f}"
+            )
+        # Mini-chart: agregar muestra y configurar objetivo.
+        if t1 is not None:
+            self._cache_temp.append(_Muestra(ahora, t1))
+            cutoff = ahora - _VENTANA_MINUTOS
+            while self._cache_temp and self._cache_temp[0].timestamp < cutoff:
+                self._cache_temp.popleft()
+        self._chart_temp.asignar_cache(self._cache_temp)
+        self._chart_temp.configurar(obj_t1, _TOLERANCIA_TEMP_C, _PASO_Y_TEMP,
+                                    "Acumulando muestras…")
+        # Fila T2: visible si horno2_habilitado + enganchado.
+        mostrar_t2 = snap.horno2_habilitado and t2 is not None
+        self._fila_t2.setVisible(mostrar_t2)
+        if mostrar_t2:
+            punto = self._fila_t2.property("_punto")
+            detalle = self._fila_t2.property("_detalle")
+            assert punto is not None and detalle is not None
+            detalle.setText(f"{t2:.1f} °C")
+            obj_t2 = objetivo.temp_horno_2 if objetivo else None
+            if obj_t2 is None:
+                nivel_t2 = "sin_dato"
+            else:
+                d = t2 - obj_t2
+                nivel_t2 = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
+            punto.setProperty("nivel", nivel_t2)
+            self._repolish(punto)
+
+    def _actualizar_cinta(self, snap, ahora: float) -> None:
+        lectura = snap.ultima_lectura
+        objetivo = snap.ultimo_setpoint
+        vel = lectura.velocidad_cinta if lectura else None
+        obj_v = objetivo.velocidad_cinta if objetivo else None
+        if vel is None:
+            self._cinta_valor.setText(_VALOR_SIN_DATO)
+            self._cinta_unidad.setVisible(False)
+            delta_txt = _VALOR_SIN_DATO
+            nivel = "sin_dato"
+        else:
+            self._cinta_unidad.setVisible(True)
+            self._cinta_valor.setText(f"{vel:.2f}")
+            if obj_v is None:
+                delta_txt = _VALOR_SIN_DATO
+                nivel = "sin_dato"
+            else:
+                d = vel - obj_v
+                delta_txt = f"Δ {d:+.2f} m/s"
+                nivel = "activo" if abs(d) <= _TOLERANCIA_VEL else "atencion"
+        self._cinta_delta.setText(delta_txt)
+        self._cinta_semaforo.setProperty("nivel", nivel)
+        self._repolish(self._cinta_semaforo)
+        if obj_v is None:
+            self._cinta_meta.setText("Sin setpoint" if snap.enganchado else "")
+        else:
+            self._cinta_meta.setText(
+                f"Objetivo {obj_v:.2f} m/s  ±{_TOLERANCIA_VEL:.2f}"
+            )
+        if vel is not None:
+            self._cache_vel.append(_Muestra(ahora, vel))
+            cutoff = ahora - _VENTANA_MINUTOS
+            while self._cache_vel and self._cache_vel[0].timestamp < cutoff:
+                self._cache_vel.popleft()
+        self._chart_vel.asignar_cache(self._cache_vel)
+        self._chart_vel.configurar(obj_v, _TOLERANCIA_VEL, _PASO_Y_VEL,
+                                  "Acumulando muestras…")
+
+    def _actualizar_modo(self, snap) -> None:
+        enabled = snap.habilitado and snap.enganchado
+        for modo, boton in self._botones_modo.items():
+            boton.setEnabled(enabled)
+            boton.setProperty("modoActivo", "true" if modo == snap.modo else "false")
+            self._repolish(boton)
+
+    def _actualizar_aplicar_pendiente(self, snap) -> None:
+        pendiente = snap.propuesta_pendiente
+        if pendiente is None:
+            self._boton_aplicar.setVisible(False)
+            return
+        self._boton_aplicar.setVisible(True)
+        t1_txt = f"{pendiente.temp_horno_1:.0f}"
+        v_txt = f"{pendiente.velocidad_cinta:.2f}"
+        self._boton_aplicar.setText(
+            f"Aplicar propuesta (T={t1_txt} °C, V={v_txt} m/s)"
+        )
+        self._boton_aplicar.setEnabled(snap.habilitado and snap.enganchado)
+
+    def _actualizar_historial(self, snap, ahora: float) -> None:
+        sp = snap.ultimo_setpoint
+        decision_id = sp.decision_id if sp else None
+        # Si el setpoint cambió (por decision_id), agregar al historial.
+        if sp is not None and decision_id and decision_id != self._ultimo_decision_id:
+            self._historial.appendleft((ahora, sp))
+            self._ultimo_decision_id = decision_id
+        # Reconstruir las filas.
+        self._vaciar_layout(self._historial_contenedor)
+        if not self._historial:
+            self._historial_contenedor.addWidget(
+                self._construir_fila_vacia("Sin setpoints aplicados todavía")
+            )
+            return
+        lectura_t1 = snap.ultima_lectura.temp_horno_1 if snap.ultima_lectura else None
+        for idx, (ts, setpoint) in enumerate(self._historial):
+            self._historial_contenedor.addWidget(
+                self._construir_fila_setpoint(idx == 0, ts, setpoint, lectura_t1)
+            )
+
+    def _construir_fila_setpoint(
+        self,
+        ultima: bool,
+        timestamp: float,
+        setpoint: SetpointUI,
+        lectura_t1_actual: float | None,
+    ) -> QFrame:
+        marco = QFrame()
+        marco.setObjectName("hornoFilaSetpoint")
+        if ultima:
+            marco.setProperty("ultima", "true")
+        layout = QHBoxLayout(marco)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+        hora = QLabel(formato_hhmmss(timestamp - self._ultimo_refresh))
+        # Reloj de UI: derivamos del tiempo relativo al último refresh.
+        hora.setProperty("rol", "meta")
+        hora.setProperty("mono", "true")
+        hora.setFixedWidth(72)
+        layout.addWidget(hora)
+        t1 = QLabel(f"{setpoint.temp_horno_1:.0f} °C")
+        t1.setProperty("rol", "valorMetrica")
+        t1.setFixedWidth(70)
+        t1.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(t1)
+        t2 = QLabel(
+            f"{setpoint.temp_horno_2:.0f} °C" if setpoint.temp_horno_2 is not None else _VALOR_SIN_DATO
+        )
+        t2.setProperty("rol", "valorMetrica")
+        t2.setFixedWidth(70)
+        t2.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(t2)
+        v = QLabel(f"{setpoint.velocidad_cinta:.2f} m/s")
+        v.setProperty("rol", "valorMetrica")
+        v.setFixedWidth(80)
+        v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(v)
+        delta_actual = ""
+        color_delta = None
+        if lectura_t1_actual is not None:
+            d = lectura_t1_actual - setpoint.temp_horno_1
+            delta_actual = f"Δ {d:+.1f}"
+            color_delta = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
+        diff = QLabel(delta_actual)
+        diff.setProperty("rol", "valorMetrica")
+        if color_delta is not None:
+            diff.setProperty("nivel", color_delta)
+        layout.addWidget(diff, 1, Qt.AlignmentFlag.AlignRight)
+        return marco
+
+    def _construir_fila_vacia(self, texto: str) -> QLabel:
+        lbl = QLabel(texto)
+        lbl.setProperty("rol", "meta")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return lbl
+
+    # --- comandos del operario ---
+
+    def _cambiar_modo_click(self, modo: ModoControlUI) -> None:
+        self.ctx.controlador_control.cambiar_modo(modo)
+
+    def _aplicar_pendiente_click(self) -> None:
+        ok = self.ctx.controlador_control.aplicar_pendiente()
+        snap = self.ctx.controlador_control.estado()
+        if ok:
+            self._mostrar_feedback(
+                "Propuesta aplicada", "ok"
+            )
+        else:
+            self._mostrar_feedback(
+                snap.ultimo_error or "No se pudo aplicar la propuesta", "error"
+            )
+
+    def _mostrar_feedback(self, texto: str, nivel: str) -> None:
+        self._feedback.setText(texto)
+        self._feedback.setProperty("nivel", nivel)
+        self._feedback.setVisible(True)
+        self._repolish(self._feedback)
+        # Auto-ocultar a los 2.5s (no usamos QTimer para evitar ciclo de vida).
+        # El próximo _al_actualizar_estado no lo afecta; lo limpiamos nosotros.
+        # Truco simple: marcar el timestamp y ocultar en el próximo refresh si pasó.
+        self._feedback_timer_ms = int(time.monotonic() * 1000) + 2500
+
+    # --- helpers ---
+
+    @staticmethod
+    def _repolish(widget) -> None:
+        estilo = widget.style()
+        estilo.unpolish(widget)
+        estilo.polish(widget)
+        widget.update()
+
+    @staticmethod
+    def _vaciar_layout(layout) -> None:
+        while True:
+            item = layout.takeAt(0)
+            if item is None:
+                return
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            else:
+                sub = item.layout()
+                if sub is not None:
+                    HornoYCinta._vaciar_layout(sub)
+
+
+# --- helpers de módulo -------------------------------------------------------
+
+
+def _modo_color(modo: ModoControlUI) -> str:
+    return {
+        ModoControlUI.MANUAL: "manual",
+        ModoControlUI.SUPERVISION: "supervision",
+        ModoControlUI.AUTOMATICO: "automatico",
+    }[modo]
+
+
+def formato_mmss(segundos: float) -> str:
+    """Formatea segundos como m:ss (1 sola tecla después de los dos puntos)."""
+    if segundos < 0:
+        segundos = 0
+    minutos = int(segundos) // 60
+    secs = int(segundos) % 60
+    return f"{minutos}:{secs:02d}"
+
+
+def formato_hhmmss(delta_segundos: float) -> str:
+    """Formatea un delta relativo como HH:MM:SS (estimado desde el último refresh)."""
+    # No tenemos wall-clock time de cuándo se aplicó: usamos un proxy.
+    # Si el delta es 0 (justo aplicado), "00:00:00". Si es > 60s, mostramos
+    # el delta en mm:ss. Útil para el operario: "hace cuánto se aplicó".
+    if delta_segundos < 0:
+        delta_segundos = 0
+    if delta_segundos < 60:
+        return f"hace {int(delta_segundos)}s"
+    minutos = int(delta_segundos) // 60
+    secs = int(delta_segundos) % 60
+    return f"hace {minutos}m{secs:02d}"

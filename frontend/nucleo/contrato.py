@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QWidget
 from frontend.nucleo.bus import BusApp
 from frontend.nucleo.controlador import ControladorStreaming
 from frontend.nucleo.controlador_config import ControladorConfig
+from frontend.nucleo.controlador_control import ControladorControl
 from frontend.nucleo.controlador_dispositivo import ControladorDispositivo
 from frontend.nucleo.controlador_lotes import ControladorLotes
 from frontend.nucleo.controlador_monitor import ControladorMonitor
@@ -44,6 +45,7 @@ class ContextoApp:
     controlador_monitor: ControladorMonitor
     controlador_config: ControladorConfig
     controlador_lotes: ControladorLotes
+    controlador_control: ControladorControl
     navegar: Callable[[str], None]
 
 

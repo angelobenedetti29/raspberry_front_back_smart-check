@@ -40,6 +40,10 @@ Hace `train` (100 épocas por defecto, `--device 0`) y exporta a
   lista de clases hardcodeada.
 - La exportación fuerza `opset 11` + simplificado, que es lo que digiere el
   parser de Hailo-8L.
+- Para YOLO26 fuerza además `end2end=False`, que mantiene el cabezal
+  "one-to-many" y el tensor `(1, 4 + clases, N)` que la pipeline de inferencia
+  (CPU y NPU) ya sabe leer. Sin esto, el ONNX saldría con la cabeza NMS-Free
+  `(N, 300, 6)` y ni `yolo_opencv.py` ni `yolo_hailo.py` podrían decodificarlo.
 - Si ya tenés un `best.pt`: `--weights ruta/best.pt` (se salta el entrenamiento),
   o usá `python -m backend.ai_training.scripts.export_onnx --weights <pt>`.
 
@@ -79,29 +83,36 @@ python -m backend.ai_training.scripts.compile_hailo --nombre tostadas_v2
 Pasos internos (los tres automatizados):
 
 1. `hailo parser onnx models/tostadas_v2.onnx --hw-arch hailo8l --net-name
-   tostadas_v2 --har-path ... --end-node-names <6 convs> -y` → `.har`
-   (los 6 convs por defecto son de YOLO11, `/model.23/...`; para YOLOv8 pasá
-   `--end-node /model.22/...` y verificá los índices de conv del NMS)
+   tostadas_v2 --har-path ... -y` → `.har`
+   (se parsea el grafo entero: YOLO26 end-to-end NMS-free. `--end-node` queda
+   sólo como escape manual por si el parser necesitara recortar.)
 2. `ClientRunner(har).load_model_script(<nombre>.alls)` **antes** de
    `optimize(calib_dataset.npy)` → `_quantized.har`
 3. `hailo compiler --hw-arch hailo8l <quantized.har> --output-dir ...
    --model-script <nombre>.alls` → `tostadas_v2.hef`
 
-El `_nms.json` y el `.alls` se generan por corrida en `backend/ai_training/` con
-rutas locales (no se versionan). El HEF final se copia a `models/tostadas_v2.hef`.
-El `calib_dataset.npy` debe estar en el `--work-dir` (por defecto
-`backend/ai_training/`); el host no necesita OpenCV, sólo el DFC.
+El `.alls` se genera por corrida en `backend/ai_training/` con rutas locales
+(no se versiona) y lleva sólo `normalization1` (1/255) + `performance_param`:
+sin NMS ni decodificadores. El HEF final sale con la salida cruda del modelo
+`(1, 4+clases, N)` y se copia a `models/tostadas_v2.hef`. El `calib_dataset.npy`
+debe estar en el `--work-dir` (por defecto `backend/ai_training/`); el host no
+necesita OpenCV, sólo el DFC.
 
 ### Por qué así (no tocar)
 
-- `nms_postprocess(..., engine=cpu)`: el NMS de YOLOv8 en `nn_core` **no existe**
-  en Hailo-8L.
-- El `.alls` **debe** cargarse en el runner antes de `optimize`; si se pasa sólo
-  al comando `hailo compiler`, el HEF sale con las 6 salidas crudas y sin NMS.
-- El JSON de NMS usa `bbox_decoders` (obligatorio) apuntando a las convoluciones
-  internas (`conv51/54`, `conv62/65`, `conv77/80` para YOLO11), no a los
-  `output_layer`. Otra arquitectura/toolchain puede cambiar esos índices: si el
-  parser falla con `Invalid scope name`, revisalos antes de reusar los defaults.
+- **Sin NMS en el HEF.** YOLO26 trae cabezal dual NMS-Free y Hailo-8L no
+  tiene NMS en `nn_core` (`nms_postprocess` requiere `engine=cpu`, que igual
+  cocinaría NMS en el host de compilación y daría un HEF incompatible con
+  nuestro runtime). Por eso la exportación va con `end2end=False` y el NMS se
+  corre en CPU sobre el tensor crudo, igual que en `yolo_opencv.py`
+  (`cv2.dnn.NMSBoxes`). El runtime (`backend/inference/yolo_hailo.py`) está
+  alineado con ese criterio.
+- El `.alls` **debe** cargarse en el runner antes de `optimize`; si se pasa
+  sólo al comando `hailo compiler`, la normalización no queda horneada y el
+  modelo no detecta nada (ver el comentario en `yolo_hailo.py`).
+- Sin `_nms.json` ni `bbox_decoders`: con la cabeza NMS-Free no hay
+  decodificadores que apuntar, así que ya no existe el problema de índices de
+  `conv` que tenían YOLO11/YOLOv8.
 
 ## 6. Registrar el modelo en el catálogo
 
@@ -111,7 +122,7 @@ Agregar/editar en `config.json` → `models.catalog`:
 {
   "model_id": "tostadas-v2",
   "producto_id": null,
-  "label": "YOLOv11 Tostadas V2 (Custom)",
+  "label": "YOLOv26 Tostadas V2 (Custom)",
   "file": "tostadas_v2.onnx",
   "names_file": "tostadas_v2.names",
   "class_thresholds": { "tcq": 0.3, "tcok": 0.6 }

@@ -63,14 +63,30 @@ class StorageConfig:
     max_bytes: int
     max_files: int
     persist_no_detection_every: int
-    # Motor del almacén: "jsonl" (legacy) o "sqlite" (default para v1).
-    engine: str = "sqlite"
 
 
 @dataclass(frozen=True, slots=True)
 class ReconnectConfig:
     initial_seconds: float
     max_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class ModbusDriverConfig:
+    """Driver de un periférico Modbus (sensores o actuadores del horno).
+
+    `driver == "stub"` ⇒ no hay comunicación real; los stubs devuelven None
+    o no hacen nada. `modbus_rtu` ⇒ RS-485 (serial_port + baudrate).
+    `modbus_tcp` ⇒ Ethernet (host + port). En ambos casos `unit_id` es la
+    dirección de esclavo Modbus (1–247, default 1).
+    """
+
+    driver: str = "stub"
+    serial_port: str | None = None
+    baudrate: int = 9600
+    host: str | None = None
+    port: int | None = None
+    unit_id: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +159,8 @@ class DeviceConfig:
     # respaldo cuando `public_url` está vacía: el operador que no usa túnel
     # expone el servidor directamente en una IP de la red local.
     listen_address: str
-    # Puerto interno donde escucha el `ServidorRenombre`. Es la cara local del
+    # Puerto interno donde escucha el servidor HTTP local
+    # (`backend.http.ServidorHTTP`). Es la cara local del
     # túnel: si la URL pública sale vía cloudflared, este puerto tiene que
     # coincidir con el que se le pasa a `cloudflared --url http://localhost:PUERTO`.
     # Se usa también como fallback cuando la URL es remota y no trae puerto.
@@ -175,6 +192,11 @@ class LoteConfig:
     # Backoff exponencial ante errores reintentables.
     reintento_inicial_segundos: float
     reintento_maximo_segundos: float
+    # F-R6: DLQ para eventos que no se pudieron reportar. Append-only JSONL
+    # bajo `paths.data_dir`; rotado por tamaño como el log de eventos.
+    dlq_path: str = "dlq.jsonl"
+    dlq_max_bytes: int = 5_242_880  # 5 MiB
+    dlq_max_files: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +214,18 @@ class ControlConfig:
     metricas_horno_endpoint: str
     consigna_propuesta_endpoint: str
     aplicar_consigna_endpoint: str
+    # Drivers de periféricos. `stub` deja todo cableado a stubs; `modbus_rtu`
+    # y `modbus_tcp` se materializan en Bloque B de Fase 1.
+    sensores: ModbusDriverConfig = ModbusDriverConfig()
+    actuadores: ModbusDriverConfig = ModbusDriverConfig()
+    # Plantilla con {id}: la Pi hace PUT para sincronizar el modo del lote
+    # cuando el operador lo cambia desde la UI.
+    lotes_modo_endpoint: str = "/api/v1/lotes/{id}/modo"
+    # F-R10: audit log append-only con decision_id aplicado/batched/descartado.
+    # Vive bajo `paths.data_dir`; rotado por tamaño.
+    audit_path: str = "control_audit.jsonl"
+    audit_max_bytes: int = 5_242_880  # 5 MiB
+    audit_max_files: int = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,9 +236,11 @@ class AppConfig:
     api: ApiConfig
     device: DeviceConfig
     lote: LoteConfig
-    # SCA-400: control automático / supervisión. None si el config viejo no
-    # tiene la sección (compat).
-    control: ControlConfig | None = None
+    # SCA-400: control automático / supervisión. Si la sección no existe en
+    # config.json, el loader devuelve un ControlConfig deshabilitado (todos
+    # los defaults). Así el resto de la app nunca recibe `None` y puede
+    # consultar `cfg.sensores`/`cfg.actuadores` sin guard.
+    control: ControlConfig
 
 
 def resolve_path(value: str | Path, base: Path) -> Path:
@@ -244,6 +280,50 @@ def _read_json(path: Path) -> dict:
     return data
 
 
+def _lote_str_opcional(raw: dict[str, Any], key: str, default: str) -> str:
+    """Lee un string opcional de `lote.*` con default tolerante."""
+    valor = raw.get(key)
+    if valor is None:
+        return default
+    if not isinstance(valor, str) or not valor.strip():
+        raise ConfigError(f"'lote.{key}' debe ser un string no vacío")
+    return valor.strip()
+
+
+def _lote_int_opcional(raw: dict[str, Any], key: str, default: int) -> int:
+    """Lee un entero opcional de `lote.*` con default tolerante."""
+    valor = raw.get(key)
+    if valor is None:
+        return default
+    if isinstance(valor, bool) or not isinstance(valor, int):
+        raise ConfigError(f"'lote.{key}' debe ser un entero, no {type(valor).__name__}")
+    if valor <= 0:
+        raise ConfigError(f"'lote.{key}' debe ser > 0")
+    return valor
+
+
+def _ctrl_str_opcional(raw: dict[str, Any], key: str, default: str) -> str:
+    """Lee un string opcional de `control.*` con default tolerante."""
+    valor = raw.get(key)
+    if valor is None:
+        return default
+    if not isinstance(valor, str) or not valor.strip():
+        raise ConfigError(f"'control.{key}' debe ser un string no vacío")
+    return valor.strip()
+
+
+def _ctrl_int_opcional(raw: dict[str, Any], key: str, default: int) -> int:
+    """Lee un entero opcional de `control.*` con default tolerante."""
+    valor = raw.get(key)
+    if valor is None:
+        return default
+    if isinstance(valor, bool) or not isinstance(valor, int):
+        raise ConfigError(f"'control.{key}' debe ser un entero, no {type(valor).__name__}")
+    if valor <= 0:
+        raise ConfigError(f"'control.{key}' debe ser > 0")
+    return valor
+
+
 def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
     """Extrae y valida un campo tipado de una sección del config."""
     if key not in section:
@@ -266,6 +346,48 @@ def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
         )
 
     return value
+
+
+def _parse_modbus_config(raw: dict[str, Any], where: str) -> ModbusDriverConfig:
+    """Parsea y valida un bloque `control.sensores` o `control.actuadores`."""
+    driver = raw.get("driver", "stub")
+    if not isinstance(driver, str) or driver not in {"stub", "modbus_rtu", "modbus_tcp"}:
+        raise ConfigError(
+            f"'{where}.driver' debe ser 'stub', 'modbus_rtu' o 'modbus_tcp', "
+            f"no {driver!r}"
+        )
+    serial_port_raw = raw.get("serial_port")
+    host_raw = raw.get("host")
+    port = raw.get("port")
+    baudrate = raw.get("baudrate", 9600)
+    unit_id = raw.get("unit_id", 1)
+    if driver == "modbus_rtu" and not (
+        isinstance(serial_port_raw, str) and serial_port_raw.strip()
+    ):
+        raise ConfigError(
+            f"'{where}.serial_port' es obligatorio si driver='modbus_rtu'"
+        )
+    if driver == "modbus_tcp":
+        if not (isinstance(host_raw, str) and host_raw.strip()):
+            raise ConfigError(
+                f"'{where}.host' es obligatorio si driver='modbus_tcp'"
+            )
+        if not isinstance(port, int) or not (1 <= port <= 65535):
+            raise ConfigError(
+                f"'{where}.port' debe ser un entero entre 1 y 65535"
+            )
+    if not isinstance(baudrate, int) or baudrate <= 0:
+        raise ConfigError(f"'{where}.baudrate' debe ser un entero > 0")
+    if not isinstance(unit_id, int) or not (1 <= unit_id <= 247):
+        raise ConfigError(f"'{where}.unit_id' debe ser un entero entre 1 y 247")
+    return ModbusDriverConfig(
+        driver=driver,
+        serial_port=serial_port_raw.strip() if isinstance(serial_port_raw, str) else None,
+        baudrate=baudrate,
+        host=host_raw.strip() if isinstance(host_raw, str) else None,
+        port=port if isinstance(port, int) else None,
+        unit_id=unit_id,
+    )
 
 
 def _parse_config(data: dict, root: Path) -> AppConfig:
@@ -357,26 +479,14 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     if preview.fps <= 0:
         raise ConfigError("'stream.preview.fps' debe ser > 0")
 
-    # --- stream.storage (path derivado de data_dir + file) ---
+    # --- stream.storage (path fijo: data_dir/eventos.db) ---
     storage_raw = _get(stream_raw, "storage", dict, "stream")
-    filename = _get(storage_raw, "file", str, "stream.storage")
-    if not filename:
-        raise ConfigError("'stream.storage.file' no puede estar vacío")
-    # engine opcional: default sqlite (default robusto para v1). Acepta
-    # "jsonl" como compat.
-    engine = storage_raw.get("engine", "sqlite")
-    if not isinstance(engine, str) or engine not in {"sqlite", "jsonl"}:
-        raise ConfigError(
-            "'stream.storage.engine' debe ser 'sqlite' o 'jsonl', "
-            f"no {engine!r}"
-        )
     storage = StorageConfig(
-        path=paths.data_dir / filename,
+        path=paths.data_dir / "eventos.db",
         queue_size=_get(storage_raw, "queue_size", int, "stream.storage"),
         max_bytes=_get(storage_raw, "max_bytes", int, "stream.storage"),
         max_files=_get(storage_raw, "max_files", int, "stream.storage"),
         persist_no_detection_every=_get(storage_raw, "persist_no_detection_every", int, "stream.storage"),
-        engine=engine,
     )
 
     # --- stream.reconnect ---
@@ -597,6 +707,12 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         reintento_maximo_segundos=_get(
             lote_raw, "reintento_maximo_segundos", float, "lote"
         ),
+        # F-R6: defaults tolerantes a configs viejos. Si falta el bloque,
+        # el DLQ queda en `data/dlq.jsonl` con la misma rotación que el log
+        # de eventos.
+        dlq_path=_lote_str_opcional(lote_raw, "dlq_path", "dlq.jsonl"),
+        dlq_max_bytes=_lote_int_opcional(lote_raw, "dlq_max_bytes", 5_242_880),
+        dlq_max_files=_lote_int_opcional(lote_raw, "dlq_max_files", 5),
     )
     if lote.cierre_sin_detecciones_segundos <= 0:
         raise ConfigError("'lote.cierre_sin_detecciones_segundos' debe ser > 0")
@@ -625,10 +741,33 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "'lote.reintento_inicial_segundos'"
         )
 
-    # --- control (SCA-400) — opcional para compat con configs viejos ---
-    control: ControlConfig | None = None
+    # --- control (SCA-400) ---
+    # Si la sección falta, devolvemos un ControlConfig deshabilitado con
+    # defaults seguros. Así el resto de la app puede consultar cfg.sensores
+    # / cfg.actuadores / cfg.lotes_modo_endpoint sin guard contra None.
+    # Los defaults matchean el fallback de ControlService._cargar_config.
+    control = ControlConfig(
+        habilitado=False,
+        publicar_telemetria_segundos=5.0,
+        poll_consigna_propuesta_segundos=3.0,
+        metricas_horno_endpoint="/api/v1/lotes/{id}/metricas-horno",
+        consigna_propuesta_endpoint="/api/v1/lotes/{id}/consigna-propuesta",
+        aplicar_consigna_endpoint="/api/v1/lotes/{id}/aplicar-consigna",
+    )
     control_raw = data.get("control")
     if isinstance(control_raw, dict):
+        sensores_raw = control_raw.get("sensores")
+        sensores = (
+            _parse_modbus_config(sensores_raw, "control.sensores")
+            if isinstance(sensores_raw, dict)
+            else ModbusDriverConfig()
+        )
+        actuadores_raw = control_raw.get("actuadores")
+        actuadores = (
+            _parse_modbus_config(actuadores_raw, "control.actuadores")
+            if isinstance(actuadores_raw, dict)
+            else ModbusDriverConfig()
+        )
         control = ControlConfig(
             habilitado=_get(control_raw, "habilitado", bool, "control"),
             publicar_telemetria_segundos=_get(
@@ -646,6 +785,16 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             aplicar_consigna_endpoint=_get(
                 control_raw, "aplicar_consigna_endpoint", str, "control"
             ),
+            sensores=sensores,
+            actuadores=actuadores,
+            lotes_modo_endpoint=_get(
+                control_raw, "lotes_modo_endpoint", str, "control"
+            ),
+            # F-R10: defaults tolerantes a configs viejos. El audit log queda
+            # en `data/control_audit.jsonl` con la misma rotación.
+            audit_path=_ctrl_str_opcional(control_raw, "audit_path", "control_audit.jsonl"),
+            audit_max_bytes=_ctrl_int_opcional(control_raw, "audit_max_bytes", 5_242_880),
+            audit_max_files=_ctrl_int_opcional(control_raw, "audit_max_files", 5),
         )
         if control.publicar_telemetria_segundos <= 0:
             raise ConfigError(
@@ -659,6 +808,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "metricas_horno_endpoint",
             "consigna_propuesta_endpoint",
             "aplicar_consigna_endpoint",
+            "lotes_modo_endpoint",
         ):
             if not getattr(control, campo).startswith("/"):
                 raise ConfigError(

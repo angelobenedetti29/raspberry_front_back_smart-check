@@ -19,7 +19,7 @@ from backend.api import (
     ErrorHttp,
     desenvolver,
 )
-from backend.control.tipos import ErrorControl, SetpointPropuesto
+from backend.control.tipos import ErrorControl, ModoControl, SetpointPropuesto
 
 
 class ClienteControl:
@@ -52,7 +52,8 @@ class ClienteControl:
             self._http.peticion("POST", path, payload=payload, token=secret, parsear=False)
         except ErrorHttp as exc:
             raise ErrorControl(
-                f"El backend rechazó la telemetría ({exc.codigo}): {exc.detalle}"
+                f"El backend rechazó la telemetría ({exc.codigo}): {exc.detalle}",
+                codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
             raise ErrorControl(
@@ -82,7 +83,8 @@ class ClienteControl:
             if exc.codigo == 204:
                 return None
             raise ErrorControl(
-                f"El backend rechazó la consulta de propuesta ({exc.codigo}): {exc.detalle}"
+                f"El backend rechazó la consulta de propuesta ({exc.codigo}): {exc.detalle}",
+                codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
             raise ErrorControl(
@@ -124,11 +126,49 @@ class ClienteControl:
             )
         except ErrorHttp as exc:
             raise ErrorControl(
-                f"El backend rechazó la aplicación de consigna ({exc.codigo}): {exc.detalle}"
+                f"El backend rechazó la aplicación de consigna ({exc.codigo}): {exc.detalle}",
+                codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
             raise ErrorControl(
                 f"No se pudo aplicar la consigna al backend: {exc.detalle}"
+            ) from exc
+        except ErrorFormato as exc:
+            raise ErrorControl(str(exc)) from exc
+
+    def cambiar_modo(
+        self,
+        secret: str,
+        lote_id: str,
+        endpoint_plantilla: str,
+        modo: ModoControl,
+    ) -> None:
+        """PUT /api/v1/lotes/{id}/modo — sincroniza el modo del lote con el backend.
+
+        El operador cambia el modo desde la UI de Horno y Cinta; la Pi lo
+        empuja al backend Go para que otras Pis del sector lo vean en su
+        próximo /lotes/abierto. Si falla, el caller hace log y mantiene el
+        cambio local; el backend reconcilia después.
+        """
+        if not secret:
+            raise ErrorControl("No hay secret de dispositivo para autenticar")
+        path = endpoint_plantilla.format(id=lote_id)
+        try:
+            self._http.peticion(
+                "PUT",
+                path,
+                payload={"modo": modo.value},
+                token=secret,
+                parsear=False,
+            )
+        except ErrorHttp as exc:
+            raise ErrorControl(
+                f"El backend rechazó el cambio de modo ({exc.codigo}): {exc.detalle}",
+                codigo=exc.codigo,
+            ) from exc
+        except ErrorConexion as exc:
+            raise ErrorControl(
+                f"No se pudo enviar cambio de modo al backend: {exc.detalle}"
             ) from exc
         except ErrorFormato as exc:
             raise ErrorControl(str(exc)) from exc
@@ -145,12 +185,15 @@ def _a_setpoint(payload: dict) -> SetpointPropuesto:
     t2 = payload.get("tempHorno2Objetivo")
     aplicado_por = str(payload.get("aplicadoPor", "MPC"))
     ventana = payload.get("ventana")
+    decision_id_raw = payload.get("decisionId")
+    decision_id = str(decision_id_raw) if decision_id_raw is not None else None
     return SetpointPropuesto(
         temp_horno_1=t1,
         temp_horno_2=float(t2) if t2 is not None else None,
         velocidad_cinta=vel,
         aplicado_por=aplicado_por,
         ventana=str(ventana) if ventana is not None else None,
+        decision_id=decision_id,
     )
 
 

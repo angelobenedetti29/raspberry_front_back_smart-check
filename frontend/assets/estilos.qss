@@ -396,3 +396,131 @@ QComboBoxPrivateContainer {
     background-color: #1F262E;
     border: 1px solid #2A323B;
 }
+
+/* ---------- Sección Horno y cinta (SCA-400) ---------- */
+
+QFrame#hornoTarjetaLote,
+QFrame#hornoTarjetaTemp,
+QFrame#hornoTarjetaCinta,
+QFrame#hornoTarjetaModo,
+QFrame#hornoTarjetaHistorial {
+    background-color: #171C22;
+    border: 1px solid #2A323B;
+    border-radius: 10px;
+}
+
+/* Barra fina de countdown del poll. */
+QFrame#hornoProgresoPoll {
+    background-color: #1F262E;
+    border-radius: 2px;
+    min-height: 4px;
+    max-height: 4px;
+}
+
+QFrame#hornoProgresoPoll::chunk {
+    background-color: #3DD6D0;
+    border-radius: 2px;
+}
+
+/* Selector de modo: 3 botones grandes, color depende del modo y del estado activo. */
+QPushButton#hornoBotonModo {
+    background-color: transparent;
+    border: 1px solid #2A323B;
+    border-radius: 8px;
+    color: #ECEFF3;
+    font-size: 14px;
+    font-weight: 600;
+    min-height: 56px;
+}
+
+QPushButton#hornoBotonModo[modoActivo="true"][modoColor="manual"] {
+    background-color: #ECEFF3;
+    border-color: #ECEFF3;
+    color: #101418;
+}
+
+QPushButton#hornoBotonModo[modoActivo="true"][modoColor="supervision"] {
+    background-color: #FFB020;
+    border-color: #FFB020;
+    color: #101418;
+}
+
+QPushButton#hornoBotonModo[modoActivo="true"][modoColor="automatico"] {
+    background-color: #3DD6D0;
+    border-color: #3DD6D0;
+    color: #101418;
+}
+
+QPushButton#hornoBotonModo[modoColor="supervision"] {
+    border-color: #FFB020;
+    color: #FFB020;
+}
+
+QPushButton#hornoBotonModo[modoColor="automatico"] {
+    border-color: #3DD6D0;
+    color: #3DD6D0;
+}
+
+QPushButton#hornoBotonModo:disabled {
+    background-color: #171C22;
+    border-color: #2A323B;
+    color: #66727E;
+}
+
+/* Botón de aplicar propuesta bufferizada (visible sólo si hay propuesta pendiente). */
+QPushButton#hornoBotonAplicar {
+    background-color: #123B3A;
+    border: 1px solid #3DD6D0;
+    border-radius: 8px;
+    color: #3DD6D0;
+    font-size: 14px;
+    font-weight: 600;
+    min-height: 48px;
+}
+
+QPushButton#hornoBotonAplicar:hover {
+    background-color: #3DD6D0;
+    color: #101418;
+}
+
+QPushButton#hornoBotonAplicar:disabled {
+    background-color: #171C22;
+    border-color: #2A323B;
+    color: #66727E;
+}
+
+/* Feedback inline (debajo del botón, 2.5s después del click). */
+QLabel#hornoFeedback {
+    font-size: 13px;
+}
+
+QLabel#hornoFeedback[nivel="ok"] {
+    color: #3FE07A;
+}
+
+QLabel#hornoFeedback[nivel="error"] {
+    color: #FF5A5F;
+}
+
+/* Banner sutil cuando el driver es stub (sin hardware conectado). */
+QLabel#hornoBannerAviso {
+    background-color: #1F262E;
+    border: 1px solid #2A323B;
+    border-radius: 8px;
+    color: #94A1AE;
+    font-size: 13px;
+    padding: 8px 12px;
+}
+
+/* Filas del historial de últimos setpoints aplicados. */
+QFrame#hornoFilaSetpoint {
+    background: transparent;
+    border-bottom: 1px solid #222A33;
+    min-height: 32px;
+}
+
+QFrame#hornoFilaSetpoint[ultima="true"] {
+    background-color: #1F262E;
+    border-left: 3px solid #3DD6D0;
+    border-bottom: none;
+}

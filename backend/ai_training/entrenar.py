@@ -1,5 +1,11 @@
 """Entrenamiento YOLO y exportación a ONNX, adaptado al catálogo del proyecto.
 
+Apunta a Ultralytics YOLO26 (`yolo26n.pt` por defecto), que trae cabezal dual
+NMS-Free: para que la pipeline de inferencia (CPU con `cv2.dnn.NMSBoxes` y HEF
+con NMS en `nn_core`) siga funcionando sin reescribir nada, la exportación a
+ONNX fuerza el cabezal "one-to-many" con `end2end=False`, que conserva el
+formato clásico `(1, 4 + clases, N)` que esperan los detectores.
+
 Los nombres de clase se derivan de `model.names` (fuente de verdad del `.pt`),
 nunca de una lista hardcodeada: invertir TCQ/TCOK hace que el detector etiquete
 al revés. La exportación usa opset 11 + simplificado porque el parser de
@@ -48,7 +54,7 @@ def _verificar_exportacion(simplify: bool) -> None:
 def entrenar(
     data_yaml: Path,
     *,
-    modelo_base: str = "yolo11n.pt",
+    modelo_base: str = "yolo26n.pt",
     epochs: int = 100,
     image_size: int = 640,
     device: str = "0",
@@ -115,8 +121,18 @@ def exportar_onnx(
         f"[INFO] Exportando a ONNX (opset {opset}, simplify={simplify}, "
         f"{image_size}px)."
     )
+    # YOLO26 trae cabezal dual NMS-Free por defecto. Forzamos el "one-to-many"
+    # (`end2end=False`) para que la salida conserve el formato clásico
+    # `(1, 4 + clases, N)`, que es el que esperan `yolo_opencv.py` (NMS con
+    # `cv2.dnn.NMSBoxes`) y el `_nms.json` del DFC para armar el HEF.
     generado = Path(
-        modelo.export(format="onnx", imgsz=image_size, opset=opset, simplify=simplify)
+        modelo.export(
+            format="onnx",
+            imgsz=image_size,
+            opset=opset,
+            simplify=simplify,
+            end2end=False,
+        )
     )
     if not generado.is_file():
         raise FileNotFoundError(f"No se generó el ONNX esperado: {generado}")

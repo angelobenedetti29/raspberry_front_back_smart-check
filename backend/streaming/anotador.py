@@ -30,14 +30,15 @@ _PALETA: tuple[tuple[int, int, int], ...] = (
     (200, 200, 60),
 )
 
-# BGR de los tokens del tema: verde = ok, rojo = defecto.
+# BGR de los tokens del tema.
 _VERDE_OK = (122, 224, 63)
-_ROJO_DEFECTO = (95, 90, 255)
+_ROJO_QUEMADO = (95, 90, 255)
+_AMARILLO_MEDIO = (90, 195, 255)
 
 # Clases con color semántico, indexadas por etiqueta ya normalizada.
 _COLORES_SEMANTICOS: dict[str, tuple[int, int, int]] = {
-    "tcq": _ROJO_DEFECTO,
-    "tostada quemada": _ROJO_DEFECTO,
+    "tcq": _ROJO_QUEMADO,
+    "tostada quemada": _ROJO_QUEMADO,
     "tcok": _VERDE_OK,
     "tostadas ok": _VERDE_OK,
 }
@@ -99,9 +100,7 @@ def _rotular(
 ) -> None:
     """Escribe la etiqueta sobre el borde superior de la caja.
 
-    Si no hay lugar arriba, la baja adentro de la caja: el script de referencia
-    la dibujaba siempre en `top - 10`, que en una caja pegada al borde superior
-    dejaba el texto fuera del frame.
+    Si no hay lugar arriba, la baja adentro de la caja.
     """
     alto, _, _ = frame_bgr.shape
     (ancho_texto, alto_texto), _ = cv2.getTextSize(texto, _FUENTE, escala, grosor)

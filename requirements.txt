@@ -8,3 +8,14 @@
 PySide6>=6.5
 numpy>=1.24
 psutil>=5.9.6
+# Cliente Modbus (RTU/TCP) para sensores y actuadores del horno (SCA-400).
+# Se instala por pip, no del sistema: a diferencia de cv2/hailo_platform, es
+# pure-Python y no rompe el build con GStreamer/Hailo. El extra `[serial]`
+# trae pyserial (pymodbus>=3.11 lo requiere como extra opcional).
+pymodbus[serial]>=3.11,<4
+# Servidor HTTP local (FastAPI + uvicorn embebido) que recibe los routers
+# enchufables de la app (hoy sólo el push de renombre desde el backend Go).
+# uvicorn sin `[standard]`: no usamos websockets ni las herramientas de dev
+# (watchfiles, httptools), alcanza el paquete mínimo.
+fastapi>=0.110
+uvicorn>=0.27

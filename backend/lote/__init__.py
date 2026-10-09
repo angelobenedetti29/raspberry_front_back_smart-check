@@ -22,9 +22,11 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.config import AppConfig
+from backend.control.tipos import LimitesAplicacion, ModoControl
 from backend.device.almacen import AlmacenDispositivo
 from backend.device.tipos import TipoDispositivo
 from backend.lote.cliente import ClienteLotes
+from backend.lote.dlq import ColaDLQ
 from backend.lote.estado import clasificar_estado
 from backend.lote.tipos import (
     Conteos,
@@ -53,6 +55,34 @@ def _ahora_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
+def _dict_a_evento(d: dict) -> EventoDeteccion | None:
+    """Re-construye un EventoDeteccion desde un dict serializado.
+
+    Usado al drenar el DLQ: los batches guardados vienen como dicts (mismo
+    shape que `ClienteLotes._evento_payload`). Si el dict no parsea,
+    devuelve None y el caller lo ignora (el batch queda parcialmente
+    incompleto, pero los demás eventos sí se reenvían).
+    """
+    try:
+        estado_str = str(d.get("estado", "ok"))
+        # `EstadoProducto` es str-Enum; valores del catálogo: ok, crudo, quemado.
+        from backend.lote.tipos import EstadoProducto as _EP
+
+        estado = _EP(estado_str)
+        return EventoDeteccion(
+            evento_id=str(d.get("evento_id", "")),
+            producto_id=d.get("producto_id"),
+            estado=estado,
+            confianza=float(d.get("confianza", 0.0)),
+            pista=int(d.get("pista", 0)),
+            frame=int(d.get("frame", 0)),
+            modelo_id=d.get("modelo_id"),
+            momento=str(d.get("momento", "")),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
 class LoteService:
     """Coordina el lote del sector contra el backend Go.
 
@@ -67,10 +97,18 @@ class LoteService:
         config: AppConfig,
         streaming: StreamingService,
         on_credencial_invalida: Callable[[], None] | None = None,
+        on_lote_abierto: Callable[
+            [str, str, ModoControl, bool, LimitesAplicacion | None, bool], None
+        ] | None = None,
+        on_lote_cerrado: Callable[[], None] | None = None,
+        on_modo_actualizado: Callable[[ModoControl, LimitesAplicacion | None], None] | None = None,
     ) -> None:
         self._config = config
         self._streaming = streaming
         self._on_credencial_invalida = on_credencial_invalida
+        self._on_lote_abierto = on_lote_abierto
+        self._on_lote_cerrado = on_lote_cerrado
+        self._on_modo_actualizado = on_modo_actualizado
         self._cliente = ClienteLotes(config.api)
         self._almacen = AlmacenDispositivo(Path(config.paths.root) / "device.json")
 
@@ -85,10 +123,23 @@ class LoteService:
         self._producto_por_modelo: dict[str | None, str | None] = {
             entrada.model_id: entrada.producto_id for entrada in config.models.catalog
         }
+        # Estado para evitar emisiones espurias del callback de modo: se compara
+        # contra el último modo que le pasamos al ControlService.
+        self._ultimo_modo_emitido: ModoControl | None = None
 
         self._parar = threading.Event()
         self._hilo: threading.Thread | None = None
         self._cola: ColaEventos | None = None
+
+        # F-R6: DLQ persistente bajo `paths.data_dir/dlq.jsonl`. Vive acá
+        # (no se importa en `cliente.py` para no acoplar el transporte al
+        # filesystem). Se inicia en `start()`.
+        dlq_dir = Path(config.paths.root) / config.paths.data_dir
+        self._dlq = ColaDLQ(
+            dlq_dir / config.lote.dlq_path,
+            max_bytes=config.lote.dlq_max_bytes,
+            max_files=config.lote.dlq_max_files,
+        )
 
         self._lock = threading.Lock()
         # --- estado compartido con la UI ---
@@ -119,6 +170,11 @@ class LoteService:
         self._proximo_chequeo_cierre = 0.0
         self._espera_hasta = 0.0
         self._backoff_actual = self._backoff_ini
+        # F-R6: cuántos envíos consecutivos fallaron. Se resetea en
+        # `_marcar_ok()`. Cuando supera el umbral de DLQ se loggea una
+        # señal: el backend probablemente está caído y el DLQ está
+        # creciendo.
+        self._intentos_fallidos = 0
 
     # --- Protocolo Service ---
 
@@ -130,6 +186,11 @@ class LoteService:
         if self._hilo is not None:
             return
         self._cola = self._streaming.suscribir_eventos(self._lote_cfg.cola_eventos)
+        # F-R6: si el proceso anterior dejó batches en el DLQ, los
+        # re-encolamos al frente de `_pendientes` para que el próximo
+        # `_reportar` los empuje. El drain puede fallar (JSONL inválido)
+        # y se loggea; no aborta el arranque.
+        self._drenar_dlq_en_arranque()
         self._parar.clear()
         self._hilo = threading.Thread(target=self._bucle, name=self.name, daemon=True)
         self._hilo.start()
@@ -255,9 +316,32 @@ class LoteService:
         with self._lock:
             self._productos = productos
             self._sector = sector
+            lote_anterior = self._lote
             self._lote = lote
             self._historial = historial
         self._marcar_ok()
+        # Detección reactiva de cambio de modo: si el lote cambió de modo
+        # desde la última notificación al ControlService, lo avisamos. Sólo
+        # aplica cuando estamos enganchados al mismo lote que control (mismo
+        # id); un cambio de lote va por on_lote_abierto/on_lote_cerrado.
+        if lote is None or self._on_modo_actualizado is None:
+            return
+        with self._lock:
+            enganchado_al_mismo = (
+                lote_anterior is not None and lote_anterior.id == lote.id
+            )
+            ultimo_emitido = self._ultimo_modo_emitido
+        if not enganchado_al_mismo:
+            return
+        modo_actual = self._modo_desde_lote(lote)
+        if modo_actual == ultimo_emitido:
+            return
+        with self._lock:
+            self._ultimo_modo_emitido = modo_actual
+        try:
+            self._on_modo_actualizado(modo_actual, None)
+        except Exception:  # noqa: BLE001
+            logger.exception("lote: on_modo_actualizado falló")
 
     # --- traducción de eventos a productos ---
 
@@ -387,8 +471,14 @@ class LoteService:
             self._aplicar_error(exc)
             return None
         if abierto is not None:
+            # F-R11: ya hay lote en el sector (pudo haber sido abierto
+            # manualmente por el operador desde el frontend). Nos
+            # attachamos y notificamos al control para que opere en modo
+            # monitor (no aplica consignas) si está marcado como manual.
             with self._lock:
                 self._lote = abierto
+                self._ultimo_modo_emitido = self._modo_desde_lote(abierto)
+            self._notificar_lote_abierto(secret, abierto)
             return abierto.id
         if not producto_id:
             self._marcar_error("Modelo sin producto vinculado (Configuración)")
@@ -405,12 +495,35 @@ class LoteService:
             return None
         with self._lock:
             self._lote = lote
+        self._notificar_lote_abierto(secret, lote)
         logger.info("lote: abierto degradado por la salida %s", lote.id)
         return lote.id
 
     def _abrir_lote(self, producto_id: str) -> None:
         secret = self._secret
         if not secret:
+            return
+        # F-R11: antes de abrir uno nuevo, miramos si el sector ya tiene
+        # un lote abierto (puede haber sido iniciado manualmente por el
+        # operador o por otra Pi del sector). Si lo hay, nos attachamos:
+        # abrir un segundo lote en el mismo sector rompería el reporte
+        # de productos y dejaría al horno "fuera de control" si el lote
+        # preexistente fue abierto en modo MANUAL.
+        try:
+            abierto = self._cliente.lote_abierto(secret)
+        except ErrorLotes as exc:
+            self._aplicar_error(exc)
+            return
+        if abierto is not None:
+            with self._lock:
+                self._lote = abierto
+                self._ultimo_modo_emitido = self._modo_desde_lote(abierto)
+            logger.info(
+                "lote: attach a lote preexistente %s (iniciado_manualmente=%s)",
+                abierto.id,
+                getattr(abierto, "iniciado_manualmente", False),
+            )
+            self._notificar_lote_abierto(secret, abierto)
             return
         try:
             lote, creado = self._cliente.abrir_lote(
@@ -424,8 +537,38 @@ class LoteService:
             return
         with self._lock:
             self._lote = lote
+            self._ultimo_modo_emitido = self._modo_desde_lote(lote)
         self._marcar_ok()
         logger.info("lote: abierto %s (creado=%s)", lote.id, creado)
+        # Notificar al ControlService para que se enganche de forma reactiva,
+        # sin esperar al próximo /lotes/abierto. Si el callback falla, lo
+        # absorbemos: el polling de control sigue como respaldo.
+        self._notificar_lote_abierto(secret, lote)
+
+    def _notificar_lote_abierto(self, secret: str, lote: Lote) -> None:
+        """Cable el callback `on_lote_abierto` con el flag manual propagado."""
+        if self._on_lote_abierto is None:
+            return
+        try:
+            self._on_lote_abierto(
+                secret,
+                lote.id,
+                self._modo_desde_lote(lote),
+                bool(getattr(lote, "horno2_habilitado", False)),
+                None,
+                bool(getattr(lote, "iniciado_manualmente", False)),
+            )
+        except Exception:  # noqa: BLE001 - el callback no debe matar el hilo
+            logger.exception("lote: on_lote_abierto falló")
+
+    @staticmethod
+    def _modo_desde_lote(lote: Lote) -> ModoControl:
+        """Espejo de ControlService._modo_desde_lote (defensa es la firma)."""
+        modo_str = str(getattr(lote, "modo", "MANUAL"))
+        try:
+            return ModoControl(modo_str)
+        except ValueError:
+            return ModoControl.MANUAL
 
     # --- cierre ---
 
@@ -498,11 +641,19 @@ class LoteService:
             return
         with self._lock:
             self._lote = None
+            self._ultimo_modo_emitido = None
             self._historial = (cerrado, *self._historial)[:_HISTORIAL_MAX]
         self._reportadas.clear()
         self._conteos_locales.clear()
         self._marcar_ok()
         logger.info("lote: cerrado %s (%s)", cerrado.id, motivo.value)
+        # Notificar al ControlService para que libere el enganche sin esperar
+        # a su próximo polling. El callback no debe matar el hilo.
+        if self._on_lote_cerrado is not None:
+            try:
+                self._on_lote_cerrado()
+            except Exception:  # noqa: BLE001
+                logger.exception("lote: on_lote_cerrado falló")
 
     def _conteos_finales(self) -> Conteos:
         """Conteo local por estado; None para los que el modelo no produce."""
@@ -555,6 +706,28 @@ class LoteService:
                 self._backoff_max, max(self._backoff_ini, self._backoff_actual * 2)
             )
             self._marcar_error(str(exc))
+            # F-R6: si tenemos el batch que intentamos enviar, lo dejamos
+            # en el DLQ. La copia en `_pendientes` sigue para reintento
+            # en memoria (la próxima vez que el backend responda). El DLQ
+            # es la red de seguridad para el caso de un corte largo.
+            if batch:
+                self._intentos_fallidos += 1
+                lote_id = (
+                    self._lote.id
+                    if self._lote is not None and self._lote.estado is EstadoLote.ABIERTO
+                    else None
+                )
+                self._dlq.encolar(
+                    batch,
+                    codigo_http=exc.codigo,
+                    detalle=str(exc),
+                    intento=self._intentos_fallidos,
+                    lote_id=lote_id,
+                )
+                if self._intentos_fallidos == 10:
+                    logger.warning(
+                        "lote: 10 envíos fallidos consecutivos; DLQ creciendo"
+                    )
             return
         if exc.codigo in (401, 403):
             # La credencial fue rechazada: se avisa al dueño (DeviceService),
@@ -576,6 +749,57 @@ class LoteService:
         self._descartar(batch)
         self._marcar_error(str(exc))
 
+    def _drenar_dlq_en_arranque(self) -> None:
+        """Recupera los eventos guardados en el DLQ de una corrida previa.
+
+        Cada batch se re-encola al frente de `_pendientes` para que el
+        próximo `_reportar` los empuje. Si el reenvío vuelve a fallar,
+        el batch termina en el DLQ otra vez — así el ciclo es estable
+        y los eventos sobreviven a apagones.
+
+        Idempotencia: el `evento_id` (UUID4) es único por evento, así
+        que un reenvío duplicado genera un 409 en el backend (deduplicado
+        por la idempotency_key) y se descarta limpio.
+        """
+        batches = self._dlq.drenar()
+        if not batches:
+            return
+        # Re-armar como `EventoDeteccion` y anteponer al deque. Los más
+        # viejos van al frente para mantener orden aproximado.
+        eventos_recuperados: list[EventoDeteccion] = []
+        for batch in batches:
+            for ev in batch:
+                evento = _dict_a_evento(ev)
+                if evento is not None:
+                    eventos_recuperados.append(evento)
+        if not eventos_recuperados:
+            return
+        with self._lock:
+            # Insertamos al frente del deque para que el orden se aproxime
+            # al cronológico del proceso anterior.
+            existentes = list(self._pendientes)
+            self._pendientes.clear()
+            for ev in eventos_recuperados:
+                self._pendientes.append(ev)
+            for ev in existentes:
+                self._pendientes.append(ev)
+        logger.info(
+            "lote: drenados %d eventos del DLQ al boot", len(eventos_recuperados)
+        )
+        # Si el primer reenvío sale OK, `_reportar`/`_marcar_ok` resetea
+        # `_intentos_fallidos` y vacía el DLQ. No lo hacemos acá: el
+        # camino feliz lo cubre el lazo normal.
+
+    def _vaciar_dlq_si_ok(self) -> None:
+        """Limpia el DLQ tras un envío exitoso.
+
+        Llamado desde `_reportar()` cuando el batch se envió al backend
+        sin error: si quedan batches viejos pendientes, ya fueron re-enviados
+        (o descartados por duplicado), y el archivo se puede borrar.
+        """
+        if self._intentos_fallidos == 0 and self._dlq.path.exists():
+            self._dlq.vaciar()
+
     def _descartar(self, batch: list[EventoDeteccion] | None) -> None:
         if not batch:
             return
@@ -588,6 +812,12 @@ class LoteService:
     def _marcar_ok(self) -> None:
         self._backoff_actual = self._backoff_ini
         self._espera_hasta = 0.0
+        # F-R6: reset del contador de fallos para que el siguiente ciclo
+        # de error empiece de 1. Si justo después de un OK el DLQ tiene
+        # contenido, ya fue drenado en el arranque y/o re-enviado en
+        # este ciclo: vaciarlo mantiene el archivo chico.
+        self._intentos_fallidos = 0
+        self._vaciar_dlq_si_ok()
         with self._lock:
             self._backend_ok = True
             self._mensaje = ""

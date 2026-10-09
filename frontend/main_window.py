@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from frontend.nucleo.controlador import ControladorStreaming
     from frontend.nucleo.controlador_config import ControladorConfig
+    from frontend.nucleo.controlador_control import ControladorControl
     from frontend.nucleo.controlador_dispositivo import (
         ControladorDispositivo,
         TipoDispositivoUI,
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         controlador_monitor: ControladorMonitor,
         controlador_config: ControladorConfig,
         controlador_lotes: ControladorLotes,
+        controlador_control: ControladorControl,
     ) -> None:
         super().__init__()
         self._config = config
@@ -89,6 +91,7 @@ class MainWindow(QMainWindow):
             controlador_monitor=controlador_monitor,
             controlador_config=controlador_config,
             controlador_lotes=controlador_lotes,
+            controlador_control=controlador_control,
             navegar=self._navegar,
         )
 

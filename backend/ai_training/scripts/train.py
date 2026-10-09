@@ -40,8 +40,10 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--modelo-base",
-        default="yolo11n.pt",
-        help="Pesos base de Ultralytics (default: %(default)s).",
+        default="yolo26n.pt",
+        help="Pesos base de Ultralytics (default: %(default)s). YOLO26 fuerza "
+        "el cabezal one-to-many en la exportación a ONNX (end2end=False) para "
+        "mantener el formato clásico que esperan los detectores CPU/NPU.",
     )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument(

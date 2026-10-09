@@ -3,10 +3,14 @@
 Sólo funciona donde exista `hailo_platform`, así que el import es perezoso y este
 módulo se carga recién cuando el motor resuelto es NPU.
 
-El NMS y la normalización vienen **compilados dentro del HEF** (ver el `.alls`
-que genera `backend/ai_training/compilar_hailo.py`): acá no se re-implementan y
-no se divide la entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
+La normalización (1/255) viene **compilada dentro del HEF** (ver el `.alls` que
+genera `backend/ai_training/compilar_hailo.py`): por eso acá no se divide la
+entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
 usan `FormatType.FLOAT32`— dejaría un modelo que no detecta nada.
+
+A partir del flujo YOLO26 end-to-end NMS-free, el HEF devuelve el tensor crudo
+`(1, 4 + clases, N)`. El NMS se aplica en CPU con `cv2.dnn.NMSBoxes`, igual que
+en `yolo_opencv.py`.
 """
 
 from __future__ import annotations
@@ -31,8 +35,8 @@ from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
 
-# Cada fila de la salida post-NMS es [ymin, xmin, ymax, xmax, confianza].
-_COLUMNAS_POST_NMS = 5
+# El modelo es una exportación de Ultralytics, con salida (1, 4 + clases, N).
+_ATRIBUTOS_BASE = 4
 _FORMATO_ENTRADA = "UINT8"
 _FORMATO_SALIDA = "FLOAT32"
 
@@ -171,8 +175,10 @@ class DispositivoHailo:
 class DetectorYoloHailo(DetectorYoloBase):
     """Detector YOLO que corre en la NPU Hailo.
 
-    No recibe `nms_threshold` a propósito: el NMS está compilado en el HEF y no
-    hay nada que configurar del lado de Python.
+    El HEF devuelve el tensor crudo `(1, 4 + clases, N)` y el NMS se corre en
+    CPU con `cv2.dnn.NMSBoxes` (mismo criterio que la rama OpenCV). Por eso acá
+    sí se recibe `nms_threshold`, a diferencia del esquema anterior en el que
+    el NMS venía horneado en el HEF.
 
     No es seguro para uso concurrente; el dueño (el hilo de inferencia del
     pipeline) serializa las llamadas y también la liberación.
@@ -187,6 +193,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         *,
         image_size: int,
         confidence_threshold: float,
+        nms_threshold: float,
         class_thresholds: Mapping[str, float],
     ) -> None:
         super().__init__(
@@ -195,6 +202,16 @@ class DetectorYoloHailo(DetectorYoloBase):
             image_size=image_size,
             confidence_threshold=confidence_threshold,
             class_thresholds=class_thresholds,
+        )
+
+        self.nms_threshold = float(nms_threshold)
+        # Tabla de umbrales por índice de clase, para resolver el filtro de todo
+        # el tensor de una vez. Sin clases declaradas no hay tabla y se usa el
+        # global para todas.
+        self._tabla_umbrales = (
+            np.asarray(self._umbrales_por_clase, dtype=np.float32)
+            if self._umbrales_por_clase
+            else None
         )
 
         self._lock = threading.Lock()
@@ -220,33 +237,39 @@ class DetectorYoloHailo(DetectorYoloBase):
         with self._lock:
             if self._montaje is None or frame is None or frame.size == 0:
                 return []
-            crudas, escala, pad_x, pad_y = self._inferir_crudo(frame)
+            preds, escala, pad_x, pad_y = self._inferir_crudo(frame)
 
-        resultados: list[ResultadoDeteccion] = []
-        for clase_id, filas in enumerate(crudas):
-            etiqueta = self._etiqueta(clase_id)
-            umbral = self._umbral_de_indice(clase_id)
-            for fila in filas:
-                ymin, xmin, ymax, xmax, confianza = (
-                    float(valor) for valor in fila[:_COLUMNAS_POST_NMS]
-                )
-                if confianza <= umbral:
-                    continue
-                # Las coordenadas vienen normalizadas a [0, 1] sobre la entrada
-                # letterboxeada: a píxeles del input, se quita el relleno y se
-                # divide por la escala para volver al frame original.
-                x1 = (xmin * self.image_size - pad_x) / escala
-                y1 = (ymin * self.image_size - pad_y) / escala
-                x2 = (xmax * self.image_size - pad_x) / escala
-                y2 = (ymax * self.image_size - pad_y) / escala
-                resultados.append(
-                    ResultadoDeteccion(
-                        label=etiqueta,
-                        confianza=confianza,
-                        bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
-                    )
-                )
-        return resultados
+        # (1, 4 + clases, N) -> (N, 4 + clases)
+        preds = np.asarray(preds)[0].transpose()
+        xywh = preds[:, :_ATRIBUTOS_BASE]
+        scores = preds[:, _ATRIBUTOS_BASE:]
+        clases = scores.argmax(axis=1)
+        confianzas = scores[np.arange(scores.shape[0]), clases]
+
+        seleccion = confianzas > self._umbrales(clases)
+        if not seleccion.any():
+            return []
+
+        xywh = xywh[seleccion]
+        confianzas = confianzas[seleccion]
+        clases = clases[seleccion]
+
+        # La salida trae (centro_x, centro_y, ancho, alto) en el espacio del
+        # modelo letterboxeado: se quita el relleno y se divide por la escala
+        # uniforme para volver a píxeles del frame original.
+        cajas = np.column_stack(
+            (
+                (xywh[:, 0] - 0.5 * xywh[:, 2] - pad_x) / escala,
+                (xywh[:, 1] - 0.5 * xywh[:, 3] - pad_y) / escala,
+                xywh[:, 2] / escala,
+                xywh[:, 3] / escala,
+            )
+        ).astype(int).tolist()
+
+        indices = cv2.dnn.NMSBoxes(
+            cajas, confianzas.tolist(), self._umbral_minimo(), self.nms_threshold
+        )
+        return self._armar(indices, cajas, confianzas.tolist(), clases.tolist())
 
     def liberar(self) -> None:
         """Suelta el montaje del HEF. Idempotente.
@@ -270,42 +293,68 @@ class DetectorYoloHailo(DetectorYoloBase):
         """Corre la NPU y devuelve el tensor crudo y los parámetros del letterbox."""
         montaje = self._montaje
         if montaje is None:
-            return [], 1.0, 0, 0
+            return np.empty((0, _ATRIBUTOS_BASE), dtype=np.float32), 1.0, 0, 0
         lienzo, escala, pad_x, pad_y = letterbox(frame, self.image_size)
         rgb = cv2.cvtColor(lienzo, cv2.COLOR_BGR2RGB)
         entrada = np.expand_dims(rgb, axis=0)
         salidas = montaje.pipeline.infer({montaje.entrada.name: entrada})
-        # La salida de un HEF con NMS viene envuelta por batch: el [0] es la
-        # lista de detecciones por clase. Sin desenvolverla, `_validar_salida` la
-        # rechaza y `detectar_frame` leería el batch como si fuera la clase 0.
-        return salidas[montaje.salida.name][0], escala, pad_x, pad_y
+        return (
+            salidas[montaje.salida.name],
+            escala,
+            pad_x,
+            pad_y,
+        )
 
     def _validar_salida(self) -> None:
         """Corre una inferencia en negro y verifica la forma de la salida.
 
         Un HEF con otro orden de tensores devolvería "cero detecciones" en
         silencio. Es mejor fallar en la carga, donde el error se ve en el panel.
-        Esto importa porque `yolov8s-hailo` viene del model zoo y no de la receta
-        propia.
         """
         prueba = np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
         crudas, _, _, _ = self._inferir_crudo(prueba)
-
-        if not isinstance(crudas, (list, tuple)) or not crudas:
+        preds = np.asarray(crudas)
+        if preds.ndim != 3 or preds.shape[0] != 1:
             raise ErrorCargaModelo(
-                f"Salida inesperada de {self.modelo_path.name}: se esperaba una "
-                "lista de detecciones por clase"
+                f"Salida inesperada de {self.modelo_path.name}: se esperaba "
+                f"tensor (1, 4+clases, N), se obtuvo {preds.shape}"
             )
-        por_clase = crudas[0]
-        if getattr(por_clase, "ndim", 0) != 2 or por_clase.shape[1] != _COLUMNAS_POST_NMS:
-            raise ErrorCargaModelo(
-                f"Salida inesperada de {self.modelo_path.name}: se esperaban filas "
-                "[ymin, xmin, ymax, xmax, confianza]"
-            )
-        if len(crudas) != len(self.nombres):
+        if preds.shape[1] != _ATRIBUTOS_BASE + len(self.nombres):
             logger.warning(
-                "El HEF declara %d clases y el archivo de nombres tiene %d: "
-                "las que sobren se rotularán como 'class_N'.",
-                len(crudas),
+                "El HEF declara %d columnas y el archivo de nombres tiene %d "
+                "clases: las detecciones pueden salir mal etiquetadas.",
+                preds.shape[1] - _ATRIBUTOS_BASE,
                 len(self.nombres),
             )
+
+    def _umbrales(self, clases: np.ndarray) -> np.ndarray:
+        """Umbral efectivo de cada fila según su clase (vectorizado)."""
+        umbrales = np.full(clases.shape, self.confidence_threshold, dtype=np.float32)
+        tabla = self._tabla_umbrales
+        if tabla is not None:
+            dentro = clases < tabla.size
+            umbrales[dentro] = tabla[clases[dentro]]
+        return umbrales
+
+    def _armar(
+        self,
+        indices: object,
+        cajas: list[list[int]],
+        confianzas: list[float],
+        clases: list[int],
+    ) -> list[ResultadoDeteccion]:
+        """Traduce los índices que devuelve el NMS a resultados."""
+        resultados: list[ResultadoDeteccion] = []
+        for indice in indices:  # type: ignore[union-attr]
+            # OpenCV 4.x devolvía índices anidados ([[i], [j]]) y 5.x planos.
+            valor = indice[0] if isinstance(indice, (list, np.ndarray)) else indice
+            i = int(valor)
+            left, top, caja_ancho, caja_alto = cajas[i]
+            resultados.append(
+                ResultadoDeteccion(
+                    label=self._etiqueta(clases[i]),
+                    confianza=confianzas[i],
+                    bbox=(left, top, caja_ancho, caja_alto),
+                )
+            )
+        return resultados

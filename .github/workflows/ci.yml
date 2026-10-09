@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Tests ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Instalar dependencias de la app
+        # La Pi trae cv2/hailo del sistema, pero en CI no las necesitamos:
+        # los tests mockean la capa HTTP y no importan el motor de inferencia.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        # Reglas conservadoras (E/F/I/B/UP/SIM); el repo legacy no activa
+        # D (docstrings) ni N (naming).
+        run: |
+          pip install ruff
+          ruff check . --line-length 100 --target-version py310 \
+            --select E,F,I,B,UP,SIM \
+            --exclude models,data,.venv,venv,build,dist,.pytest_cache,.ruff_cache
+
+      - name: Formato (black)
+        run: |
+          pip install black
+          black --check . --line-length 100 --target-version py310
+
+      - name: Tests
+        # Import-time check: si `backend.*` no carga, pytest ni arranca.
+        run: |
+          pip install pytest
+          pytest -v

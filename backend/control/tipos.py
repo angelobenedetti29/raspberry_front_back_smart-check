@@ -26,7 +26,16 @@ class ModoControl(str, Enum):
 
 
 class ErrorControl(Exception):
-    """Error de red, HTTP o de payload al hablar con el backend."""
+    """Error de red, HTTP o de payload al hablar con el backend.
+
+    `codigo` replica el status HTTP cuando aplique (None en errores de
+    conexión o de payload). Permite que el servicio decida si un 401/403
+    debe disparar la invalidación de credencial.
+    """
+
+    def __init__(self, detalle: str, codigo: int | None = None) -> None:
+        super().__init__(detalle)
+        self.codigo = codigo
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +99,7 @@ class SetpointPropuesto:
     velocidad_cinta: float
     aplicado_por: str  # "MPC" o "OPERARIO"
     ventana: str | None  # ISO timestamp de la ventana que originó la propuesta
+    decision_id: str | None = None  # id de la decisión en el backend (dedup + TTL)
 
     def a_payload_aplicacion(self) -> dict:
         """Body de POST /api/v1/lotes/{id}/aplicar-consigna."""
@@ -99,6 +109,8 @@ class SetpointPropuesto:
         }
         if self.temp_horno_2 is not None:
             payload["temp_horno_2_objetivo"] = self.temp_horno_2
+        if self.decision_id is not None:
+            payload["decision_id"] = self.decision_id
         return payload
 
 
@@ -117,15 +129,3 @@ class LimitesAplicacion:
     temp_max: float
     vel_min: float
     vel_max: float
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigControl:
-    """Subsección `control` del config.json."""
-
-    habilitado: bool
-    publicar_telemetria_segundos: float
-    poll_consigna_propuesta_segundos: float
-    metricas_horno_endpoint: str  # plantilla con {id}
-    consigna_propuesta_endpoint: str  # plantilla con {id}
-    aplicar_consigna_endpoint: str  # plantilla con {id}
