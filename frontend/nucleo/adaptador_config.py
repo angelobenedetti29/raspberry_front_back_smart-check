@@ -11,17 +11,11 @@ from __future__ import annotations
 import copy
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from backend.config import ConfigError, guardar_config, leer_config_cruda
-from backend.device.almacen import AlmacenDispositivo
-from backend.lote.cliente import ClienteLotes
-from backend.lote.tipos import ErrorLotes
 from frontend.nucleo.controlador_config import (
     CampoConfigUI,
-    ModeloConfigUI,
-    ProductoConfigUI,
     ResultadoGuardadoUI,
     TipoCampo,
 )
@@ -625,52 +619,6 @@ class AdaptadorConfig:
             mensaje="Cambios guardados. Reiniciá la aplicación para aplicarlos.",
         )
 
-    def modelos(self) -> tuple[ModeloConfigUI, ...]:
-        """Catálogo local de modelos con su vínculo al producto del backend."""
-        cruda = leer_config_cruda()
-        return tuple(
-            ModeloConfigUI(model_id=model_id, label=label, producto_id=producto_id)
-            for model_id, label, producto_id in _modelos_crudos(cruda)
-        )
-
-    def productos(self) -> tuple[ProductoConfigUI, ...]:
-        """Productos del backend para vincular. Vacío si no se pudo consultar."""
-        secret = _leer_secret(self._config)
-        if not secret:
-            return ()
-        try:
-            catalogo = ClienteLotes(self._config.api).productos(secret)
-        except ErrorLotes:
-            return ()
-        return tuple(
-            ProductoConfigUI(id=producto.id, nombre=producto.nombre)
-            for producto in catalogo
-            if producto.activo
-        )
-
-    def guardar_productos(
-        self, por_modelo: Mapping[str, str | None]
-    ) -> ResultadoGuardadoUI:
-        """Guarda el producto vinculado a cada modelo; no levanta excepciones."""
-        try:
-            copia = copy.deepcopy(leer_config_cruda())
-            _asignar_productos(copia, por_modelo)
-            guardar_config(copia)
-        except ConfigError as exc:
-            return ResultadoGuardadoUI(
-                ok=False,
-                mensaje=str(exc).strip() or "El backend rechazó la configuración.",
-            )
-        except OSError as exc:
-            return ResultadoGuardadoUI(
-                ok=False,
-                mensaje=f"No se pudo escribir la configuración: {exc}",
-            )
-        return ResultadoGuardadoUI(
-            ok=True,
-            mensaje="Vínculos guardados. Reiniciá la aplicación para aplicarlos.",
-        )
-
     # --- internos ---
 
     def _campo(self, esquema: _CampoEsquema, cruda: dict) -> CampoConfigUI:
@@ -788,54 +736,6 @@ def _defecto(tipo: TipoCampo, opciones: tuple[tuple[str, object], ...]) -> objec
     if tipo is TipoCampo.BOOLEANO:
         return False
     return opciones[0][1] if opciones else ""
-
-
-def _modelos_crudos(cruda: dict) -> list[tuple[str, str, str | None]]:
-    """(model_id, label, producto_id) del catálogo crudo, en su orden."""
-    modelos = cruda.get("models")
-    if not isinstance(modelos, dict):
-        return []
-    catalogo = modelos.get("catalog")
-    if not isinstance(catalogo, list):
-        return []
-
-    resultado: list[tuple[str, str, str | None]] = []
-    for entrada in catalogo:
-        if not isinstance(entrada, dict):
-            continue
-        model_id = entrada.get("model_id")
-        if not isinstance(model_id, str) or not model_id:
-            continue
-        label = entrada.get("label")
-        if not isinstance(label, str) or not label:
-            label = model_id
-        producto_id = entrada.get("producto_id")
-        if not isinstance(producto_id, str) or not producto_id:
-            producto_id = None
-        resultado.append((model_id, label, producto_id))
-    return resultado
-
-
-def _asignar_productos(copia: dict, por_modelo: Mapping[str, str | None]) -> None:
-    """Setea `producto_id` en cada entrada del catálogo según el mapping."""
-    modelos = copia.get("models")
-    if not isinstance(modelos, dict):
-        return
-    catalogo = modelos.get("catalog")
-    if not isinstance(catalogo, list):
-        return
-    for entrada in catalogo:
-        if not isinstance(entrada, dict):
-            continue
-        model_id = entrada.get("model_id")
-        if isinstance(model_id, str) and model_id in por_modelo:
-            entrada["producto_id"] = por_modelo[model_id]
-
-
-def _leer_secret(config: AppConfig) -> str | None:
-    """Secret persistido por el registro; None si todavía no hay alta."""
-    estado = AlmacenDispositivo(Path(config.paths.root) / "device.json").cargar()
-    return None if estado is None else estado.secret
 
 
 __all__ = ["AdaptadorConfig"]

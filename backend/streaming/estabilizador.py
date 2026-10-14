@@ -32,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from backend.etiquetas import separar_etiqueta
 from backend.inference import ResultadoDeteccion
 
 # IoU mínimo para asociar una detección con una pista por solapamiento.
@@ -53,9 +54,8 @@ _FRAMES_CONFIRMAR_PISTA = 2
 
 
 def _es_quemada(label: str) -> bool:
-    """True si la etiqueta representa una tostada quemada."""
-    normal = label.strip().lower()
-    return "quemada" in normal or normal == "tcq"
+    """True si la etiqueta representa un producto quemado (sufijo ``_quemado``)."""
+    return separar_etiqueta(label)[1] == "quemado"
 
 
 @dataclass(frozen=True, slots=True)

@@ -38,6 +38,14 @@ Hace `train` (100 épocas por defecto, `--device 0`) y exporta a
 
 - El `.names` se escribe desde `model.names` (orden real de los índices): no hay
   lista de clases hardcodeada.
+- **Convención de nombres de clases** (obligatoria): `<producto>_<estado>`, una
+  clase por combinación (p. ej. `tostada_comun_ok`, `tostada_comun_quemado`,
+  `fajita_crudo`). El estado es el sufijo tras el último `_` y sólo puede ser
+  `crudo`, `ok` o `quemado` (ver `backend/etiquetas.py`): de ahí salen el estado
+  que reporta el lote y el color de las cajas. El prefijo tiene que matchear el
+  nombre del producto del catálogo del backend (normalizado: minúsculas, sin
+  tildes, espacios → `_`, p. ej. "Tostada Común" → `tostada_comun`), porque la
+  app resuelve el producto desde el label, sin vínculos manuales.
 - La exportación fuerza `opset 11` + simplificado, que es lo que digiere el
   parser de Hailo-8L.
 - Para YOLO26 fuerza además `end2end=False`, que mantiene el cabezal
@@ -121,12 +129,15 @@ Agregar/editar en `config.json` → `models.catalog`:
 ```json
 {
   "model_id": "tostadas-v2",
-  "producto_id": null,
   "label": "YOLOv26 Tostadas V2 (Custom)",
   "file": "tostadas_v2.onnx",
   "names_file": "tostadas_v2.names",
-  "class_thresholds": { "tcq": 0.3, "tcok": 0.6 }
+  "class_thresholds": { "tostada_comun_quemado": 0.3, "tostada_comun_ok": 0.6 }
 }
+
+Ya no hay `producto_id`: el producto de cada detección se resuelve desde el
+prefijo de la clase (`<producto>_`) contra el catálogo de productos del backend
+(los umbrales por clase van con la etiqueta compuesta completa, en minúsculas).
 ```
 
 Con el `.hef` hermano en `models/`, la app lo redirige solo a la NPU cuando

@@ -49,7 +49,6 @@
         "catalog": [
             {
                 "model_id": "yolo26n-coco",
-                "producto_id": null,
                 "label": "YOLOv26 Original (COCO)",
                 "file": "yolo26n.onnx",
                 "names_file": "coco.names",
@@ -57,7 +56,6 @@
             },
             {
                 "model_id": "tostadas-v1",
-                "producto_id": null,
                 "label": "YOLOv26 Tostadas V1 (Custom)",
                 "file": "tostadas_v1.onnx",
                 "names_file": "tostadas_v1.names",
@@ -68,7 +66,6 @@
             },
             {
                 "model_id": "tostadas-v2",
-                "producto_id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
                 "label": "YOLOv26 Tostadas V2 (Custom)",
                 "file": "tostadas_v2.onnx",
                 "names_file": "tostadas_v2.names",
@@ -79,7 +76,6 @@
             },
             {
                 "model_id": "yolov8s-hailo",
-                "producto_id": null,
                 "label": "YOLOv8s NPU (Hailo-8L COCO)",
                 "file": "/usr/share/hailo-models/yolov8s_h8l.hef",
                 "names_file": "class.names",

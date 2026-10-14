@@ -25,6 +25,7 @@ from backend.config import AppConfig
 from backend.control.tipos import LimitesAplicacion, ModoControl
 from backend.device.almacen import AlmacenDispositivo
 from backend.device.tipos import TipoDispositivo
+from backend.etiquetas import normalizar_clave, separar_etiqueta
 from backend.lote.cliente import ClienteLotes
 from backend.lote.dlq import ColaDLQ
 from backend.lote.estado import clasificar_estado
@@ -120,9 +121,12 @@ class LoteService:
         self._backoff_ini = config.lote.reintento_inicial_segundos
         self._backoff_max = config.lote.reintento_maximo_segundos
         self._catalogo = config.models.catalog
-        self._producto_por_modelo: dict[str | None, str | None] = {
-            entrada.model_id: entrada.producto_id for entrada in config.models.catalog
-        }
+        # Producto del catálogo del Go indexado por nombre normalizado: la clave
+        # es el prefijo del label (convención ``<producto>_<estado>`` de
+        # backend.etiquetas), no el modelo. Se llena en `_refrescar_si_toca`.
+        self._producto_por_nombre: dict[str, Producto] = {}
+        # Prefijos ya advertidos por etiqueta sin producto: evita log-spam.
+        self._prefijos_advertidos: set[str] = set()
         # Estado para evitar emisiones espurias del callback de modo: se compara
         # contra el último modo que le pasamos al ControlService.
         self._ultimo_modo_emitido: ModoControl | None = None
@@ -315,6 +319,10 @@ class LoteService:
             return
         with self._lock:
             self._productos = productos
+            self._producto_por_nombre = {
+                normalizar_clave(p.nombre): p for p in productos if p.activo
+            }
+            self._prefijos_advertidos.clear()
             self._sector = sector
             lote_anterior = self._lote
             self._lote = lote
@@ -353,20 +361,20 @@ class LoteService:
             self._encolar_salida(eventos)
 
     def _encolar_entrada(self, eventos: list[EventoObservado]) -> None:
-        """La entrada sólo abre el lote con el primer `alta`."""
+        """La entrada sólo abre el lote con el primer `alta` resoluble."""
         with self._lock:
             if self._lote is not None:
                 return
         for observado in eventos:
             if observado.evento.tipo != "alta":
                 continue
-            producto_id = self._producto_por_modelo.get(observado.modelo_id)
-            if not producto_id:
+            producto = self._resolver_producto(observado.evento.label)
+            if producto is None:
                 self._marcar_error(
-                    "Modelo sin producto vinculado (Configuración)"
+                    "Etiqueta sin producto en el catálogo del backend (ver log)"
                 )
-                return
-            self._abrir_lote(producto_id)
+                continue
+            self._abrir_lote(producto.id)
             return
 
     def _encolar_salida(self, eventos: list[EventoObservado]) -> None:
@@ -383,32 +391,64 @@ class LoteService:
                 self._conteos_locales.get(deteccion.estado, 0) + 1
             )
 
+    def _resolver_producto(self, label: str) -> Producto | None:
+        """Resuelve el producto del catálogo del backend desde el prefijo del label.
+
+        La convención es ``<producto>_<estado>`` (ver ``backend.etiquetas``): el
+        prefijo ya viene normalizado y se matchea contra el nombre del producto
+        del catálogo. Sin match devuelve None y se advierte una sola vez por
+        prefijo (hasta el próximo refresco de catálogo).
+        """
+        prefijo, _estado = separar_etiqueta(label)
+        producto = self._producto_por_nombre.get(prefijo) if prefijo else None
+        if producto is None and prefijo and prefijo not in self._prefijos_advertidos:
+            self._prefijos_advertidos.add(prefijo)
+            logger.warning(
+                "lote: etiqueta %r sin producto en el catálogo del backend "
+                "(prefijo %r); el evento no se reporta",
+                label,
+                prefijo,
+            )
+        return producto
+
     def _traducir(self, observado: EventoObservado) -> EventoDeteccion | None:
-        """Un evento por producto confirmado: quemado al `quemada`, ok/crudo al `baja`."""
+        """Un evento por producto confirmado: quemado al `quemada`, ok/crudo al `baja`.
+
+        El producto se resuelve por etiqueta (prefijo ``<producto>_``) contra el
+        catálogo del backend; sin producto o sin estado válido, el evento no se
+        reporta (y no ocupa el dedupe, para no perder un `baja` posterior del
+        mismo track).
+        """
         evento = observado.evento
         clave = (observado.modelo_id, evento.pista_id)
         if evento.tipo == "quemada":
             if clave in self._reportadas:
                 return None
+            producto = self._resolver_producto(evento.label)
+            if producto is None:
+                return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
-            return self._evento(observado, EstadoProducto.QUEMADO)
+            return self._evento(observado, producto, EstadoProducto.QUEMADO)
         if evento.tipo == "baja":
             estado = clasificar_estado(evento.label)
             if clave in self._reportadas or estado is None:
                 return None
+            producto = self._resolver_producto(evento.label)
+            if producto is None:
+                return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
-            return self._evento(observado, estado)
+            return self._evento(observado, producto, estado)
         return None
 
     def _evento(
-        self, observado: EventoObservado, estado: EstadoProducto
+        self, observado: EventoObservado, producto: Producto, estado: EstadoProducto
     ) -> EventoDeteccion:
         evento = observado.evento
         return EventoDeteccion(
             evento_id=str(uuid.uuid4()),
-            producto_id=self._producto_por_modelo.get(observado.modelo_id),
+            producto_id=producto.id,
             estado=estado,
             confianza=evento.confianza,
             pista=evento.pista_id,
@@ -481,7 +521,7 @@ class LoteService:
             self._notificar_lote_abierto(secret, abierto)
             return abierto.id
         if not producto_id:
-            self._marcar_error("Modelo sin producto vinculado (Configuración)")
+            self._marcar_error("Producto sin resolver para abrir el lote (ver log)")
             return None
         try:
             lote, _ = self._cliente.abrir_lote(

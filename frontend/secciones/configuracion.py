@@ -12,10 +12,7 @@ guardar. Todo pasa por `ControladorConfig`: la sección no importa `backend.*`.
 
 from __future__ import annotations
 
-import threading
-from typing import Any, cast
-
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -36,9 +33,6 @@ from PySide6.QtWidgets import (
 from frontend.nucleo.contrato import ContextoApp, SeccionBase
 from frontend.nucleo.controlador_config import (
     CampoConfigUI,
-    ModeloConfigUI,
-    ProductoConfigUI,
-    ResultadoGuardadoUI,
     TipoCampo,
 )
 from frontend.nucleo.tema import color
@@ -59,12 +53,6 @@ _MIN_ENTERO = 0
 _MAX_ENTERO = 2_000_000_000
 _MIN_DECIMAL = 0.0
 _MAX_DECIMAL = 1_000_000.0
-
-# Bloque de vínculos modelo→producto: no sale de `campos()` porque el catálogo
-# de productos vive en el backend. Acompaña al grupo de modelos del formulario.
-_GRUPO_MODELOS = "Modelos"
-_SIN_VINCULAR = "Sin vincular"
-
 
 def _vaciar_layout(layout: QVBoxLayout) -> None:
     """Despega y destruye los widgets de un layout.
@@ -110,32 +98,11 @@ class Configuracion(SeccionBase):
     titulo = "Configuración"
     icono = "configuracion"
 
-    # Señales para volver al hilo de la UI desde los hilos de trabajo. La
-    # conexión es *queued* automáticamente porque emisor y receptor viven en
-    # hilos distintos; el payload lleva la generación para descartar respuestas
-    # viejas (ver `_al_recibir_catalogo`).
-    catalogo_listo = Signal(int, object)
-    guardado_lotes_listo = Signal(int, object)
-
     def __init__(self, ctx: ContextoApp, parent: QWidget | None = None) -> None:
         super().__init__(ctx, parent)
         self._campos: dict[str, CampoConfigUI] = {}
         self._editores: dict[str, QWidget] = {}
         self._sucio = False
-        # Referencias del bloque de vínculos modelo→producto.
-        self._combos_producto: dict[str, QComboBox] = {}
-        self._lotes_aviso: QLabel | None = None
-        self._lotes_filas: QWidget | None = None
-        self._layout_lotes: QVBoxLayout | None = None
-        self._boton_guardar_lotes: QPushButton | None = None
-        # Control de las consultas en vuelo: cada pedido sube la generación y
-        # sólo el último resultado se aplica.
-        self._generacion_catalogo = 0
-        self._generacion_guardado = 0
-        self._consultando_catalogo = False
-        self._cerrado = False
-        self.catalogo_listo.connect(self._al_recibir_catalogo)
-        self.guardado_lotes_listo.connect(self._al_recibir_guardado)
         self._construir()
         self.setStyleSheet(self._hoja())
         self._cargar_campos()
@@ -322,7 +289,6 @@ class Configuracion(SeccionBase):
             self._campos = {}
             self._editores = {}
             self._limpiar_contenedor()
-            self._reset_lotes_refs()
             self._sucio = False
             self._actualizar_barra()
             self._mostrar_error(str(exc))
@@ -330,7 +296,6 @@ class Configuracion(SeccionBase):
 
         self._campos = {campo.clave: campo for campo in campos}
         self._reconstruir(campos)
-        self._cargar_lotes()
         self._sucio = False
         self._actualizar_barra()
         return True
@@ -343,17 +308,11 @@ class Configuracion(SeccionBase):
         """Arma una tarjeta por grupo, en el orden de aparición de los campos."""
         self._limpiar_contenedor()
         self._editores = {}
-        self._reset_lotes_refs()
 
         grupos = tuple(dict.fromkeys(campo.grupo for campo in campos))
         for grupo in grupos:
             del_grupo = tuple(campo for campo in campos if campo.grupo == grupo)
             self._layout_campos.addWidget(self._tarjeta(grupo, del_grupo))
-            # El bloque de vínculos acompaña al grupo de modelos.
-            if grupo == _GRUPO_MODELOS:
-                self._layout_campos.addWidget(self._tarjeta_lotes())
-        if _GRUPO_MODELOS not in grupos:
-            self._layout_campos.addWidget(self._tarjeta_lotes())
 
     def _tarjeta(
         self, grupo: str, campos: tuple[CampoConfigUI, ...]
@@ -476,290 +435,6 @@ class Configuracion(SeccionBase):
             return por_defecto
         return float(valor)
 
-    # --- vínculos modelo → producto ---
-
-    def _reset_lotes_refs(self) -> None:
-        """Suelta las referencias del bloque de vínculos al reconstruir."""
-        self._combos_producto = {}
-        self._lotes_aviso = None
-        self._lotes_filas = None
-        self._layout_lotes = None
-        self._boton_guardar_lotes = None
-
-    def _tarjeta_lotes(self) -> QFrame:
-        """Tarjeta de vínculos modelo→producto.
-
-        No sale de `campos()`: el catálogo de productos vive en el backend, así
-        que el bloque se arma y se guarda aparte del formulario plano.
-        """
-        tarjeta = QFrame()
-        tarjeta.setObjectName("tarjetaEstado")
-
-        layout = QVBoxLayout(tarjeta)
-        layout.setContentsMargins(14, 8, 14, 12)
-        layout.setSpacing(8)
-
-        rotulo = QLabel("MODELOS")
-        rotulo.setProperty("rol", "rotulo")
-        layout.addWidget(rotulo)
-
-        ayuda = QLabel(
-            "Vinculá cada modelo con el producto que detecta. El vínculo se "
-            "guarda por separado de los campos."
-        )
-        ayuda.setObjectName("campoAyuda")
-        ayuda.setWordWrap(True)
-        layout.addWidget(ayuda)
-
-        self._lotes_aviso = QLabel()
-        self._lotes_aviso.setObjectName("avisoLotes")
-        self._lotes_aviso.setWordWrap(True)
-        self._lotes_aviso.hide()
-        layout.addWidget(self._lotes_aviso)
-
-        self._lotes_filas = QWidget()
-        self._layout_lotes = QVBoxLayout(self._lotes_filas)
-        self._layout_lotes.setContentsMargins(0, 0, 0, 0)
-        self._layout_lotes.setSpacing(6)
-        layout.addWidget(self._lotes_filas)
-
-        acciones = QHBoxLayout()
-        acciones.setContentsMargins(0, 0, 0, 0)
-        acciones.addStretch(1)
-
-        self._boton_guardar_lotes = QPushButton("Guardar vínculos")
-        self._boton_guardar_lotes.setObjectName("botonPrimario")
-        self._boton_guardar_lotes.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._boton_guardar_lotes.setFixedHeight(_ALTO_BOTON)
-        self._boton_guardar_lotes.clicked.connect(self._guardar_lotes)
-        acciones.addWidget(self._boton_guardar_lotes)
-        layout.addLayout(acciones)
-        return tarjeta
-
-    def _cargar_lotes(self) -> None:
-        """Pide el catálogo en un hilo y deja el bloque en "consultando".
-
-        `productos()` hace HTTP y puede tardar hasta el timeout del cliente, así
-        que nunca se llama en el hilo de la UI: el resultado vuelve por la señal
-        `catalogo_listo` y recién ahí se tocan los widgets.
-        """
-        if self._layout_lotes is None or self._lotes_aviso is None:
-            return
-        # Ya hay una consulta en vuelo (p. ej. la de `__init__` seguida de la de
-        # `al_entrar`): no se dispara otra; la que está en curso va a poblar.
-        if self._consultando_catalogo:
-            return
-
-        self._generacion_catalogo += 1
-        generacion = self._generacion_catalogo
-        self._consultando_catalogo = True
-
-        self._combos_producto = {}
-        _vaciar_layout(self._layout_lotes)
-        self._mostrar_aviso_lotes("Consultando el catálogo…")
-        self._habilitar_guardado_lotes(False)
-
-        hilo = threading.Thread(
-            target=self._consultar_catalogo,
-            args=(generacion,),
-            name="config-catalogo",
-            daemon=True,
-        )
-        hilo.start()
-
-    def _consultar_catalogo(self, generacion: int) -> None:
-        """Hilo de trabajo: junta modelos y productos. No toca widgets."""
-        try:
-            modelos = self.ctx.controlador_config.modelos()
-            productos = self.ctx.controlador_config.productos()
-            payload: object = (modelos, productos)
-        except Exception as exc:  # el backend no debe romper la sección
-            payload = exc
-        self._emitir(self.catalogo_listo, generacion, payload)
-
-    def _al_recibir_catalogo(self, generacion: int, payload: object) -> None:
-        """Slot en el hilo de la UI: descarta respuestas obsoletas y puebla."""
-        # Si la sección ya se cerró, la generación cambió o los widgets se
-        # destruyeron, la respuesta llega tarde: se ignora.
-        if self._cerrado or generacion != self._generacion_catalogo:
-            return
-        self._consultando_catalogo = False
-        if self._layout_lotes is None or self._lotes_aviso is None:
-            return
-
-        if isinstance(payload, Exception):
-            self._mostrar_aviso_lotes(
-                "No se pudo consultar el catálogo de modelos y productos."
-            )
-            self._habilitar_guardado_lotes(False)
-            return
-
-        modelos, productos = payload  # type: ignore[misc]
-        self._poblar_lotes(modelos, productos)
-
-    def _poblar_lotes(
-        self,
-        modelos: tuple[ModeloConfigUI, ...],
-        productos: tuple[ProductoConfigUI, ...],
-    ) -> None:
-        """Arma las filas de vínculo con el catálogo ya resuelto.
-
-        `productos` vacío significa que no se pudo consultar el backend: los
-        combos quedan deshabilitados y se muestra igual el producto guardado.
-        """
-        if self._layout_lotes is None:
-            return
-        if not modelos:
-            self._mostrar_aviso_lotes("El catálogo local no tiene modelos.")
-            self._habilitar_guardado_lotes(False)
-            return
-
-        hay_productos = bool(productos)
-        if hay_productos:
-            self._ocultar_aviso_lotes()
-        else:
-            self._mostrar_aviso_lotes(
-                "No se pudo consultar el backend: el vínculo no se puede "
-                "cambiar ahora. Se muestra el producto guardado en cada modelo."
-            )
-
-        for modelo in modelos:
-            self._layout_lotes.addWidget(
-                self._fila_lotes(modelo, productos, hay_productos)
-            )
-        self._habilitar_guardado_lotes(hay_productos)
-
-    def _mostrar_aviso_lotes(self, texto: str) -> None:
-        if self._lotes_aviso is not None:
-            self._lotes_aviso.setText(texto)
-            self._lotes_aviso.show()
-
-    def _ocultar_aviso_lotes(self) -> None:
-        if self._lotes_aviso is not None:
-            self._lotes_aviso.hide()
-
-    def _habilitar_guardado_lotes(self, habilitado: bool) -> None:
-        if self._boton_guardar_lotes is not None:
-            self._boton_guardar_lotes.setEnabled(habilitado)
-
-    def _fila_lotes(
-        self,
-        modelo: ModeloConfigUI,
-        productos: tuple[ProductoConfigUI, ...],
-        habilitado: bool,
-    ) -> QWidget:
-        """Fila con el modelo a la izquierda y su combo de producto a la derecha."""
-        fila = QWidget()
-
-        layout = QHBoxLayout(fila)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        etiqueta = QLabel(modelo.label)
-        etiqueta.setObjectName("campoEtiqueta")
-        # Ancho mínimo para que los combos queden alineados entre filas.
-        etiqueta.setMinimumWidth(180)
-        etiqueta.setToolTip(modelo.model_id)
-
-        combo = _ComboSinRueda()
-        combo.setObjectName(_OBJETO_OPCION)
-        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        combo.setToolTip(
-            "Producto que el backend asocia a las detecciones de este modelo."
-        )
-        combo.addItem(_SIN_VINCULAR, None)
-        for producto in productos:
-            combo.addItem(producto.nombre, producto.id)
-        self._seleccionar_producto(combo, modelo.producto_id)
-        combo.setEnabled(habilitado)
-        self._combos_producto[modelo.model_id] = combo
-
-        layout.addWidget(etiqueta)
-        layout.addWidget(combo, 1)
-        return fila
-
-    @staticmethod
-    def _seleccionar_producto(combo: QComboBox, producto_id: str | None) -> None:
-        """Preselecciona el vínculo actual; si no está en el catálogo, lo agrega.
-
-        Así el operador ve el producto guardado aunque el backend no lo liste
-        (p. ej. quedó inactivo), y guardar no lo pierde sin querer.
-        """
-        if producto_id is None:
-            combo.setCurrentIndex(0)
-            return
-        indice = combo.findData(producto_id)
-        if indice < 0:
-            combo.addItem(f"{producto_id} (no está en el catálogo)", producto_id)
-            indice = combo.count() - 1
-        combo.setCurrentIndex(indice)
-
-    def _guardar_lotes(self) -> None:
-        """Manda el vínculo de cada modelo en un hilo; no bloquea la UI."""
-        if not self._combos_producto:
-            return
-        por_modelo = {
-            model_id: combo.currentData()
-            for model_id, combo in self._combos_producto.items()
-        }
-
-        self._generacion_guardado += 1
-        generacion = self._generacion_guardado
-        self._habilitar_guardado_lotes(False)
-        self._mostrar_aviso_lotes("Guardando vínculos…")
-
-        hilo = threading.Thread(
-            target=self._guardar_lotes_en_hilo,
-            args=(generacion, por_modelo),
-            name="config-guardar-lotes",
-            daemon=True,
-        )
-        hilo.start()
-
-    def _guardar_lotes_en_hilo(
-        self, generacion: int, por_modelo: dict[str, str | None]
-    ) -> None:
-        """Hilo de trabajo: guarda el vínculo. No toca widgets."""
-        try:
-            payload: object = self.ctx.controlador_config.guardar_productos(
-                por_modelo
-            )
-        except Exception as exc:  # nunca dejar que un fallo rompa la sección
-            payload = exc
-        self._emitir(self.guardado_lotes_listo, generacion, payload)
-
-    def _al_recibir_guardado(self, generacion: int, payload: object) -> None:
-        """Slot en el hilo de la UI: muestra el resultado del guardado."""
-        if self._cerrado or generacion != self._generacion_guardado:
-            return
-
-        # Sólo se rehabilita si no hay una consulta de catálogo en curso: esa
-        # consulta dejó el botón deshabilitado a propósito.
-        self._habilitar_guardado_lotes(not self._consultando_catalogo)
-        if not self._consultando_catalogo:
-            self._ocultar_aviso_lotes()
-
-        if isinstance(payload, Exception):
-            self._mostrar_error(str(payload))
-            return
-        resultado = cast(ResultadoGuardadoUI, payload)
-        if resultado.ok:
-            self._mostrar_exito(resultado.mensaje)
-        else:
-            self._mostrar_error(resultado.mensaje)
-
-    @staticmethod
-    def _emitir(senal: Any, generacion: int, payload: object) -> None:
-        """Emite desde el hilo de trabajo.
-
-        Si la sección se destruyó con la consulta en vuelo, el objeto C++ ya no
-        existe y `emit` levanta `RuntimeError`: se descarta sin más.
-        """
-        try:
-            senal.emit(generacion, payload)
-        except RuntimeError:
-            pass
-
     # --- estado y acciones ---
 
     def _marcar_sucio(self, *_args: object) -> None:
@@ -835,11 +510,3 @@ class Configuracion(SeccionBase):
         """Recarga desde disco: el archivo pudo cambiar con la app abierta."""
         self._ocultar_banners()
         self._cargar_campos()
-
-    def al_cerrar(self) -> None:
-        """Marca la sección como cerrada.
-
-        No se bloquea esperando hilos: las consultas en vuelo son daemon y su
-        resultado se descarta por generación al llegar (ver los slots).
-        """
-        self._cerrado = True

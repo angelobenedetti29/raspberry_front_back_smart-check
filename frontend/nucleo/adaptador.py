@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PySide6.QtGui import QImage
 
+from backend.etiquetas import separar_etiqueta
 from backend.inference.catalogo import catalogo_resuelto
 from backend.streaming.estado import ModoPublicacion
 from frontend.nucleo.controlador import (
@@ -25,6 +26,7 @@ from frontend.nucleo.controlador import (
 
 if TYPE_CHECKING:
     from backend.config import AppConfig
+    from backend.inference import ResultadoDeteccion
     from backend.streaming import StreamingService
 
 
@@ -53,7 +55,9 @@ class AdaptadorStreaming:
             frames=estado.frames_publicados,
             detecciones=estado.detecciones,
             ultima_deteccion=(
-                estado.ultima_deteccion.etiqueta if estado.ultima_deteccion else ""
+                _texto_deteccion(estado.ultima_deteccion)
+                if estado.ultima_deteccion
+                else ""
             ),
             retraso_ms=estado.retraso_inferencia_ms,
             modelo_id=estado.modelo_id,
@@ -162,3 +166,16 @@ class AdaptadorStreaming:
         except OSError:
             # La carpeta puede no existir: la lista queda sólo con la cámara.
             return ()
+
+
+def _texto_deteccion(deteccion: ResultadoDeteccion) -> str:
+    """Texto legible para el operador: ``producto · estado · confianza``.
+
+    La etiqueta del modelo es ``<producto>_<estado>`` (ver backend.etiquetas);
+    sin estado válido (p. ej. clases COCO) se muestra sólo el producto.
+    """
+    producto, estado = separar_etiqueta(deteccion.label)
+    texto = producto.replace("_", " ")
+    if estado:
+        texto = f"{texto} · {estado}"
+    return f"{texto} · {deteccion.confianza:.2f}"

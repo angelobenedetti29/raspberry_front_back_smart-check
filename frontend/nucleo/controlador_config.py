@@ -57,23 +57,6 @@ class ResultadoGuardadoUI:
     mensaje: str
 
 
-@dataclass(frozen=True, slots=True)
-class ProductoConfigUI:
-    """Producto del catálogo del backend, para vincular un modelo."""
-
-    id: str
-    nombre: str
-
-
-@dataclass(frozen=True, slots=True)
-class ModeloConfigUI:
-    """Modelo del catálogo local con el producto del backend ya vinculado."""
-
-    model_id: str
-    label: str
-    producto_id: str | None
-
-
 @runtime_checkable
 class ControladorConfig(Protocol):
     """Lo que la sección Configuración le pide al archivo de configuración."""
@@ -84,18 +67,4 @@ class ControladorConfig(Protocol):
 
     def guardar(self, valores: Mapping[str, object]) -> ResultadoGuardadoUI:
         """Valida y guarda los valores; nunca levanta, informa el resultado."""
-        ...
-
-    def modelos(self) -> tuple[ModeloConfigUI, ...]:
-        """Catálogo local de modelos con su vínculo al producto del backend."""
-        ...
-
-    def productos(self) -> tuple[ProductoConfigUI, ...]:
-        """Productos del backend para vincular. Vacío si no se pudo consultar."""
-        ...
-
-    def guardar_productos(
-        self, por_modelo: Mapping[str, str | None]
-    ) -> ResultadoGuardadoUI:
-        """Guarda el producto vinculado a cada modelo; nunca levanta."""
         ...

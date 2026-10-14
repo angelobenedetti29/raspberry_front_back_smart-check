@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 import cv2
 
+from backend.etiquetas import normalizar_clave, separar_etiqueta
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -35,30 +37,31 @@ _VERDE_OK = (122, 224, 63)
 _ROJO_QUEMADO = (95, 90, 255)
 _AMARILLO_MEDIO = (90, 195, 255)
 
-# Clases con color semántico, indexadas por etiqueta ya normalizada.
-_COLORES_SEMANTICOS: dict[str, tuple[int, int, int]] = {
-    "tcq": _ROJO_QUEMADO,
-    "tostada quemada": _ROJO_QUEMADO,
-    "tcok": _VERDE_OK,
-    "tostadas ok": _VERDE_OK,
+# Color por estado de calidad (sufijo de la etiqueta, ver backend.etiquetas).
+# Las etiquetas sin estado válido caen al fallback por hash.
+_COLORES_ESTADO: dict[str, tuple[int, int, int]] = {
+    "ok": _VERDE_OK,
+    "crudo": _AMARILLO_MEDIO,
+    "quemado": _ROJO_QUEMADO,
 }
 
 
 def _color(label: str) -> tuple[int, int, int]:
-    """Color por etiqueta, con precedencia semántica y hash como fallback.
+    """Color por estado de calidad, con hash de la etiqueta como fallback.
 
-    Primero se normaliza la etiqueta (`strip().lower()`) y se busca en el mapa
-    semántico: las clases de defecto/ok usan los tokens del tema (rojo/verde)
-    para que el operador lea el estado de un vistazo. Si no hay color semántico,
-    se deriva del hash de la clave normalizada y no de `hash()` a propósito:
-    `hash()` de un str está aleatorizado por proceso, así que el mismo producto
-    cambiaría de color entre arranques. Tampoco se usa el índice de clase, que
-    depende del archivo `.names` y haría bailar los colores si se reordena.
+    El estado sale del sufijo de la etiqueta (``_ok``/``_crudo``/``_quemado``,
+    ver ``backend.etiquetas``): ok/crudo/quemado usan los tokens del tema
+    (verde/amarillo/rojo) para que el operador lea el estado de un vistazo,
+    para cualquier producto. Si la etiqueta no tiene estado válido, se deriva
+    del hash de la clave normalizada y no de `hash()` a propósito: `hash()` de
+    un str está aleatorizado por proceso, así que el mismo producto cambiaría
+    de color entre arranques. Tampoco se usa el índice de clase, que depende
+    del archivo `.names` y haría bailar los colores si se reordena.
     """
-    clave = label.strip().lower()
-    semantico = _COLORES_SEMANTICOS.get(clave)
-    if semantico is not None:
-        return semantico
+    estado = separar_etiqueta(label)[1]
+    if estado is not None and estado in _COLORES_ESTADO:
+        return _COLORES_ESTADO[estado]
+    clave = normalizar_clave(label)
     digest = hashlib.md5(clave.encode("utf-8")).digest()
     return _PALETA[digest[0] % len(_PALETA)]
 

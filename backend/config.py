@@ -106,12 +106,11 @@ class ModelEntry:
     model_path: Path
     names_path: Path
     # Umbrales por clase del modelo. Las claves se normalizan a minúscula porque
-    # el detector las busca con label.lower(); lo que no figure acá usa el
-    # umbral global de stream.inference.confidence_threshold.
+    # el detector las busca con label.lower(); lo que no figura acá usa el
+    # umbral global de stream.inference.confidence_threshold. Con la convención
+    # <producto>_<estado> (ver backend.etiquetas) las claves son las etiquetas
+    # compuestas (p. ej. "tostada_comun_quemado").
     class_thresholds: Mapping[str, float]
-    # Producto del catálogo del backend que este modelo detecta. None hasta que
-    # se elija desde Configuración (selector poblado con GET /api/v1/productos).
-    producto_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,16 +542,6 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
                 )
             thresholds[clase.strip().lower()] = float(valor)
 
-        producto_id_raw = entry_raw.get("producto_id")
-        if producto_id_raw is None:
-            producto_id: str | None = None
-        elif isinstance(producto_id_raw, str) and producto_id_raw.strip():
-            producto_id = producto_id_raw.strip()
-        else:
-            raise ConfigError(
-                f"'{where}.producto_id' debe ser un string no vacío o null"
-            )
-
         entries.append(
             ModelEntry(
                 model_id=entry_id,
@@ -560,7 +549,6 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
                 model_path=resolve_path(_get(entry_raw, "file", str, where), paths.models_dir),
                 names_path=resolve_path(_get(entry_raw, "names_file", str, where), paths.models_dir),
                 class_thresholds=MappingProxyType(thresholds),
-                producto_id=producto_id,
             )
         )
     catalog = tuple(entries)

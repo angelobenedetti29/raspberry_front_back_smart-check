@@ -479,13 +479,10 @@ class HornoYCinta(SeccionBase):
             self._lote_progreso.setValue(0)
             self._repolish(self._lote_chip)
             return
-        # Enganchado: producto (fallback a label del modelo), chip modo, ventana.
-        modelo_id = self.ctx.config.models.default_model_id
-        modelo_label = next(
-            (m.label for m in self.ctx.config.models.catalog if m.model_id == modelo_id),
-            modelo_id,
-        )
-        self._lote_producto.setText(modelo_label)
+        # Enganchado: producto del lote (vía lotes), chip modo, ventana.
+        lote = self.ctx.controlador_lotes.estado().lote_activo
+        producto = lote.producto_nombre if lote and lote.producto_nombre else "Lote abierto"
+        self._lote_producto.setText(producto)
         self._lote_chip.setText(snap.modo.value)
         self._lote_chip.setProperty("nivel", "activo")
         self._lote_ventana.setText(
