@@ -412,15 +412,43 @@ class LoteService:
         return producto
 
     def _traducir(self, observado: EventoObservado) -> EventoDeteccion | None:
-        """Un evento por producto confirmado: quemado al `quemada`, ok/crudo al `baja`.
+        """Un evento por producto confirmado.
+
+        Con la línea de conteo habilitada, el conteo oficial se produce al
+        ``cruce`` de la meta: la pista se reporta ahí con su estado final y no
+        vuelve a contarse (el ``quemada``/``baja`` posterior cae en el dedupe).
+        Sin línea, el fallback es el histórico: quemado al confirmar
+        ``quemada``, ok/crudo al ``baja``.
 
         El producto se resuelve por etiqueta (prefijo ``<producto>_``) contra el
         catálogo del backend; sin producto o sin estado válido, el evento no se
-        reporta (y no ocupa el dedupe, para no perder un `baja` posterior del
+        reporta (y no ocupa el dedupe, para no perder un ``baja`` posterior del
         mismo track).
         """
         evento = observado.evento
         clave = (observado.modelo_id, evento.pista_id)
+
+        # Con línea de conteo habilitada, el conteo oficial se produce al cruzar
+        # la meta; el resto de los eventos de esa pista ya no reporta.
+        if evento.tipo == "cruce":
+            if not self._config.stream.counting.enabled:
+                return None
+            if clave in self._reportadas:
+                return None
+            estado = clasificar_estado(evento.label)
+            if estado is None:
+                return None
+            producto = self._resolver_producto(evento.label)
+            if producto is None:
+                return None
+            self._reportadas.add(clave)
+            self._ultimo_modelo = observado.modelo_id
+            return self._evento(observado, producto, estado)
+
+        # Fallback sin línea de conteo: quemado al confirmar 'quemada',
+        # ok/crudo al 'baja'.
+        if self._config.stream.counting.enabled:
+            return None
         if evento.tipo == "quemada":
             if clave in self._reportadas:
                 return None

@@ -42,6 +42,10 @@
         "reconnect": {
             "initial_seconds": 1.0,
             "max_seconds": 30.0
+        },
+        "counting": {
+            "enabled": true,
+            "line_y": 540
         }
     },
     "models": {

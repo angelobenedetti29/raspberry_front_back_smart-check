@@ -79,6 +79,11 @@ class EstadoUI:
     fps: float
     frames: int
     detecciones: int
+    """Total de detecciones acumuladas desde el arranque del stream."""
+
+    activas: int
+    """Cajas vivas en el último frame de inferencia (productos en cinta)."""
+
     ultima_deteccion: str
     """Formateada para mostrar (`"TCOK 0.82"`), vacía si todavía no hay."""
 

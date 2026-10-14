@@ -72,6 +72,17 @@ class ReconnectConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CountingConfig:
+    """Línea virtual de conteo: el conteo oficial se produce al cruzarla.
+
+    `line_y` es la coordenada Y (px) de la línea sobre el frame de captura.
+    """
+
+    enabled: bool
+    line_y: int
+
+
+@dataclass(frozen=True, slots=True)
 class ModbusDriverConfig:
     """Driver de un periférico Modbus (sensores o actuadores del horno).
 
@@ -97,6 +108,7 @@ class StreamConfig:
     preview: PreviewConfig
     storage: StorageConfig
     reconnect: ReconnectConfig
+    counting: CountingConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,6 +511,23 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "'stream.reconnect': initial_seconds debe ser > 0 y max_seconds >= initial_seconds"
         )
 
+    # --- stream.counting ---
+    counting_raw = stream_raw.get("counting")
+    if counting_raw is not None:
+        if not isinstance(counting_raw, dict):
+            raise ConfigError("'stream.counting' debe ser un objeto JSON")
+        counting = CountingConfig(
+            enabled=_get(counting_raw, "enabled", bool, "stream.counting"),
+            line_y=_get(counting_raw, "line_y", int, "stream.counting"),
+        )
+    else:
+        # Sin la sección, la línea queda habilitada al 75% de la altura.
+        counting = CountingConfig(enabled=True, line_y=round(capture.height * 0.75))
+    if counting.line_y <= 0 or counting.line_y >= capture.height:
+        raise ConfigError(
+            f"'stream.counting.line_y' ({counting.line_y}) debe estar dentro de la altura del frame (0, {capture.height})"
+        )
+
     stream = StreamConfig(
         capture=capture,
         publisher=publisher,
@@ -506,6 +535,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         preview=preview,
         storage=storage,
         reconnect=reconnect,
+        counting=counting,
     )
 
     # --- models.catalog ---
