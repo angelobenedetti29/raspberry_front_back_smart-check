@@ -12,7 +12,7 @@ La solución copia la semántica del `ToastTracker` de la referencia:
   mayor score, por IoU (con bonus) o, si el IoU no alcanza, por cercanía de
   centros. El matching es codicioso y una a una.
 - Confirmación de "quemada" recién tras `_FRAMES_CONFIRMAR_QUEMADA` frames
-  consecutivos con una etiqueta quemada; una detección OK corta la racha.
+  acumulados con una etiqueta quemada; una detección OK no corta la racha.
 - Confirmación de la pista recién tras `_FRAMES_CONFIRMAR_PISTA` frames
   consecutivos vistos: hasta entonces es tentativa, no se dibuja ni cuenta como
   producto. Una pista tentativa que se pierde se descarta en silencio.
@@ -45,7 +45,7 @@ _BONUS_IOU = 1.0
 _FRAMES_VISIBLE_PERDIDA = 3
 # Frames perdidos tras los cuales la pista se elimina.
 _FRAMES_MAX_PERDIDA = 10
-# Frames consecutivos con etiqueta quemada para confirmar el estado "burnt".
+# Frames acumulados con etiqueta quemada para confirmar el estado "burnt".
 _FRAMES_CONFIRMAR_QUEMADA = 3
 # Frames consecutivos en los que una pista debe verse para confirmarse y emitir
 # `alta`. Antes es tentativa: un falso positivo de un frame no abre lote ni
@@ -95,7 +95,7 @@ class EstabilizadorDetecciones:
 
     Cada pista se empareja con la detección de mayor score (IoU con bonus o
     cercanía de centros) y conserva su etiqueta hasta confirmar "quemada" por
-    `_FRAMES_CONFIRMAR_QUEMADA` frames consecutivos. La quemada es irreversible
+    `_FRAMES_CONFIRMAR_QUEMADA` frames acumulados. La quemada es irreversible
     en la vida de la pista, así que la clase no parpadea aunque el detector dude.
     """
 
@@ -223,8 +223,9 @@ class EstabilizadorDetecciones:
         label_previo = pista.label
 
         if not _es_quemada(deteccion.label):
-            # Una detección OK corta la racha de frames consecutivos.
-            pista.racha_quemada = 0
+            # Una detección OK NO corta la racha: es acumulativa durante la vida
+            # de la pista (igual que el tracker de referencia), así un detector
+            # que duda entre ok/quemado no impide confirmar la quemada.
             pista.label = deteccion.label
             # Sólo las transiciones entre clases NO quemadas cuentan como cambio.
             if not _es_quemada(label_previo) and deteccion.label != label_previo:
