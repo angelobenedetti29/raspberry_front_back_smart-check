@@ -313,6 +313,12 @@ class PublicadorFFmpeg:
                 if estable and self._espera != float(self._recon.initial_seconds):
                     self._espera = float(self._recon.initial_seconds)
                     logger.info("Publisher: enlace estable; backoff reiniciado")
+                # Un proceso que lleva vivo `stable_seconds` demostró que el
+                # enlace funciona: el error del ciclo fallido ya no describe
+                # la realidad y no debe seguir viéndose en la UI.
+                if estable and self._error:
+                    self._error = ""
+                    logger.info("Publisher: enlace recuperado; error limpiado")
 
             if self._parar.is_set():
                 return
@@ -362,6 +368,11 @@ class PublicadorFFmpeg:
                 self._arrancado_en = time.monotonic()
             logger.error("Publisher: %s", self._error)
             return
+
+        # El stderr acumulado es del proceso anterior: el detalle de
+        # `ultimo_error` debe describir al ffmpeg actual, no al que murió.
+        with self._lock_stderr:
+            self._stderr.clear()
 
         with self._lock:
             self._proceso = proceso
