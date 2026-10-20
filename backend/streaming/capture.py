@@ -68,7 +68,7 @@ def resolver_fuente(source: str, videos_dir: Path) -> Fuente:
 class CapturaOpenCV:
     """Captura BGR con normalización de tamaño y reconexión con backoff.
 
-    Expone hechos (reconexiones, tiempo sin frames, espera pendiente) y no toma
+    Expone hechos (tiempo sin frames, espera pendiente) y no toma
     decisiones de estado: quién decide qué mostrar es el pipeline.
     """
 
@@ -82,7 +82,6 @@ class CapturaOpenCV:
         self._reconexion = reconexion
         self._fuente = resolver_fuente(captura.source, videos_dir)
         self._cap: cv2.VideoCapture | None = None
-        self._reconexiones = 0
         self._frames_ok = 0
         self._ultimo_frame_ok = time.monotonic()
         self._espera = float(reconexion.initial_seconds)
@@ -95,11 +94,6 @@ class CapturaOpenCV:
     def fuente(self) -> Fuente:
         """Fuente resuelta que está capturando (o intentando capturar)."""
         return self._fuente
-
-    @property
-    def reconexiones(self) -> int:
-        """Veces que se perdió una fuente abierta y hubo que reabrirla."""
-        return self._reconexiones
 
     def espera_restante(self) -> float:
         """Segundos hasta el próximo intento de apertura (0.0 = ya toca)."""
@@ -200,7 +194,6 @@ class CapturaOpenCV:
             if ok:
                 return frame
 
-        self._reconexiones += 1
         self._frames_ok = 0
         self._soltar()
         self._programar_reintento()

@@ -84,10 +84,6 @@ class EstadoControlUI:
     aplazar_siguiente: bool
     ultimo_error: str
     backend_ok: bool
-    publicaciones_ok: int
-    publicaciones_error: int
-    aplicaciones_ok: int
-    aplicaciones_error: int
 
 
 @runtime_checkable

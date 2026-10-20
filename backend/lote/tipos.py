@@ -103,7 +103,6 @@ class Lote:
     abierto_en: str
     abierto_por: DispositivoSector | None
     conteos: Conteos
-    ultimo_evento_en: str | None
     inactividad_segundos: float
     cerrado_en: str | None = None
     motivo_cierre: str | None = None

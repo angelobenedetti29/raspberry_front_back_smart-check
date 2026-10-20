@@ -218,7 +218,6 @@ def _lote(raw: dict) -> Lote:
         abierto_en=str(raw.get("abierto_en", "")),
         abierto_por=_dispositivo(raw.get("abierto_por")),
         conteos=_conteos(raw.get("conteos")),
-        ultimo_evento_en=_texto_opcional(raw.get("ultimo_evento_en")),
         inactividad_segundos=float(raw.get("inactividad_segundos", 0.0) or 0.0),
         cerrado_en=_texto_opcional(raw.get("cerrado_en")),
         motivo_cierre=_texto_opcional(raw.get("motivo_cierre")),

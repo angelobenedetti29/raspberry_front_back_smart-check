@@ -9,7 +9,7 @@ cada vez que se levanta.
 > Para la variante con túnel con nombre y dominio fijo, este flujo se reemplaza
 > por la receta de Cloudflare (`cloudflared tunnel create ...`). La configuración
 > del lado de la app no cambia: lo único que importa es qué valor terminás
-> poniendo en `config.device.url`.
+> poniendo en `config.device.public_url`.
 
 ## Prerrequisitos
 
@@ -22,17 +22,17 @@ cada vez que se levanta.
   HTTPS estándar).
 - La aplicación (`python run.py`) debe estar levantada antes de iniciar el
   túnel: cloudflared proxyfifica un servidor que ya tiene que estar escuchando.
-- `config.device.url` no puede estar vacío al momento de registrar el
+- `config.device.public_url` no puede estar vacío al momento de registrar el
   dispositivo. La app igual arranca sin él y permite navegar las secciones,
   sólo bloquea el alta: si el operador aprieta "Registrar dispositivo" con
-  `device.url` vacío, el `DeviceService` rechaza el comando con un mensaje
+  `device.public_url` vacío, el `DeviceService` rechaza el comando con un mensaje
   claro en la tarjeta de Inicio y no despierta el hilo de registro. Hay que
-  levantar el túnel, pegar la URL pública en `config.device.url` y reiniciar
+  levantar el túnel, pegar la URL pública en `config.device.public_url` y reiniciar
   la app antes de reintentar.
 
 ## Configuración del lado de la app
 
-El servidor HTTP local vive en `backend/device/servidor.py`. Se levanta solo
+El servidor HTTP local vive en `backend/http/servidor.py`. Se levanta solo
 cuando se inicia la app, dentro del `DeviceService`, en el puerto y dirección
 que resuelve a partir de `config.device`:
 
@@ -41,25 +41,25 @@ que resuelve a partir de `config.device`:
     "hostname": "smartcheck-rbpi-03",
     "ping_interval_seconds": 60.0,
     "registration_poll_interval_seconds": 5.0,
-    "url": "",
+    "public_url": "",
     "listen_address": "127.0.0.1",
-    "listen_port": 9000
+    "local_port": 9000
 }
 ```
 
-- `url` es la URL pública (esquema + host + puerto) con la que el backend Go
+- `public_url` es la URL pública (esquema + host + puerto) con la que el backend Go
   alcanza a esta Raspberry. **Mientras esté vacío**, el operador todavía no
   definió a dónde apunta el túnel; el bind sigue siendo loopback.
-- `listen_address` = `127.0.0.1` y `listen_port` = `9000` son el **bind de
-  respaldo** que se usa cuando `url` está vacío. Por seguridad queda en
+- `listen_address` = `127.0.0.1` y `local_port` = `9000` son el **bind de
+  respaldo** que se usa cuando `public_url` está vacío. Por seguridad queda en
   loopback: cloudflared (que corre local) lo alcanza, pero el puerto no queda
   expuesto en la LAN.
 
-Si `url` no está vacío y su host es remoto (caso típico
+Si `public_url` no está vacío y su host es remoto (caso típico
 `https://xxx.trycloudflare.com`), `DeviceService.__init__` ignora
 `listen_address` y hace bind a `127.0.0.1` de todos modos; el puerto lo toma
 de la URL o, si no trae, cae al esquema (`http` → 80, `https` → 443) y, como
-último recurso, a `listen_port` (9000). El resultado siempre es: el servidor
+último recurso, a `local_port` (9000). El resultado siempre es: el servidor
 escucha local y cloudflared es el único que lo ve desde afuera.
 
 ## Levantar el túnel
@@ -83,22 +83,22 @@ Copiá esa URL completa, incluido el `https://`.
 
 ## Pegar la URL en `config.json`
 
-Editá `config.json` y reemplazá el valor vacío de `device.url`:
+Editá `config.json` y reemplazá el valor vacío de `device.public_url`:
 
 ```json
 "device": {
-    "url": "https://algo-random.trycloudflare.com",
+    "public_url": "https://algo-random.trycloudflare.com",
     ...
 }
 ```
 
-`url` se manda al backend Go como `rename_url` al hacer el alta del dispositivo
+`public_url` se manda al backend Go como `rename_url` al hacer el alta del dispositivo
 (`backend/device/cliente.py:66`), y el backend la usa para resolver a dónde
 mandar los renombres.
 
 ## Reiniciar la app
 
-`DeviceService` lee `device.url` **en el arranque**, no en caliente. Después de
+`DeviceService` lee `device.public_url` **en el arranque**, no en caliente. Después de
 editar `config.json`:
 
 1. Bajá la app (cerrá la GUI o mandá SIGTERM al `run.py`).
@@ -116,7 +116,7 @@ Un quick tunnel **no** conserva el dominio entre reinicios: si bajás y volvés
 a arrancar `cloudflared`, te asigna un subdominio nuevo. Cuando eso pase:
 
 1. Levantá el túnel y copiá la URL nueva.
-2. Actualizá `config.device.url` en `config.json`.
+2. Actualizá `config.device.public_url` en `config.json`.
 3. Reiniciá la app.
 4. Desde la UI, **olvidá el dispositivo** y volvé a registrarlo. El alta nueva
    lleva la URL actualizada al backend; el `rename_token` viejo queda
@@ -153,7 +153,7 @@ funcionando, sólo se pierde el camino inverso de renombre.
 
 - El `--url` interno siempre tiene que ser `http://127.0.0.1:9000` (loopback).
   `127.0.0.1` porque el bind de la app vive en loopback; `9000` porque es el
-  `listen_port` configurado. Si cambiás el puerto en `config.json`, cambialo
+  `local_port` configurado. Si cambiás el puerto en `config.json`, cambialo
   también acá.
 - Si querés que el túnel arranque con la Pi, la receta más simple es un
   `systemd` unit que ejecute `cloudflared tunnel --url http://127.0.0.1:9000`

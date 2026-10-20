@@ -672,12 +672,8 @@ class Metricas(SeccionBase):
                 tile.setVisible(False)
 
     def _reportar_monitor_caido(self, exc: RuntimeError) -> None:
-        """Deja el fallo a la vista y avisa por el bus; no rompe la sección."""
-        mensaje = str(exc).strip() or _MENSAJE_MONITOR_CAIDO
-        # El refresco repite el mismo fallo cada segundo: avisar una sola vez.
-        if mensaje != self._error_monitor:
-            self.ctx.bus.mensaje.emit(mensaje)
-        self._error_monitor = mensaje
+        """Deja el fallo en el banner; no rompe la sección."""
+        self._error_monitor = str(exc).strip() or _MENSAJE_MONITOR_CAIDO
         self._actualizar_banner()
 
     def _actualizar_banner(self) -> None:

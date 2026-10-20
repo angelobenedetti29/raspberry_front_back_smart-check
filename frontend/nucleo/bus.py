@@ -9,5 +9,3 @@ class BusApp(QObject):
     """Canal único de comunicación desacoplada dentro de la interfaz."""
 
     estado_actualizado = Signal(object)
-    navegacion_solicitada = Signal(str)
-    mensaje = Signal(str)

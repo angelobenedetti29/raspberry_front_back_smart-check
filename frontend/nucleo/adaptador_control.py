@@ -53,10 +53,6 @@ class AdaptadorControl:
             aplazar_siguiente=snap["aplazar_siguiente"],
             ultimo_error=snap["ultimo_error"],
             backend_ok=snap["backend_ok"],
-            publicaciones_ok=snap["publicaciones_ok"],
-            publicaciones_error=snap["publicaciones_error"],
-            aplicaciones_ok=snap["aplicaciones_ok"],
-            aplicaciones_error=snap["aplicaciones_error"],
         )
 
     # --- comandos --------------------------------------------------------

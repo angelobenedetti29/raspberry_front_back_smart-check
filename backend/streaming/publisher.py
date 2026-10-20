@@ -122,7 +122,6 @@ class PublicadorFFmpeg:
         self._arrancado_en = 0.0
         self._espera = float(reconexion.initial_seconds)
         self._reintentar_en = 0.0
-        self._reconexiones = 0
         self._error = ""
         self._activo = False
         # Identifica al escritor vigente. Al retirar un proceso se incrementa, y
@@ -138,12 +137,6 @@ class PublicadorFFmpeg:
         """True si hay un ffmpeg vivo escribiendo."""
         with self._lock:
             return self._proceso is not None and self._proceso.poll() is None
-
-    @property
-    def reconexiones(self) -> int:
-        """Cantidad de reinicios de ffmpeg (no cuenta el arranque inicial)."""
-        with self._lock:
-            return self._reconexiones
 
     def espera_restante(self) -> float:
         """Segundos hasta el próximo intento (0.0 = ya toca)."""
@@ -333,7 +326,6 @@ class PublicadorFFmpeg:
     def _reiniciar(self, motivo: str) -> None:
         """Mata lo que haya, espera el backoff y relanza."""
         with self._lock:
-            self._reconexiones += 1
             self._error = motivo
             espera = self._espera
             self._reintentar_en = time.monotonic() + espera

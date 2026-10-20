@@ -105,7 +105,6 @@ class MainWindow(QMainWindow):
 
         self._construir_ui()
 
-        self._bus.navegacion_solicitada.connect(self._navegar)
         self._bus.estado_actualizado.connect(self._al_actualizar_estado)
 
         # El rail arranca mostrando lo que corresponda al tipo ya registrado.

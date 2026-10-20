@@ -34,7 +34,6 @@ from frontend.nucleo.iconos import icono
 from frontend.nucleo.tema import color
 
 _VALOR_SIN_DATO = "—"
-_MENSAJE_SERVICIO_CAIDO = "El servicio de lotes no está disponible."
 
 # El texto del vacío va sin wrap y con ancho fijo: así el alto no depende del
 # ancho de la ventana (mismo criterio que Métricas).
@@ -574,10 +573,9 @@ class Lotes(SeccionBase):
         """Relee el servicio de lotes y vuelca la instantánea."""
         try:
             estado = self.ctx.controlador_lotes.estado()
-        except RuntimeError as exc:
+        except RuntimeError:
             # `estado()` no debería fallar, pero si el servicio no arrancó no se
-            # deja que rompa la sección: se avisa y se conserva lo último pintado.
-            self.ctx.bus.mensaje.emit(str(exc).strip() or _MENSAJE_SERVICIO_CAIDO)
+            # deja que rompa la sección: se conserva lo último pintado.
             return
 
         self._aplicar(estado)
@@ -817,8 +815,7 @@ class Lotes(SeccionBase):
             return
         try:
             self.ctx.controlador_lotes.finalizar_lote()
-        except RuntimeError as exc:
-            self.ctx.bus.mensaje.emit(str(exc).strip() or _MENSAJE_SERVICIO_CAIDO)
+        except RuntimeError:
             return
         # El comando no bloquea: releer da feedback inmediato y el bus corrige
         # después si el backend tarda en reflejarlo.

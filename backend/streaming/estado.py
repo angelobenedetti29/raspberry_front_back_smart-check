@@ -57,7 +57,6 @@ class EstadoStreaming:
     motor: MotorInferencia | None
     modelo_path: Path | None
     modelo_estado: EstadoModelo
-    reconexiones: int
     # Segundos que faltan para el próximo intento de publicación (0.0 = ahora).
     reintento_en: float
     # Vacío cuando no hay error. Es el único lugar donde se ve una falla de
@@ -66,7 +65,7 @@ class EstadoStreaming:
 
 
 _CAMPOS = frozenset(campo.name for campo in fields(EstadoStreaming))
-_CONTADORES = frozenset({"frames_publicados", "detecciones", "reconexiones"})
+_CONTADORES = frozenset({"frames_publicados", "detecciones"})
 
 
 class RegistroEstado:
@@ -101,7 +100,6 @@ class RegistroEstado:
             motor=None,
             modelo_path=None,
             modelo_estado=EstadoModelo.CARGANDO,
-            reconexiones=0,
             reintento_en=0.0,
             error="",
         )
@@ -121,7 +119,7 @@ class RegistroEstado:
             self._estado = replace(self._estado, **campos)
 
     def sumar(self, campo: str, delta: int = 1) -> None:
-        """Incrementa un contador (`frames_publicados`, `detecciones`, `reconexiones`)."""
+        """Incrementa un contador (`frames_publicados`, `detecciones`)."""
         if campo not in _CONTADORES:
             raise ValueError(f"'{campo}' no es un contador de estado")
         with self._lock:

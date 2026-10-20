@@ -706,13 +706,8 @@ class EnVivo(SeccionBase):
         return "—", NivelEstado.SIN_DATO
 
     def _reportar_error(self, exc: RuntimeError) -> None:
-        """Deja el error a la vista y avisa por el bus; no rompe la sección."""
-        mensaje = str(exc).strip() or _MENSAJE_SERVICIO_CAIDO
-        # El refresco periódico repite el mismo fallo: avisar una sola vez por bus
-        # evita llenar de mensajes a quien escuche.
-        if mensaje != self._error_control:
-            self.ctx.bus.mensaje.emit(mensaje)
-        self._error_control = mensaje
+        """Deja el error en el banner; no rompe la sección."""
+        self._error_control = str(exc).strip() or _MENSAJE_SERVICIO_CAIDO
         self._actualizar_banner()
 
     def _actualizar_banner(self) -> None:

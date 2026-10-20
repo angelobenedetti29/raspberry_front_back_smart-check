@@ -343,8 +343,6 @@ class Pipeline:
             fps=fps,
             capturando=capturando,
             publicando=publicador is not None and publicador.publicando,
-            reconexiones=(captura.reconexiones if captura else 0)
-            + (publicador.reconexiones if publicador else 0),
             reintento_en=espera,
         )
 
