@@ -6,8 +6,11 @@ ControlService depende sólo de estas interfaces; los detalles del hardware
 se inyectan desde la composición (run.py o un factory).
 
 Para no acoplar el control al resto de la app, los stubs viven acá mismo.
-Cuando exista el driver real (Modbus, RS-485, etc.), se reemplaza el stub
-sin tocar el ControlService.
+Para probar sin hardware hay dos caminos: el driver `simulado`
+(`simulado.py`, planta en memoria dentro del proceso) y el simulador
+Modbus externo (`tools/simulador_modbus.py`, con `driver = "modbus_tcp"`).
+El driver real (Modbus RTU/TCP) vive en `modbus.py`; la factory de abajo
+elige por config, sin que el ControlService se entere.
 """
 
 from __future__ import annotations
@@ -24,6 +27,10 @@ from backend.control.modbus import (
     DIRECCION_TEMP2_OBJETIVO,
     DIRECCION_VEL_OBJETIVO,
     _OFFSET_SENSORES,
+)
+from backend.control.simulado import (
+    AplicadorConsignaSimulado,
+    LectorSensoresSimulado,
 )
 from backend.control.tipos import LecturaHorno
 
@@ -105,17 +112,27 @@ def crear_lector(cfg: ModbusDriverConfig) -> LectorSensores:
     """Devuelve la implementación adecuada según `cfg.driver`.
 
     Con `driver == "stub"` no se instancia nada de Modbus, así que este
-    factory es seguro de llamar aunque `pymodbus` no esté instalado.
+    factory es seguro de llamar aunque `pymodbus` no esté instalado. Con
+    `"simulado"` lee la planta en memoria de `simulado.py` (sin hardware
+    ni Modbus). Con `"modbus_rtu"`/`"modbus_tcp"` usa el driver real.
     """
     if cfg.driver == "stub":
         return LectorSensoresStub()
+    if cfg.driver == "simulado":
+        return LectorSensoresSimulado()
     return LectorSensoresModbus(ClienteModbus(cfg))
 
 
 def crear_aplicador(cfg: ModbusDriverConfig) -> AplicadorConsigna:
-    """Devuelve la implementación adecuada según `cfg.driver`."""
+    """Devuelve la implementación adecuada según `cfg.driver`.
+
+    Igual que `crear_lector`: stub no hace nada, `simulado` fija los
+    objetivos de la planta en memoria, Modbus escribe en el PLC/variador.
+    """
     if cfg.driver == "stub":
         return AplicadorConsignaStub()
+    if cfg.driver == "simulado":
+        return AplicadorConsignaSimulado()
     return AplicadorConsignaModbus(ClienteModbus(cfg))
 
 

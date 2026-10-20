@@ -73,12 +73,6 @@ class DetectorYoloBase:
             return self.nombres[clase_id]
         return f"class_{clase_id}"
 
-    def _umbral_de_indice(self, clase_id: int) -> float:
-        """Umbral efectivo por índice; fuera del `.names`, cae al global."""
-        if 0 <= clase_id < len(self._umbrales_por_clase):
-            return self._umbrales_por_clase[clase_id]
-        return self.confidence_threshold
-
     def _umbral_minimo(self) -> float:
         """Menor umbral efectivo del modelo.
 

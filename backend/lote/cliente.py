@@ -31,6 +31,7 @@ from backend.lote.tipos import (
     MotivoCierre,
     Producto,
     Sector,
+    evento_a_dict,
 )
 
 
@@ -98,7 +99,7 @@ class ClienteLotes:
         self, secret: str, lote_id: str, eventos: list[EventoDeteccion]
     ) -> None:
         """Reporta un batch de eventos en vivo al lote."""
-        payload = {"eventos": [_evento_payload(evento) for evento in eventos]}
+        payload = {"eventos": [evento_a_dict(evento) for evento in eventos]}
         self._peticion(
             "POST", f"{self._api.lotes_endpoint}/{lote_id}/eventos", secret, payload
         )
@@ -250,19 +251,6 @@ def _sector(raw: dict) -> Sector:
 
 
 # --- armado de payloads ---
-
-
-def _evento_payload(evento: EventoDeteccion) -> dict:
-    return {
-        "evento_id": evento.evento_id,
-        "producto_id": evento.producto_id,
-        "estado": evento.estado.value,
-        "confianza": round(evento.confianza, 4),
-        "pista": evento.pista,
-        "frame": evento.frame,
-        "modelo_id": evento.modelo_id,
-        "momento": evento.momento,
-    }
 
 
 def _conteos_payload(conteos: Conteos) -> dict:

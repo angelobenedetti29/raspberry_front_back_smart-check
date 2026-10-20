@@ -9,6 +9,7 @@ path real del repo.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -79,7 +80,6 @@ def _config_minima() -> dict:
             },
             "preview": {"fps": 15},
             "storage": {
-                "queue_size": 64,
                 "max_bytes": 1024,
                 "max_files": 3,
                 "persist_no_detection_every": 5,
@@ -222,8 +222,8 @@ def test_guardar_config_escritura_atomica(repo_root: Path, tmp_path: Path) -> No
     cfg = guardar_config(data, ruta)
     contenido = json.loads(ruta.read_text(encoding="utf-8"))
     assert contenido["device"]["hostname"] == "pi-modificado"
-    # No quedó el temporal.
-    assert not ruta.with_name(ruta.name + ".tmp").exists()
+    # No quedó ningún temporal (el nombre es único por escritura).
+    assert not list(ruta.parent.glob("*.tmp"))
     # El AppConfig devuelto refleja el cambio.
     assert cfg.device.hostname == "pi-modificado"
 
@@ -239,7 +239,32 @@ def test_guardar_config_no_toca_disco_si_es_invalido(repo_root: Path) -> None:
     # El archivo original sigue intacto.
     contenido = json.loads(ruta.read_text(encoding="utf-8"))
     assert contenido["lote"]["max_eventos_por_envio"] == 50
-    assert not ruta.with_name(ruta.name + ".tmp").exists()
+    assert not list(ruta.parent.glob("*.tmp"))
+
+
+def test_guardar_config_concurrente_no_corrompe(repo_root: Path) -> None:
+    """Escritores concurrentes no dejan JSON a medias ni temporales sueltos."""
+    ruta = _escribir(repo_root, _config_minima(), nombre="config-concurrente.json")
+    base = json.loads(ruta.read_text(encoding="utf-8"))
+
+    def _guardar(hostname: str) -> None:
+        for _ in range(10):
+            data = json.loads(json.dumps(base))
+            data["device"]["hostname"] = hostname
+            guardar_config(data, ruta)
+
+    hilos = [
+        threading.Thread(target=_guardar, args=(f"pi-{indice}",)) for indice in range(4)
+    ]
+    for hilo in hilos:
+        hilo.start()
+    for hilo in hilos:
+        hilo.join()
+
+    # El archivo final es JSON válido y de uno de los escritores.
+    contenido = json.loads(ruta.read_text(encoding="utf-8"))
+    assert contenido["device"]["hostname"].startswith("pi-")
+    assert not list(ruta.parent.glob("*.tmp"))
 
 
 # --- paths derivados ---

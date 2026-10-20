@@ -19,7 +19,6 @@ from backend.control.tipos import (
 )
 
 from frontend.nucleo.controlador_control import (
-    ControladorControl,
     EstadoControlUI,
     LecturaHornoUI,
     ModoControlUI,

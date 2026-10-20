@@ -6,7 +6,6 @@ y levanta la interfaz gráfica en el hilo principal.
 
 import logging
 import signal
-from pathlib import Path
 
 from backend.config import AppConfig, ConfigError, load_config
 from backend.control import ControlService

@@ -18,9 +18,9 @@ import sqlite3
 import threading
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from backend.rotacion import rotar_archivo
 from backend.streaming.estabilizador import EventoPista
 
 if TYPE_CHECKING:
@@ -28,16 +28,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ENCODING = "utf-8"
-# Tope de espera al encolar: preferimos descartar antes que bloquear la inferencia.
-_ESPERA_ENCOLADO = 0.5
 _TIMEOUT_CIERRE = 3.0
 # Vocabulario de `tipo` en la DB. Coincide con el JSONL para que la misma
 # definición de tipos funcione en ambos motores.
-_TIPO_ALTA = "alta"
-_TIPO_CAMBIO = "cambio"
-_TIPO_QUEMADA = "quemada"
-_TIPO_BAJA = "baja"
 _TIPO_LATIDO = "latido"
 
 _SCHEMA_SQL = """
@@ -223,8 +216,8 @@ class AlmacenSQLite:
         return self._tamano_actual() > self._cfg.max_bytes
 
     def _rotar(self) -> None:
-        ruta = self._cfg.path
-        backups = max(0, self._cfg.max_files - 1)
+        # Todo bajo el lock: si el rename o el reopen quedaran afuera, otro
+        # hilo podría encolar contra la conexión ya cerrada y perder el evento.
         with self._lock:
             if self._conn is not None:
                 try:
@@ -232,17 +225,8 @@ class AlmacenSQLite:
                 except sqlite3.Error:
                     pass
                 self._conn = None
-        if backups == 0:
-            ruta.unlink(missing_ok=True)
-        else:
-            ruta.with_name(f"{ruta.name}.{backups}").unlink(missing_ok=True)
-            for indice in range(backups - 1, 0, -1):
-                origen = ruta.with_name(f"{ruta.name}.{indice}")
-                if origen.exists():
-                    origen.replace(ruta.with_name(f"{ruta.name}.{indice + 1}"))
-            if ruta.exists():
-                ruta.replace(ruta.with_name(f"{ruta.name}.1"))
-        self._abrir_db()
+            rotar_archivo(self._cfg.path, self._cfg.max_files)
+            self._abrir_db()
 
     # --- manejo de errores ---
 
@@ -258,10 +242,15 @@ class AlmacenSQLite:
 
     def _bucle(self) -> None:
         """Hilo dormido: la escritura es sincrónica en registrar() para
-        minimizar la pérdida de eventos ante cortes. Sólo vigila la
-        rotación por tamaño.
+        minimizar la pérdida de eventos ante cortes. Reintenta la apertura
+        y vigila la rotación por tamaño.
         """
         while not self._parar.is_set():
+            with self._lock:
+                if self._conn is None:
+                    # Un reopen fallido (p. ej. disco lleno) no debe dejar el
+                    # almacén descartando eventos para siempre.
+                    self._abrir_db()
             if self._debe_rotar():
                 logger.info("Almacén SQLite: rotando por tamaño")
                 self._rotar()

@@ -29,12 +29,9 @@ from PySide6.QtWidgets import (
 from frontend.nucleo.contrato import ContextoApp, GrupoSeccion, SeccionBase
 from frontend.nucleo.controlador_control import (
     ETIQUETAS_MODO,
-    LecturaHornoUI,
     ModoControlUI,
     SetpointUI,
 )
-from frontend.nucleo.iconos import icono
-from frontend.nucleo.tema import color
 
 # --- constantes visuales / tolerancias --------------------------------------
 
@@ -45,10 +42,8 @@ _PASO_Y_TEMP = 25.0
 _PASO_Y_VEL = 0.10
 _VENTANA_MINUTOS = 600.0  # 10 min de historial para el mini-chart
 _HISTORIAL_APLICADOS_MAX = 10
-_PASO_POLL_MS = 1000  # el bus emite cada 1s; usamos esto para el countdown
 _ALTURA_CHART = 90
 _ALTURA_BOTON_MODO = 56
-_ALTURA_BOTON_APLICAR = 48
 
 
 @dataclass
@@ -456,7 +451,6 @@ class HornoYCinta(SeccionBase):
 
     def _actualizar_banner(self, snap) -> None:
         """Stub banner sólo si el driver es stub y estamos habilitados."""
-        from backend.config import ModbusDriverConfig  # type: ignore
         driver = self.ctx.config.control.sensores.driver
         self._banner_aviso.setVisible(driver == "stub" and snap.habilitado)
 

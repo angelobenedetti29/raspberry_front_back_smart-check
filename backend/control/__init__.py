@@ -43,8 +43,6 @@ from backend.lote.tipos import ErrorLotes, Lote
 
 logger = logging.getLogger(__name__)
 
-_ESPERA_REINTENTO_INI = 1.0
-_ESPERA_REINTENTO_MAX = 30.0
 _TIMEOUT_STOP = 5.0
 
 
@@ -99,6 +97,9 @@ class ControlService:
         self._modo: ModoControl = ModoControl.MANUAL
         self._horno2_habilitado: bool = False
         self._limites: LimitesAplicacion | None = None
+        # Clave del lote/producto a la que corresponden `_limites`. Evita
+        # reconsultar el catálogo entero en cada ciclo de 3 s.
+        self._limites_clave: tuple[str, str | None] | None = None
         self._ultimo_setpoint_aplicado: SetpointPropuesto | None = None
         self._ultimo_error: str = ""
         self._backend_ok: bool = False
@@ -106,7 +107,7 @@ class ControlService:
         self._publicaciones_error: int = 0
         self._aplicaciones_ok: int = 0
         self._aplicaciones_error: int = 0
-        self._backoff: float = _ESPERA_REINTENTO_INI
+        self._ultima_telemetria: float = 0.0
         # Dedup por decision_id del backend: ttl = 3 ciclos de poll para tolerar
         # reintentos del backend sin aplicar dos veces la misma decisión.
         self._decision_vistas: dict[str, float] = {}
@@ -180,6 +181,7 @@ class ControlService:
             self._modo = modo
             self._horno2_habilitado = horno2_habilitado
             self._limites = limites
+            self._limites_clave = None
             self._decision_vistas.clear()
             self._propuesta_pendiente = None
             self._aplazar_siguiente = False
@@ -199,6 +201,7 @@ class ControlService:
             self._modo = ModoControl.MANUAL
             self._horno2_habilitado = False
             self._limites = None
+            self._limites_clave = None
             self._ultimo_setpoint_aplicado = None
             self._decision_vistas.clear()
             self._propuesta_pendiente = None
@@ -211,7 +214,10 @@ class ControlService:
         """Cambio de modo en vivo (el operador lo cambia desde el panel)."""
         with self._lock:
             self._modo = modo
-            self._limites = limites
+            # El LoteService suele mandar None: no pisar límites ya cacheados.
+            if limites is not None:
+                self._limites = limites
+                self._limites_clave = None
         logger.info("control: modo actualizado a %s", modo.value)
 
     # --- comandos del operario (SUPERVISION híbrido) ---
@@ -264,7 +270,6 @@ class ControlService:
             lote_id, propuesta, resultado="aplicada",
             detalle="aplicar_pendiente (SUPERVISION)",
         )
-        self._marcar_ok()
         return True
 
     def cambiar_modo(self, modo: ModoControl) -> None:
@@ -335,7 +340,13 @@ class ControlService:
             self._parar.wait(1.0)
             return
 
-        self._publicar_telemetria(secret, lote_id)
+        ahora = time.monotonic()
+        if (
+            ahora - self._ultima_telemetria
+            >= self._ctrl_cfg.publicar_telemetria_segundos
+        ):
+            self._ultima_telemetria = ahora
+            self._publicar_telemetria(secret, lote_id)
         self._buscar_y_aplicar_propuesta(secret, lote_id)
 
         # Espera hasta el próximo ciclo: usa el menor de los dos intervalos para
@@ -379,6 +390,7 @@ class ControlService:
                     self._modo = ModoControl.MANUAL
                     self._horno2_habilitado = False
                     self._limites = None
+                    self._limites_clave = None
                     self._ultimo_setpoint_aplicado = None
             return
 
@@ -386,7 +398,16 @@ class ControlService:
 
     def _enganchar_o_actualizar(self, lote: Lote) -> None:
         """Sincroniza el estado del control con el lote activo del backend."""
-        limites = self._limites_desde_producto(lote)
+        clave = (lote.id, lote.producto_id)
+        with self._lock:
+            # Reusar los límites si el lote/producto no cambió: el catálogo
+            # se consultaba entero cada 3 s sin necesidad.
+            if self._limites is not None and self._limites_clave == clave:
+                limites = self._limites
+            else:
+                limites = None
+        if limites is None:
+            limites = self._limites_desde_producto(lote)
         if limites is None:
             # Falló el catálogo: no aplicamos clamp con datos viejos. Reintenta
             # en el próximo ciclo.
@@ -406,6 +427,7 @@ class ControlService:
             self._modo = modo
             self._horno2_habilitado = horno2
             self._limites = limites
+            self._limites_clave = clave
             if not enganchado:
                 logger.info(
                     "control: enganchado al lote %s modo=%s horno2=%s manual=%s",
@@ -476,7 +498,6 @@ class ControlService:
             self._publicaciones_ok += 1
             self._backend_ok = True
             self._ultimo_error = ""
-        self._marcar_ok()
 
     @staticmethod
     def _lectura_tiene_datos(lectura: LecturaHorno) -> bool:
@@ -571,7 +592,6 @@ class ControlService:
         self._audit.decision_aplicada(
             lote_id, propuesta, resultado="aplicada",
         )
-        self._marcar_ok()
 
     def _limites_snapshot(self) -> LimitesAplicacion | None:
         with self._lock:
@@ -732,10 +752,6 @@ class ControlService:
         if codigo in (401, 403) and self._on_credencial_invalida is not None:
             self._on_credencial_invalida()
         logger.warning("control: %s: %s", contexto, exc)
-
-    def _marcar_ok(self) -> None:
-        with self._lock:
-            self._backoff = _ESPERA_REINTENTO_INI
 
     # --- carga de config ---
 

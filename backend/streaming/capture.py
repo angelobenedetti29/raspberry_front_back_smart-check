@@ -101,11 +101,6 @@ class CapturaOpenCV:
         """Veces que se perdió una fuente abierta y hubo que reabrirla."""
         return self._reconexiones
 
-    @property
-    def estable(self) -> bool:
-        """True cuando se acumularon `capture.stable_frames` frames válidos seguidos."""
-        return self._frames_ok >= self._captura.stable_frames
-
     def espera_restante(self) -> float:
         """Segundos hasta el próximo intento de apertura (0.0 = ya toca)."""
         return max(0.0, self._reintentar_en - time.monotonic())

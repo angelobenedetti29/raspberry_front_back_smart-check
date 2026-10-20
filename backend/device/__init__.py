@@ -342,15 +342,18 @@ class DeviceService:
         if not nombre_limpio:
             raise ValueError("El nombre del dispositivo no puede estar vacío")
         # Releer config crudo, mutar device.hostname, guardar atómicamente.
-        from backend.config import guardar_config, leer_config_cruda
+        from backend.config import LOCK_CONFIG, guardar_config, leer_config_cruda
 
-        crudo = leer_config_cruda()
-        dispositivo = crudo.get("device", {})
-        if not isinstance(dispositivo, dict):
-            raise RuntimeError("config.json: 'device' no es un objeto JSON")
-        dispositivo["hostname"] = nombre_limpio
-        crudo["device"] = dispositivo
-        guardar_config(crudo)  # valida + escribe atómico; levanta ConfigError si rompe
+        # Bajo el lock compartido: la sección Configuración escribe el mismo
+        # archivo desde el hilo de Qt; sin esto uno pisa el cambio del otro.
+        with LOCK_CONFIG:
+            crudo = leer_config_cruda()
+            dispositivo = crudo.get("device", {})
+            if not isinstance(dispositivo, dict):
+                raise RuntimeError("config.json: 'device' no es un objeto JSON")
+            dispositivo["hostname"] = nombre_limpio
+            crudo["device"] = dispositivo
+            guardar_config(crudo)  # valida + escribe atómico; ConfigError si rompe
         with self._lock:
             self._hostname = nombre_limpio
             self._hostname_sincronizado = nombre_limpio

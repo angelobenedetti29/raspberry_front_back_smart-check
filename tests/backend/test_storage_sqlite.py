@@ -10,8 +10,6 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 from backend.config import StorageConfig
 from backend.streaming.estabilizador import EventoPista
 from backend.streaming.storage_sqlite import AlmacenSQLite
@@ -21,7 +19,6 @@ def _config(tmp_path: Path, *, max_bytes: int = 1_000_000) -> StorageConfig:
     """Arma un StorageConfig con la DB en tmp_path/eventos.db."""
     return StorageConfig(
         path=tmp_path / "eventos.db",
-        queue_size=64,
         max_bytes=max_bytes,
         max_files=3,
         persist_no_detection_every=5,
@@ -66,7 +63,7 @@ def test_registrar_inserta_una_fila_por_evento(tmp_path: Path) -> None:
 def test_registrar_sin_eventos_emite_latido_segun_cadencia(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg = StorageConfig(
-        path=cfg.path, queue_size=cfg.queue_size, max_bytes=cfg.max_bytes,
+        path=cfg.path, max_bytes=cfg.max_bytes,
         max_files=cfg.max_files, persist_no_detection_every=2,
     )
     almacen = AlmacenSQLite(cfg, fuente="cam-0", modelo="tostadas-v2")

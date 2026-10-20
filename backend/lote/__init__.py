@@ -40,6 +40,7 @@ from backend.lote.tipos import (
     MotivoCierre,
     Producto,
     Sector,
+    dict_a_evento,
 )
 from backend.streaming import StreamingService
 from backend.streaming.suscripcion import ColaEventos, EventoObservado
@@ -54,34 +55,6 @@ _HISTORIAL_MAX = 20
 def _ahora_iso() -> str:
     """Timestamp local con offset, informativo para el backend."""
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
-
-
-def _dict_a_evento(d: dict) -> EventoDeteccion | None:
-    """Re-construye un EventoDeteccion desde un dict serializado.
-
-    Usado al drenar el DLQ: los batches guardados vienen como dicts (mismo
-    shape que `ClienteLotes._evento_payload`). Si el dict no parsea,
-    devuelve None y el caller lo ignora (el batch queda parcialmente
-    incompleto, pero los demás eventos sí se reenvían).
-    """
-    try:
-        estado_str = str(d.get("estado", "ok"))
-        # `EstadoProducto` es str-Enum; valores del catálogo: ok, crudo, quemado.
-        from backend.lote.tipos import EstadoProducto as _EP
-
-        estado = _EP(estado_str)
-        return EventoDeteccion(
-            evento_id=str(d.get("evento_id", "")),
-            producto_id=d.get("producto_id"),
-            estado=estado,
-            confianza=float(d.get("confianza", 0.0)),
-            pista=int(d.get("pista", 0)),
-            frame=int(d.get("frame", 0)),
-            modelo_id=d.get("modelo_id"),
-            momento=str(d.get("momento", "")),
-        )
-    except (KeyError, ValueError, TypeError):
-        return None
 
 
 class LoteService:
@@ -676,12 +649,27 @@ class LoteService:
             self._aplicar_error(exc)
             return None
         if abierto is None:
-            with self._lock:
-                self._lote = None
+            # El lote lo cerraron desde el backend (u otra Pi): el estado
+            # local (conteos, dedupe, cierre manual) es de ese lote muerto.
+            self._limpiar_estado_lote()
             return None
         with self._lock:
             self._lote = abierto
         return abierto.inactividad_segundos
+
+    def _limpiar_estado_lote(self) -> None:
+        """Olvida el lote local: sus conteos, dedupe y cierre manual.
+
+        Se usa cuando el lote desaparece del backend (404/409 en el reporte o
+        ``lote_abierto`` nulo). Si no se limpia, el cierre del lote siguiente
+        reporta los productos del anterior y el dedupe descarta eventos nuevos.
+        """
+        with self._lock:
+            self._lote = None
+            self._reportadas.clear()
+            self._conteos_locales.clear()
+            self._ultimo_modo_emitido = None
+            self._cierre_manual = False
 
     def _cerrar_lote(self, motivo: MotivoCierre) -> None:
         secret = self._secret
@@ -808,8 +796,7 @@ class LoteService:
             self._marcar_error("Dispositivo sin autorización; re-registrar")
             return
         if exc.codigo in (404, 409):
-            with self._lock:
-                self._lote = None
+            self._limpiar_estado_lote()
             self._descartar(batch)
             self._marcar_error(str(exc))
             return
@@ -837,7 +824,7 @@ class LoteService:
         eventos_recuperados: list[EventoDeteccion] = []
         for batch in batches:
             for ev in batch:
-                evento = _dict_a_evento(ev)
+                evento = dict_a_evento(ev)
                 if evento is not None:
                     eventos_recuperados.append(evento)
         if not eventos_recuperados:
@@ -859,13 +846,18 @@ class LoteService:
         # camino feliz lo cubre el lazo normal.
 
     def _vaciar_dlq_si_ok(self) -> None:
-        """Limpia el DLQ tras un envío exitoso.
+        """Limpia el DLQ sólo cuando la outbox quedó vacía.
 
         Llamado desde `_reportar()` cuando el batch se envió al backend
-        sin error: si quedan batches viejos pendientes, ya fueron re-enviados
-        (o descartados por duplicado), y el archivo se puede borrar.
+        sin error. Si todavía quedan batches en `_pendientes`, el DLQ es
+        la única copia que sobrevive a un corte: borrarlo antes de
+        reenviarlos los perdería para siempre.
         """
-        if self._intentos_fallidos == 0 and self._dlq.path.exists():
+        if (
+            self._intentos_fallidos == 0
+            and not self._pendientes
+            and self._dlq.path.exists()
+        ):
             self._dlq.vaciar()
 
     def _descartar(self, batch: list[EventoDeteccion] | None) -> None:

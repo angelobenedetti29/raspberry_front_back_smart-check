@@ -45,10 +45,6 @@ class AlmacenDispositivo:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    @property
-    def path(self) -> Path:
-        return self._path
-
     def cargar(self) -> EstadoDispositivo | None:
         """Devuelve el estado guardado, o None si no hay archivo.
 

@@ -13,23 +13,6 @@ from typing import Protocol, runtime_checkable
 from frontend.nucleo.controlador_dispositivo import TipoDispositivoUI
 
 
-class EstadoProductoUI(str, Enum):
-    """Estado de calidad de un producto (lo define el modelo)."""
-
-    OK = "ok"
-    CRUDO = "crudo"
-    QUEMADO = "quemado"
-
-    @property
-    def etiqueta(self) -> str:
-        """Rótulo para la interfaz."""
-        return {
-            EstadoProductoUI.OK: "Ok",
-            EstadoProductoUI.CRUDO: "Crudo",
-            EstadoProductoUI.QUEMADO: "Quemado",
-        }[self]
-
-
 class EstadoLoteUI(str, Enum):
     """Estado del lote."""
 

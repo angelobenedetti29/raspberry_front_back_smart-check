@@ -23,7 +23,6 @@ TOKENS: dict[str, str] = {
     "ok": "#3FE07A",
     "alerta": "#FFB020",
     "error": "#FF5A5F",
-    "inactivo": "#66727E",
 }
 
 DIR_ASSETS = Path(__file__).resolve().parents[1] / "assets"

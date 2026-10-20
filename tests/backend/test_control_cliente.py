@@ -9,13 +9,11 @@ negocio vive en traducir la respuesta / error al dominio (`ErrorControl`,
 from __future__ import annotations
 
 import json
-from io import BytesIO
 from typing import Any
 from unittest import mock
 
 import pytest
 
-from backend.api import ErrorConexion, ErrorHttp
 from backend.control.cliente import ClienteControl
 from backend.control.tipos import ErrorControl
 from tests.backend.conftest import http_error
@@ -98,7 +96,8 @@ def test_publicar_telemetria_timeout_se_traduce_a_error_control() -> None:
 
 def test_obtener_propuesta_204_devuelve_none() -> None:
     cliente = ClienteControl("http://backend", timeout=1.0)
-    with mock.patch("urllib.request.urlopen", side_effect=http_error(204)):
+    # urllib no levanta HTTPError para 2xx: un 204 llega como respuesta vacía.
+    with _mock_urlopen(_RespuestaFalsa(b"", 204)):
         resultado = cliente.obtener_propuesta(
             "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
         )

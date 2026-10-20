@@ -37,5 +37,12 @@ backend/ai_training/*_nms.json
 streaming/data/*
 !streaming/data/.gitkeep
 
+# Base SQLite de eventos y su rotación (runtime)
+data/*.db*
+
+# Grafo local de graphify y config de OpenCode (solo local)
+graphify-out/
+.opencode/
+
 # Deepwork session state (local only)
 .slim/deepwork/

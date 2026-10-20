@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from backend.rotacion import rotar_archivo
+
 if TYPE_CHECKING:
     from backend.control.tipos import SetpointPropuesto
 
@@ -77,11 +79,6 @@ class AuditorConsignas:
         """Último fallo de apertura/escritura. Vacío si el auditor está sano."""
         with self._lock:
             return self._error
-
-    @property
-    def path(self) -> Path:
-        """Ruta del archivo principal del audit."""
-        return self._cfg.path
 
     # --- escritura ---
 
@@ -147,15 +144,4 @@ class AuditorConsignas:
 
     def _rotar(self) -> None:
         """Rota: el actual pasa a `.1`, conservando `max_files` en total."""
-        ruta = self._cfg.path
-        backups = max(0, self._cfg.max_files - 1)
-        if backups == 0:
-            ruta.unlink(missing_ok=True)
-            return
-        ruta.with_name(f"{ruta.name}.{backups}").unlink(missing_ok=True)
-        for indice in range(backups - 1, 0, -1):
-            origen = ruta.with_name(f"{ruta.name}.{indice}")
-            if origen.exists():
-                origen.replace(ruta.with_name(f"{ruta.name}.{indice + 1}"))
-        if ruta.exists():
-            ruta.replace(ruta.with_name(f"{ruta.name}.1"))
+        rotar_archivo(self._cfg.path, self._cfg.max_files)

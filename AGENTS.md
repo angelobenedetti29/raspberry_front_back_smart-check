@@ -88,6 +88,15 @@ configurados: no asumas comandos de lint/build.
   backend (`cliente.py`). `LoteService` corre en su hilo; el rol (ENTRADA abre el
   lote con el primer `alta`, SALIDA reporta y cierra por inactividad) sale de
   `TipoDispositivo`.
+- `backend/control/` — ControlService (SCA-400, sólo ENTRADA): publica telemetría
+  del horno y aplica consignas con clamp a los Δmáx del producto. Sensores y
+  actuadores se eligen por config (`control.sensores/actuadores.driver`):
+  `stub` (sin hardware), `simulado` (`simulado.py`: planta en memoria dentro del
+  proceso, para probar lógica y UI) o `modbus_rtu/tcp` (`modbus.py`, el driver
+  real). Para probar la ruta Modbus sin PLC está `tools/simulador_modbus.py`
+  (standalone, sin imports de la app; espeja el mapa de registros de `modbus.py`,
+  así que si cambiás uno cambiá el otro; con `driver: "modbus_tcp"` apuntando a
+  él).
 - `backend/ai_training/` — herramientas de entrenamiento/exportación/compilación,
   **bajo demanda**: `run.py` no lo arranca y la app no lo importa. `rutas.py`
   centraliza ROOT/config; `calibrar.py` arma `calib_dataset.npy`; `entrenar.py`

@@ -80,8 +80,6 @@ class ClienteControl:
         try:
             data = self._http.peticion("GET", path, token=secret)
         except ErrorHttp as exc:
-            if exc.codigo == 204:
-                return None
             raise ErrorControl(
                 f"El backend rechazó la consulta de propuesta ({exc.codigo}): {exc.detalle}",
                 codigo=exc.codigo,

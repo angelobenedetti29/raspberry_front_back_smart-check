@@ -2,6 +2,8 @@
 
 import json
 import os
+import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -9,6 +11,11 @@ from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config.json"
+
+# Serializa la escritura de config.json entre la UI (hilo Qt) y el push de
+# renombre (hilo de uvicorn). Los callers que hacen read-modify-write deben
+# envolver lectura y guardado con este mismo lock (es reentrante).
+LOCK_CONFIG = threading.RLock()
 
 
 class ConfigError(Exception):
@@ -59,7 +66,6 @@ class PreviewConfig:
 @dataclass(frozen=True, slots=True)
 class StorageConfig:
     path: Path
-    queue_size: int
     max_bytes: int
     max_files: int
     persist_no_detection_every: int
@@ -87,9 +93,11 @@ class ModbusDriverConfig:
     """Driver de un periférico Modbus (sensores o actuadores del horno).
 
     `driver == "stub"` ⇒ no hay comunicación real; los stubs devuelven None
-    o no hacen nada. `modbus_rtu` ⇒ RS-485 (serial_port + baudrate).
-    `modbus_tcp` ⇒ Ethernet (host + port). En ambos casos `unit_id` es la
-    dirección de esclavo Modbus (1–247, default 1).
+    o no hacen nada. `simulado` ⇒ planta en memoria dentro del proceso
+    (para probar lógica y UI sin hardware; sin campos obligatorios).
+    `modbus_rtu` ⇒ RS-485 (serial_port + baudrate). `modbus_tcp` ⇒
+    Ethernet (host + port). En los casos Modbus, `unit_id` es la dirección
+    de esclavo (1–247, default 1).
     """
 
     driver: str = "stub"
@@ -291,47 +299,27 @@ def _read_json(path: Path) -> dict:
     return data
 
 
-def _lote_str_opcional(raw: dict[str, Any], key: str, default: str) -> str:
-    """Lee un string opcional de `lote.*` con default tolerante."""
+def _str_opcional(raw: dict[str, Any], key: str, default: str, where: str) -> str:
+    """Lee un string opcional de `where.*` con default tolerante."""
     valor = raw.get(key)
     if valor is None:
         return default
     if not isinstance(valor, str) or not valor.strip():
-        raise ConfigError(f"'lote.{key}' debe ser un string no vacío")
+        raise ConfigError(f"'{where}.{key}' debe ser un string no vacío")
     return valor.strip()
 
 
-def _lote_int_opcional(raw: dict[str, Any], key: str, default: int) -> int:
-    """Lee un entero opcional de `lote.*` con default tolerante."""
+def _int_opcional(raw: dict[str, Any], key: str, default: int, where: str) -> int:
+    """Lee un entero opcional de `where.*` con default tolerante."""
     valor = raw.get(key)
     if valor is None:
         return default
     if isinstance(valor, bool) or not isinstance(valor, int):
-        raise ConfigError(f"'lote.{key}' debe ser un entero, no {type(valor).__name__}")
+        raise ConfigError(
+            f"'{where}.{key}' debe ser un entero, no {type(valor).__name__}"
+        )
     if valor <= 0:
-        raise ConfigError(f"'lote.{key}' debe ser > 0")
-    return valor
-
-
-def _ctrl_str_opcional(raw: dict[str, Any], key: str, default: str) -> str:
-    """Lee un string opcional de `control.*` con default tolerante."""
-    valor = raw.get(key)
-    if valor is None:
-        return default
-    if not isinstance(valor, str) or not valor.strip():
-        raise ConfigError(f"'control.{key}' debe ser un string no vacío")
-    return valor.strip()
-
-
-def _ctrl_int_opcional(raw: dict[str, Any], key: str, default: int) -> int:
-    """Lee un entero opcional de `control.*` con default tolerante."""
-    valor = raw.get(key)
-    if valor is None:
-        return default
-    if isinstance(valor, bool) or not isinstance(valor, int):
-        raise ConfigError(f"'control.{key}' debe ser un entero, no {type(valor).__name__}")
-    if valor <= 0:
-        raise ConfigError(f"'control.{key}' debe ser > 0")
+        raise ConfigError(f"'{where}.{key}' debe ser > 0")
     return valor
 
 
@@ -362,10 +350,15 @@ def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
 def _parse_modbus_config(raw: dict[str, Any], where: str) -> ModbusDriverConfig:
     """Parsea y valida un bloque `control.sensores` o `control.actuadores`."""
     driver = raw.get("driver", "stub")
-    if not isinstance(driver, str) or driver not in {"stub", "modbus_rtu", "modbus_tcp"}:
+    if not isinstance(driver, str) or driver not in {
+        "stub",
+        "simulado",
+        "modbus_rtu",
+        "modbus_tcp",
+    }:
         raise ConfigError(
-            f"'{where}.driver' debe ser 'stub', 'modbus_rtu' o 'modbus_tcp', "
-            f"no {driver!r}"
+            f"'{where}.driver' debe ser 'stub', 'simulado', 'modbus_rtu' o "
+            f"'modbus_tcp', no {driver!r}"
         )
     serial_port_raw = raw.get("serial_port")
     host_raw = raw.get("host")
@@ -494,7 +487,6 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     storage_raw = _get(stream_raw, "storage", dict, "stream")
     storage = StorageConfig(
         path=paths.data_dir / "eventos.db",
-        queue_size=_get(storage_raw, "queue_size", int, "stream.storage"),
         max_bytes=_get(storage_raw, "max_bytes", int, "stream.storage"),
         max_files=_get(storage_raw, "max_files", int, "stream.storage"),
         persist_no_detection_every=_get(storage_raw, "persist_no_detection_every", int, "stream.storage"),
@@ -622,51 +614,19 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         )
     if base_url.endswith("/"):
         raise ConfigError("'api.base_url' no debe terminar en '/'")
-    if not registration_requests_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.registration_requests_endpoint' debe empezar con '/', "
-            f"no {registration_requests_endpoint!r}"
-        )
-    if not dispositivos_ping_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.dispositivos_ping_endpoint' debe empezar con '/', "
-            f"no {dispositivos_ping_endpoint!r}"
-        )
-    if not dispositivos_nombre_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.dispositivos_nombre_endpoint' debe empezar con '/', "
-            f"no {dispositivos_nombre_endpoint!r}"
-        )
-    if not dispositivos_rename_url_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.dispositivos_rename_url_endpoint' debe empezar con '/', "
-            f"no {dispositivos_rename_url_endpoint!r}"
-        )
-    if not productos_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.productos_endpoint' debe empezar con '/', "
-            f"no {productos_endpoint!r}"
-        )
-    if not dispositivos_sector_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.dispositivos_sector_endpoint' debe empezar con '/', "
-            f"no {dispositivos_sector_endpoint!r}"
-        )
-    if not lotes_endpoint.startswith("/"):
-        raise ConfigError(
-            "'api.lotes_endpoint' debe empezar con '/', "
-            f"no {lotes_endpoint!r}"
-        )
-    api = ApiConfig(
-        base_url=base_url,
-        registration_requests_endpoint=registration_requests_endpoint,
-        dispositivos_ping_endpoint=dispositivos_ping_endpoint,
-        dispositivos_nombre_endpoint=dispositivos_nombre_endpoint,
-        dispositivos_rename_url_endpoint=dispositivos_rename_url_endpoint,
-        productos_endpoint=productos_endpoint,
-        dispositivos_sector_endpoint=dispositivos_sector_endpoint,
-        lotes_endpoint=lotes_endpoint,
-    )
+    endpoints = {
+        "registration_requests_endpoint": registration_requests_endpoint,
+        "dispositivos_ping_endpoint": dispositivos_ping_endpoint,
+        "dispositivos_nombre_endpoint": dispositivos_nombre_endpoint,
+        "dispositivos_rename_url_endpoint": dispositivos_rename_url_endpoint,
+        "productos_endpoint": productos_endpoint,
+        "dispositivos_sector_endpoint": dispositivos_sector_endpoint,
+        "lotes_endpoint": lotes_endpoint,
+    }
+    for nombre, valor in endpoints.items():
+        if not valor.startswith("/"):
+            raise ConfigError(f"'api.{nombre}' debe empezar con '/', no {valor!r}")
+    api = ApiConfig(base_url=base_url, **endpoints)
 
     # --- device ---
     device_raw = _get(data, "device", dict, "config")
@@ -728,9 +688,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         # F-R6: defaults tolerantes a configs viejos. Si falta el bloque,
         # el DLQ queda en `data/dlq.jsonl` con la misma rotación que el log
         # de eventos.
-        dlq_path=_lote_str_opcional(lote_raw, "dlq_path", "dlq.jsonl"),
-        dlq_max_bytes=_lote_int_opcional(lote_raw, "dlq_max_bytes", 5_242_880),
-        dlq_max_files=_lote_int_opcional(lote_raw, "dlq_max_files", 5),
+        dlq_path=_str_opcional(lote_raw, "dlq_path", "dlq.jsonl", "lote"),
+        dlq_max_bytes=_int_opcional(lote_raw, "dlq_max_bytes", 5_242_880, "lote"),
+        dlq_max_files=_int_opcional(lote_raw, "dlq_max_files", 5, "lote"),
     )
     if lote.cierre_sin_detecciones_segundos <= 0:
         raise ConfigError("'lote.cierre_sin_detecciones_segundos' debe ser > 0")
@@ -810,9 +770,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             ),
             # F-R10: defaults tolerantes a configs viejos. El audit log queda
             # en `data/control_audit.jsonl` con la misma rotación.
-            audit_path=_ctrl_str_opcional(control_raw, "audit_path", "control_audit.jsonl"),
-            audit_max_bytes=_ctrl_int_opcional(control_raw, "audit_max_bytes", 5_242_880),
-            audit_max_files=_ctrl_int_opcional(control_raw, "audit_max_files", 5),
+            audit_path=_str_opcional(control_raw, "audit_path", "control_audit.jsonl", "control"),
+            audit_max_bytes=_int_opcional(control_raw, "audit_max_bytes", 5_242_880, "control"),
+            audit_max_files=_int_opcional(control_raw, "audit_max_files", 5, "control"),
         )
         if control.publicar_telemetria_segundos <= 0:
             raise ConfigError(
@@ -874,25 +834,33 @@ def guardar_config(data: dict, path: Path | None = None) -> AppConfig:
     """Valida y guarda la configuración de la aplicación en disco.
 
     Primero valida el dict con _parse_config; si es inválido levanta
-    ConfigError y no toca el disco (ni siquiera crea el temporal). Recién
-    cuando el contenido es válido escribe de forma atómica: vuelca a un
-    archivo temporal y lo reemplaza con os.replace, de modo que el config
-    nunca queda a medias. Devuelve el AppConfig ya validado.
+    ConfigError y no toca el disco. Recién cuando el contenido es válido
+    escribe de forma atómica: vuelca a un temporal **único** y lo reemplaza
+    con os.replace, de modo que el config nunca queda a medias ni dos
+    escritores concurrentes pisan el mismo temporal. Devuelve el AppConfig
+    ya validado.
     """
     config_path = path if path is not None else CONFIG_PATH
     config = _parse_config(data, ROOT)
 
-    temporal = config_path.with_name(config_path.name + ".tmp")
-    try:
-        temporal.write_text(
-            json.dumps(data, indent=4, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporal, config_path)
-    except OSError as exc:
-        temporal.unlink(missing_ok=True)
-        raise ConfigError(
-            f"No se pudo escribir la configuración en {config_path}: {exc}"
-        ) from exc
+    contenido = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
+    with LOCK_CONFIG:
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                dir=config_path.parent,
+                prefix=config_path.name + ".",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as temporal:
+                    temporal.write(contenido)
+                os.replace(tmp_name, config_path)
+            except BaseException:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
+        except OSError as exc:
+            raise ConfigError(
+                f"No se pudo escribir la configuración en {config_path}: {exc}"
+            ) from exc
 
     return config

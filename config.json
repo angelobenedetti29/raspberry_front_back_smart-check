@@ -34,7 +34,6 @@
             "fps": 15
         },
         "storage": {
-            "queue_size": 128,
             "max_bytes": 26214400,
             "max_files": 20,
             "persist_no_detection_every": 300
@@ -88,7 +87,7 @@
                     "tcok": 0.55,
                     "chaq": 0.45,
                     "chaok": 0.55,
-                    "chacr": 0.50
+                    "chacr": 0.5
                 }
             },
             {
@@ -116,8 +115,8 @@
         "lotes_endpoint": "/api/v1/lotes"
     },
     "device": {
-        "hostname": "rb-1",
-        "ping_interval_seconds": 60.0,
+        "hostname": "rb",
+        "ping_interval_seconds": 15.0,
         "registration_poll_interval_seconds": 5.0,
         "public_url": "http://192.168.100.8:9000",
         "listen_address": "0.0.0.0",
@@ -149,10 +148,10 @@
         "audit_max_bytes": 5242880,
         "audit_max_files": 5,
         "sensores": {
-            "driver": "stub"
+            "driver": "simulado"
         },
         "actuadores": {
-            "driver": "stub"
+            "driver": "simulado"
         }
     }
 }

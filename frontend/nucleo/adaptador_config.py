@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Mapping
 
-from backend.config import ConfigError, guardar_config, leer_config_cruda
+from backend.config import LOCK_CONFIG, ConfigError, guardar_config, leer_config_cruda
 from frontend.nucleo.controlador_config import (
     CampoConfigUI,
     ResultadoGuardadoUI,
@@ -267,14 +267,6 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
     ),
     # Almacenamiento
     _CampoEsquema(
-        "stream.storage.queue_size",
-        "Almacenamiento",
-        "Tamaño de cola",
-        TipoCampo.ENTERO,
-        "Eventos en espera de escribirse a disco.",
-        minimo=1,
-    ),
-    _CampoEsquema(
         "stream.storage.max_bytes",
         "Almacenamiento",
         "Tamaño máximo (bytes)",
@@ -496,7 +488,8 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Driver de sensores",
         TipoCampo.OPCION,
         'Backend del lector de sensores. "stub" no requiere PLC real; '
-        '"modbus_rtu" y "modbus_tcp" requieren hardware Modbus cableado.',
+        '"simulado" usa una planta en memoria; "modbus_rtu" y "modbus_tcp" '
+        "requieren hardware Modbus cableado.",
     ),
     _CampoEsquema(
         _CLAVE_DRIVER_ACTUADORES,
@@ -504,8 +497,9 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Driver de actuadores",
         TipoCampo.OPCION,
         'Backend del PLC que recibe las consignas. "stub" no escribe '
-        'hardware; "modbus_rtu"/"modbus_tcp" usan el mismo PLC que sensores '
-        'o uno distinto según la sección.',
+        'hardware; "simulado" fija los objetivos en una planta en memoria; '
+        '"modbus_rtu"/"modbus_tcp" usan el mismo PLC que sensores '
+        "o uno distinto según la sección.",
     ),
     _CampoEsquema(
         _CLAVE_LOTES_MODO_ENDPOINT,
@@ -571,10 +565,13 @@ class AdaptadorConfig:
             url_pre = ""
             puerto_pre = 0
         try:
-            copia = copy.deepcopy(leer_config_cruda())
-            for clave, valor in valores.items():
-                _asignar(copia, clave, valor)
-            guardar_config(copia)
+            # Bajo el lock compartido: leer y escribir sin que el push de
+            # renombre (otro hilo) modifique el archivo en el medio.
+            with LOCK_CONFIG:
+                copia = copy.deepcopy(leer_config_cruda())
+                for clave, valor in valores.items():
+                    _asignar(copia, clave, valor)
+                guardar_config(copia)
         except ConfigError as exc:
             return ResultadoGuardadoUI(
                 ok=False,
@@ -656,6 +653,7 @@ class AdaptadorConfig:
         if clave in (_CLAVE_DRIVER_SENSORES, _CLAVE_DRIVER_ACTUADORES):
             return (
                 ("Stub (sin hardware)", "stub"),
+                ("Simulado (planta en memoria)", "simulado"),
                 ("Modbus RTU (RS-485)", "modbus_rtu"),
                 ("Modbus TCP (Ethernet)", "modbus_tcp"),
             )

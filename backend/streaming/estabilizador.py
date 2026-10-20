@@ -112,15 +112,6 @@ class EstabilizadorDetecciones:
         self._siguiente_id = 1
         self._eventos: list[EventoPista] = []
 
-    @property
-    def linea_y(self) -> int | None:
-        """Coordenada Y de la línea virtual de conteo, o None si está deshabilitada."""
-        return self._linea_y
-
-    @linea_y.setter
-    def linea_y(self, valor: int | None) -> None:
-        self._linea_y = valor
-
     def estabilizar(
         self, detecciones: Sequence[ResultadoDeteccion]
     ) -> list[ResultadoDeteccion]:

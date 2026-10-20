@@ -35,12 +35,10 @@ from backend.inference.detector import (
     MotorInferencia,
     ResultadoDeteccion,
 )
+from backend.inference.postprocesado import decodificar_salida
 from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
-
-# El modelo es una exportación de Ultralytics, con salida (1, 4 + clases, N).
-_ATRIBUTOS_BASE = 4
 
 
 class DetectorYoloOpenCV(DetectorYoloBase):
@@ -111,77 +109,18 @@ class DetectorYoloOpenCV(DetectorYoloBase):
             crop=False,
         )
         net.setInput(blob)
-        preds = net.forward()
-        # (1, 4 + clases, N) -> (N, 4 + clases)
-        preds = preds[0].transpose()
-
-        xywh = preds[:, :_ATRIBUTOS_BASE]
-        scores = preds[:, _ATRIBUTOS_BASE:]
-        # np.argmax y no cv2.minMaxLoc: en OpenCV 5 el índice del pico cambia de
-        # eje según cómo se convierta el array a Mat. El detector de referencia
-        # usaba minMaxLoc y terminaba etiquetando toda tostada como quemada.
-        clases = scores.argmax(axis=1)
-        confianzas = scores[np.arange(scores.shape[0]), clases]
-
-        seleccion = confianzas > self._umbrales(clases)
-        if not seleccion.any():
-            return []
-
-        xywh = xywh[seleccion]
-        confianzas = confianzas[seleccion]
-        clases = clases[seleccion]
-
-        # La salida trae (centro_x, centro_y, ancho, alto) en el espacio del
-        # modelo letterboxeado: se quita el relleno y se divide por la escala
-        # uniforme para volver a píxeles del frame original.
-        cajas = np.column_stack(
-            (
-                (xywh[:, 0] - 0.5 * xywh[:, 2] - pad_x) / escala,
-                (xywh[:, 1] - 0.5 * xywh[:, 3] - pad_y) / escala,
-                xywh[:, 2] / escala,
-                xywh[:, 3] / escala,
-            )
-        ).astype(int).tolist()
-
-        indices = cv2.dnn.NMSBoxes(
-            cajas, confianzas.tolist(), self._umbral_minimo(), self.nms_threshold
+        return decodificar_salida(
+            net.forward(),
+            escala=escala,
+            pad_x=pad_x,
+            pad_y=pad_y,
+            tabla_umbrales=self._tabla_umbrales,
+            umbral_global=self.confidence_threshold,
+            umbral_minimo=self._umbral_minimo(),
+            nms_threshold=self.nms_threshold,
+            etiqueta=self._etiqueta,
         )
-        return self._armar(indices, cajas, confianzas.tolist(), clases.tolist())
 
     def liberar(self) -> None:
         """Suelta la red. Idempotente; tras liberar, `detectar_frame` devuelve []."""
         self._net = None
-
-    # --- internos ---
-
-    def _umbrales(self, clases: np.ndarray) -> np.ndarray:
-        """Umbral efectivo de cada fila según su clase (vectorizado)."""
-        umbrales = np.full(clases.shape, self.confidence_threshold, dtype=np.float32)
-        tabla = self._tabla_umbrales
-        if tabla is not None:
-            dentro = clases < tabla.size
-            umbrales[dentro] = tabla[clases[dentro]]
-        return umbrales
-
-    def _armar(
-        self,
-        indices: object,
-        cajas: list[list[int]],
-        confianzas: list[float],
-        clases: list[int],
-    ) -> list[ResultadoDeteccion]:
-        """Traduce los índices que devuelve el NMS a resultados."""
-        resultados: list[ResultadoDeteccion] = []
-        for indice in indices:  # type: ignore[union-attr]
-            # OpenCV 4.x devolvía índices anidados ([[i], [j]]) y 5.x planos.
-            valor = indice[0] if isinstance(indice, (list, np.ndarray)) else indice
-            i = int(valor)
-            left, top, caja_ancho, caja_alto = cajas[i]
-            resultados.append(
-                ResultadoDeteccion(
-                    label=self._etiqueta(clases[i]),
-                    confianza=confianzas[i],
-                    bbox=(left, top, caja_ancho, caja_alto),
-                )
-            )
-        return resultados

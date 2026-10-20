@@ -13,10 +13,6 @@ from enum import Enum
 from backend.device.tipos import TipoDispositivo
 
 
-class ErrorLote(Exception):
-    """Error de dominio del lote (estado inconsistente, producto faltante)."""
-
-
 class ErrorLotes(Exception):
     """Error de red o HTTP contra el backend de lotes.
 
@@ -47,7 +43,6 @@ class MotivoCierre(str, Enum):
 
     SIN_DETECCIONES = "sin_detecciones"
     MANUAL = "manual"
-    APAGADO = "apagado"
 
 
 class EstadoProducto(str, Enum):
@@ -131,6 +126,46 @@ class EventoDeteccion:
     frame: int
     modelo_id: str | None
     momento: str
+
+
+def evento_a_dict(evento: EventoDeteccion) -> dict:
+    """Serializa un `EventoDeteccion` al formato de cable del backend.
+
+    Es el mismo shape que viaja al endpoint de eventos y el que se guarda
+    en el DLQ, así un drain + re-encolar funciona sin transformación.
+    """
+    return {
+        "evento_id": evento.evento_id,
+        "producto_id": evento.producto_id,
+        "estado": evento.estado.value,
+        "confianza": round(evento.confianza, 4),
+        "pista": evento.pista,
+        "frame": evento.frame,
+        "modelo_id": evento.modelo_id,
+        "momento": evento.momento,
+    }
+
+
+def dict_a_evento(d: dict) -> EventoDeteccion | None:
+    """Re-construye un `EventoDeteccion` desde un dict serializado.
+
+    Usado al drenar el DLQ. Si el dict no parsea devuelve None y el caller
+    lo ignora (el resto del batch sí se reenvía).
+    """
+    try:
+        estado = EstadoProducto(str(d.get("estado", "ok")))
+        return EventoDeteccion(
+            evento_id=str(d.get("evento_id", "")),
+            producto_id=d.get("producto_id"),
+            estado=estado,
+            confianza=float(d.get("confianza", 0.0)),
+            pista=int(d.get("pista", 0)),
+            frame=int(d.get("frame", 0)),
+            modelo_id=d.get("modelo_id"),
+            momento=str(d.get("momento", "")),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
 
 
 @dataclass(frozen=True, slots=True)
