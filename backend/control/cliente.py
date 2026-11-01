@@ -3,7 +3,8 @@
 Endpoints consumidos:
   - POST /api/v1/lotes/{id}/metricas-horno        (Bearer dispositivo)
   - GET  /api/v1/lotes/{id}/consigna-propuesta    (Bearer dispositivo)
-  - POST /api/v1/lotes/{id}/aplicar-consigna      (Bearer dispositivo)
+  - POST /api/v1/lotes/{id}/aprobar-consigna      (Bearer dispositivo; alias /aplicar-consigna)
+  - POST /api/v1/lotes/{id}/consigna/ack          (Bearer dispositivo)
 
 Las URLs se arman desde la plantilla del endpoint y el id del lote, igual
 que en backend.lote.cliente y backend.device.cliente. La capa HTTP
@@ -98,23 +99,39 @@ class ClienteControl:
             raise ErrorControl(str(exc)) from exc
         if not isinstance(payload, dict):
             return None
-        # El backend puede devolver {propuesta: null} cuando no hay nada.
-        propuesta = payload.get("propuesta")
-        if not isinstance(propuesta, dict):
-            return None
+        # Contrato actual: los campos vienen directo en `data`. Se mantiene
+        # el sobre legacy `{propuesta: {...}}` para backends viejos.
+        if "propuesta" in payload:
+            propuesta = payload.get("propuesta")
+            if propuesta is None:
+                return None
+            if not isinstance(propuesta, dict):
+                raise ErrorControl("Propuesta mal formada: propuesta no es objeto")
+            payload = propuesta
+        if not any(
+            clave in payload
+            for clave in ("temp1_objetivo", "temp1", "temperaturaObjetivo")
+        ):
+            raise ErrorControl("Propuesta mal formada: falta temp1_objetivo")
         try:
-            return _a_setpoint(propuesta)
+            return _a_setpoint(payload)
         except (KeyError, TypeError, ValueError) as exc:
             raise ErrorControl(f"Propuesta mal formada: {exc}") from exc
 
-    def aplicar_consigna(
+    def aprobar_consigna(
         self,
         secret: str,
         lote_id: str,
         endpoint_plantilla: str,
-        body: dict,
+        body: dict | None = None,
     ) -> None:
-        """POST /api/v1/lotes/{id}/aplicar-consigna (ack del despacho)."""
+        """POST /api/v1/lotes/{id}/aprobar-consigna (aprobación del operario).
+
+        El backend sólo registra la aprobación de una propuesta SUPERVISION;
+        no aplica el setpoint. La aplicación real la confirma la Pi con
+        `ack_consigna`. `body` puede llevar `decision_id` para que el backend
+        rechace la aprobación si la propuesta vigente cambió.
+        """
         if not secret:
             raise ErrorControl("No hay secret de dispositivo para autenticar")
         path = endpoint_plantilla.format(id=lote_id)
@@ -124,12 +141,49 @@ class ClienteControl:
             )
         except ErrorHttp as exc:
             raise ErrorControl(
-                f"El backend rechazó la aplicación de consigna ({exc.codigo}): {exc.detalle}",
+                f"El backend rechazó la aprobación de consigna ({exc.codigo}): {exc.detalle}",
                 codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
             raise ErrorControl(
-                f"No se pudo aplicar la consigna al backend: {exc.detalle}"
+                f"No se pudo aprobar la consigna en el backend: {exc.detalle}"
+            ) from exc
+        except ErrorFormato as exc:
+            raise ErrorControl(str(exc)) from exc
+
+    def aplicar_consigna(
+        self,
+        secret: str,
+        lote_id: str,
+        endpoint_plantilla: str,
+        body: dict | None = None,
+    ) -> None:
+        """Alias legacy de `aprobar_consigna`; el body se ignora."""
+        self.aprobar_consigna(secret, lote_id, endpoint_plantilla)
+
+    def ack_consigna(
+        self,
+        secret: str,
+        lote_id: str,
+        endpoint_plantilla: str,
+        body: dict,
+    ) -> None:
+        """POST /api/v1/lotes/{id}/consigna/ack (confirmación de aplicación)."""
+        if not secret:
+            raise ErrorControl("No hay secret de dispositivo para autenticar")
+        path = endpoint_plantilla.format(id=lote_id)
+        try:
+            self._http.peticion(
+                "POST", path, payload=body, token=secret, parsear=False
+            )
+        except ErrorHttp as exc:
+            raise ErrorControl(
+                f"El backend rechazó el ack de consigna ({exc.codigo}): {exc.detalle}",
+                codigo=exc.codigo,
+            ) from exc
+        except ErrorConexion as exc:
+            raise ErrorControl(
+                f"No se pudo confirmar la consigna al backend: {exc.detalle}"
             ) from exc
         except ErrorFormato as exc:
             raise ErrorControl(str(exc)) from exc
@@ -175,28 +229,40 @@ class ClienteControl:
 def _a_setpoint(payload: dict) -> SetpointPropuesto:
     """Construye un SetpointPropuesto desde el dict que devuelve el backend.
 
-    El backend expone los campos con nombres en camelCase; acá se mantienen
-    en snake_case para no contaminar el resto del código Python con camel.
+    El contrato Go usa snake_case (`temp1_objetivo`, `vel_objetivo`); se
+    aceptan también las claves camelCase viejas como fallback para no romper
+    backends previos.
     """
-    t1 = _float(payload, "temperaturaObjetivo")
-    vel = _float(payload, "velocidadCintaObjetivo")
-    t2 = payload.get("tempHorno2Objetivo")
-    aplicado_por = str(payload.get("aplicadoPor", "MPC"))
-    ventana = payload.get("ventana")
-    decision_id_raw = payload.get("decisionId")
+    t1 = _float_alguna(payload, "temp1_objetivo", "temperaturaObjetivo")
+    vel = _float_alguna(payload, "vel_objetivo", "velocidadCintaObjetivo")
+    decision_id_raw = payload.get("decision_id")
+    if decision_id_raw is None:
+        decision_id_raw = payload.get("decisionId")
     decision_id = str(decision_id_raw) if decision_id_raw is not None else None
+    aprobada_por = payload.get("aprobada_por")
+    if aprobada_por is not None:
+        aplicado_por = "OPERARIO"
+    elif payload.get("aplicadoPor") is not None:
+        aplicado_por = str(payload["aplicadoPor"])
+    else:
+        aplicado_por = "MPC"
+    ventana = payload.get("ventana_inicio")
+    if ventana is None:
+        ventana = payload.get("ventana")
+    fase_raw = payload.get("fase")
     return SetpointPropuesto(
         temp_horno_1=t1,
-        temp_horno_2=float(t2) if t2 is not None else None,
         velocidad_cinta=vel,
         aplicado_por=aplicado_por,
         ventana=str(ventana) if ventana is not None else None,
         decision_id=decision_id,
+        autorizada=bool(payload.get("autorizada", True)),
+        fase=str(fase_raw) if fase_raw is not None else None,
     )
 
 
-def _float(payload: dict, clave: str) -> float:
-    valor = payload.get(clave)
-    if valor is None:
-        raise KeyError(f"falta {clave}")
-    return float(valor)
+def _float_alguna(payload: dict, *claves: str) -> float:
+    for clave in claves:
+        if payload.get(clave) is not None:
+            return float(payload[clave])
+    raise KeyError(f"falta {claves[0]}")

@@ -1,8 +1,9 @@
 """Puerto (Protocol + dataclasses UI) del subsistema de control (SCA-400).
 
 La sección "Horno y Cinta" del frontend consume un `ControladorControl`
-para pintar temperaturas, setpoints, modo y operar (cambiar modo, aplazar
-la siguiente, aplicar pendiente). Las dataclasses son propias de la UI:
+para pintar temperaturas, setpoints, modo y operar (cambiar modo, aprobar
+la propuesta pendiente). La supervisión siempre espera la aprobación del
+operario. Las dataclasses son propias de la UI:
 no filtran tipos de `backend.control` para que la sección no importe el
 backend. El adaptador (`AdaptadorControl`) es el único módulo del frontend
 que conoce la forma del dict de `ControlService.estado()`.
@@ -46,9 +47,7 @@ class LecturaHornoUI:
     """
 
     temp_horno_1: float | None
-    temp_horno_2: float | None
     temp_comb_1: float | None
-    temp_comb_2: float | None
     humedad_horno: float | None
     temp_ambiente: float | None
     humedad_ambiente: float | None
@@ -63,7 +62,6 @@ class SetpointUI:
     """Setpoint propuesto o aplicado, espejado para la UI."""
 
     temp_horno_1: float
-    temp_horno_2: float | None
     velocidad_cinta: float
     aplicado_por: str
     ventana: str | None
@@ -77,7 +75,6 @@ class EstadoControlUI:
     habilitado: bool
     enganchado: bool
     modo: ModoControlUI
-    horno2_habilitado: bool
     ultimo_setpoint: SetpointUI | None
     ultima_lectura: LecturaHornoUI | None
     propuesta_pendiente: SetpointUI | None

@@ -1,10 +1,10 @@
 """Sección Horno y cinta (SCA-400): línea de entrada del horno.
 
-Muestra el estado actual del horno (T1, T2, velocidad de cinta), el setpoint
+Muestra el estado actual del horno (T1, velocidad de cinta), el setpoint
 objetivo con tolerancia, el modo de control seleccionado, una propuesta
-pendiente de aplicar (cuando el operario pidió aplazar) y la cola de los
-últimos setpoints aplicados. Consume `ctx.controlador_control` (Protocol +
-dataclasses UI); no importa `backend.*`.
+pendiente de aprobación del operario y la cola de los últimos setpoints
+aplicados. Consume `ctx.controlador_control` (Protocol + dataclasses UI);
+no importa `backend.*`.
 """
 
 from __future__ import annotations
@@ -330,9 +330,6 @@ class HornoYCinta(SeccionBase):
         # Mini-chart.
         self._chart_temp = _HornoMiniChart()
         layout.addWidget(self._chart_temp)
-        # Fila T2 (oculta si no hay horno 2).
-        self._fila_t2 = self._construir_fila("T2 horno", ocultar=True)
-        layout.addWidget(self._fila_t2)
         return marco
 
     def _construir_tarjeta_cinta(self) -> QFrame:
@@ -410,29 +407,6 @@ class HornoYCinta(SeccionBase):
         layout.addLayout(self._historial_contenedor)
         return marco
 
-    def _construir_fila(self, etiqueta: str, *, ocultar: bool = False) -> QFrame:
-        """Fila etiqueta + valor + semáforo, reutilizable (estilo metricas.py)."""
-        marco = QFrame()
-        marco.setObjectName("filaEstado")
-        if ocultar:
-            marco.setVisible(False)
-        layout = QHBoxLayout(marco)
-        layout.setContentsMargins(0, 4, 0, 4)
-        punto = QLabel("●")
-        punto.setObjectName("puntoEstado")
-        punto.setProperty("nivel", "sin_dato")
-        layout.addWidget(punto)
-        et = QLabel(etiqueta)
-        et.setObjectName("etiquetaEstado")
-        layout.addWidget(et, 1)
-        detalle = QLabel(_VALOR_SIN_DATO)
-        detalle.setObjectName("detalleEstado")
-        layout.addWidget(detalle, 0, Qt.AlignmentFlag.AlignRight)
-        # Guardamos referencias para refrescar.
-        marco.setProperty("_punto", punto)
-        marco.setProperty("_detalle", detalle)
-        return marco
-
     # --- refresh ---
 
     def _al_actualizar_estado(self, _snapshot: object) -> None:
@@ -499,7 +473,6 @@ class HornoYCinta(SeccionBase):
         lectura = snap.ultima_lectura
         objetivo = snap.ultimo_setpoint
         t1 = lectura.temp_horno_1 if lectura else None
-        t2 = lectura.temp_horno_2 if lectura else None
         obj_t1 = objetivo.temp_horno_1 if objetivo else None
         # Big value + unidad.
         if t1 is None:
@@ -536,22 +509,6 @@ class HornoYCinta(SeccionBase):
         self._chart_temp.asignar_cache(self._cache_temp)
         self._chart_temp.configurar(obj_t1, _TOLERANCIA_TEMP_C, _PASO_Y_TEMP,
                                     "Acumulando muestras…")
-        # Fila T2: visible si horno2_habilitado + enganchado.
-        mostrar_t2 = snap.horno2_habilitado and t2 is not None
-        self._fila_t2.setVisible(mostrar_t2)
-        if mostrar_t2:
-            punto = self._fila_t2.property("_punto")
-            detalle = self._fila_t2.property("_detalle")
-            assert punto is not None and detalle is not None
-            detalle.setText(f"{t2:.1f} °C")
-            obj_t2 = objetivo.temp_horno_2 if objetivo else None
-            if obj_t2 is None:
-                nivel_t2 = "sin_dato"
-            else:
-                d = t2 - obj_t2
-                nivel_t2 = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
-            punto.setProperty("nivel", nivel_t2)
-            self._repolish(punto)
 
     def _actualizar_cinta(self, snap, ahora: float) -> None:
         lectura = snap.ultima_lectura
@@ -592,7 +549,9 @@ class HornoYCinta(SeccionBase):
                                   "Acumulando muestras…")
 
     def _actualizar_modo(self, snap) -> None:
-        enabled = snap.habilitado and snap.enganchado
+        # Se puede preseleccionar el modo antes de que haya lote: el próximo
+        # lote que abra la Pi nace con ese modo (modo_provider en LoteService).
+        enabled = snap.habilitado
         for modo, boton in self._botones_modo.items():
             boton.setEnabled(enabled)
             boton.setProperty("modoActivo", "true" if modo == snap.modo else "false")
@@ -607,7 +566,7 @@ class HornoYCinta(SeccionBase):
         t1_txt = f"{pendiente.temp_horno_1:.0f}"
         v_txt = f"{pendiente.velocidad_cinta:.2f}"
         self._boton_aplicar.setText(
-            f"Aplicar propuesta (T={t1_txt} °C, V={v_txt} m/s)"
+            f"Aprobar propuesta (T={t1_txt} °C, V={v_txt} m/s)"
         )
         self._boton_aplicar.setEnabled(snap.habilitado and snap.enganchado)
 
@@ -656,13 +615,6 @@ class HornoYCinta(SeccionBase):
         t1.setFixedWidth(70)
         t1.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(t1)
-        t2 = QLabel(
-            f"{setpoint.temp_horno_2:.0f} °C" if setpoint.temp_horno_2 is not None else _VALOR_SIN_DATO
-        )
-        t2.setProperty("rol", "valorMetrica")
-        t2.setFixedWidth(70)
-        t2.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(t2)
         v = QLabel(f"{setpoint.velocidad_cinta:.2f} m/s")
         v.setProperty("rol", "valorMetrica")
         v.setFixedWidth(80)

@@ -14,7 +14,7 @@ from unittest import mock
 import pytest
 
 from backend.config import ApiConfig
-from backend.lote.cliente import ClienteLotes
+from backend.lote.cliente import ClienteLotes, _producto
 from backend.lote.tipos import (
     EstadoProducto,
     ErrorLotes,
@@ -84,7 +84,6 @@ def test_lote_abierto_con_lote_iniciado_manualmente_true() -> None:
         "ultimo_evento_en": None,
         "inactividad_segundos": 0.0,
         "modo": "MANUAL",
-        "horno2_habilitado": False,
         "iniciado_manualmente": True,
     }
     with _mock_urlopen(_RespuestaFalsa(_envelope({"lote": payload}))):
@@ -112,7 +111,6 @@ def test_abrir_lote_devuelve_creado_true_y_lote() -> None:
             "ultimo_evento_en": None,
             "inactividad_segundos": 0.0,
             "modo": "AUTOMATICO",
-            "horno2_habilitado": True,
             "iniciado_manualmente": False,
         },
         "creado": True,
@@ -124,7 +122,6 @@ def test_abrir_lote_devuelve_creado_true_y_lote() -> None:
         )
     assert creado is True
     assert lote.id == "lote-1"
-    assert lote.horno2_habilitado is True
 
 
 def test_abrir_lote_payload_incluye_idempotency_key() -> None:
@@ -143,6 +140,45 @@ def test_abrir_lote_payload_incluye_idempotency_key() -> None:
         )
     assert b"k-uuid" in capturado["data"]
     assert b"producto_id" in capturado["data"]
+
+
+def test_abrir_lote_payload_incluye_modo_elegido() -> None:
+    """La Pi siembra el modo de la UI para que AUTOMATICO arranque solo."""
+    cliente = ClienteLotes(_api(), timeout=1.0)
+    capturado: dict[str, Any] = {}
+
+    def _captura(req: Any, *_args: Any, **_kwargs: Any) -> _RespuestaFalsa:
+        capturado["data"] = req.data
+        return _RespuestaFalsa(_envelope({"lote": {"id": "x"}, "creado": True}))
+
+    with mock.patch("urllib.request.urlopen", side_effect=_captura):
+        cliente.abrir_lote(
+            "secret", idempotency_key="k-1", producto_id="p-1",
+            momento="2026-10-04T12:00:00Z", modo="AUTOMATICO",
+        )
+    assert b"modo" in capturado["data"]
+    assert b"AUTOMATICO" in capturado["data"]
+
+
+def test_abrir_lote_payload_incluye_estado_inicial_manual() -> None:
+    """El arranque manual del operador se propaga para saltar el precalentamiento."""
+    cliente = ClienteLotes(_api(), timeout=1.0)
+    capturado: dict[str, Any] = {}
+
+    def _captura(req: Any, *_args: Any, **_kwargs: Any) -> _RespuestaFalsa:
+        capturado["data"] = req.data
+        return _RespuestaFalsa(_envelope({"lote": {"id": "x"}, "creado": True}))
+
+    with mock.patch("urllib.request.urlopen", side_effect=_captura):
+        cliente.abrir_lote(
+            "secret", idempotency_key="k-1", producto_id="p-1",
+            momento="2026-10-04T12:00:00Z",
+            iniciado_manualmente=True,
+            estado_inicial={"temp_horno_1": 180.0, "velocidad_cinta": 1.2},
+        )
+    assert b"iniciado_manualmente" in capturado["data"]
+    assert b"estado_inicial" in capturado["data"]
+    assert b"180.0" in capturado["data"]
 
 
 # --- reportar ---
@@ -228,6 +264,49 @@ def test_cerrar_incluye_motivo_y_conteos() -> None:
     assert '"manual"' in payload_str
     assert '"total": 8' in payload_str or '"total":8' in payload_str
     assert lote.estado.value == "CERRADO"
+
+
+# --- productos ---
+
+
+def test_producto_parsea_limites_del_backend() -> None:
+    """El catálogo Go expone los límites en camelCase; se mapean a snake_case."""
+    producto = _producto(
+        {
+            "id": "p-1",
+            "nombre": "Tostadas v2",
+            "activo": True,
+            "tempMin": 120.5,
+            "tempMax": 210.0,
+            "velocidadCintaMin": 0.3,
+            "velocidadCintaMax": 2.5,
+            "deltaTemp1MaxC": 8.0,
+            "deltaVelMax": 0.04,
+            "tempSetpoint": 180.0,
+            "velocidadCintaSetpoint": 1.2,
+        }
+    )
+    assert producto.temp_min == 120.5
+    assert producto.temp_max == 210.0
+    assert producto.velocidad_cinta_min == 0.3
+    assert producto.velocidad_cinta_max == 2.5
+    assert producto.delta_temp1_max_c == 8.0
+    assert producto.delta_vel_max == 0.04
+    assert producto.temp_setpoint == 180.0
+    assert producto.velocidad_cinta_setpoint == 1.2
+
+
+def test_producto_sin_limites_los_deja_en_none() -> None:
+    """Un producto viejo no trae límites y no debe romper el parseo."""
+    producto = _producto({"id": "p-2", "nombre": "Viejo", "activo": True})
+    assert producto.temp_min is None
+    assert producto.temp_max is None
+    assert producto.velocidad_cinta_min is None
+    assert producto.velocidad_cinta_max is None
+    assert producto.delta_temp1_max_c is None
+    assert producto.delta_vel_max is None
+    assert producto.temp_setpoint is None
+    assert producto.velocidad_cinta_setpoint is None
 
 
 # --- errores ---

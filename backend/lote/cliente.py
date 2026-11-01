@@ -81,13 +81,28 @@ class ClienteLotes:
         idempotency_key: str,
         producto_id: str | None,
         momento: str,
+        modo: str | None = None,
+        iniciado_manualmente: bool = False,
+        estado_inicial: dict | None = None,
     ) -> tuple[Lote, bool]:
-        """Abre (o se attach a) el lote del sector. Devuelve (lote, creado)."""
-        payload = {
+        """Abre (o se attach a) el lote del sector. Devuelve (lote, creado).
+
+        `modo` viaja al backend para que el lote nazca en el modo elegido en
+        la UI de la Pi. Si se omite, el backend aplica MANUAL. Con
+        `iniciado_manualmente=true` y `estado_inicial` el backend siembra los
+        setpoints reales y salta el precalentamiento.
+        """
+        payload: dict = {
             "idempotency_key": idempotency_key,
             "producto_id": producto_id,
             "momento": momento,
         }
+        if modo is not None:
+            payload["modo"] = modo
+        if iniciado_manualmente:
+            payload["iniciado_manualmente"] = True
+        if estado_inicial is not None:
+            payload["estado_inicial"] = estado_inicial
         data = self._peticion(
             "POST", f"{self._api.lotes_endpoint}/inicio", secret, payload
         )
@@ -167,11 +182,28 @@ def _texto_opcional(valor: object) -> str | None:
     return texto or None
 
 
+def _numero_opcional(valor: object) -> float | None:
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
 def _producto(raw: dict) -> Producto:
     return Producto(
         id=str(raw.get("id", "")),
         nombre=str(raw.get("nombre", "")),
         activo=bool(raw.get("activo", True)),
+        temp_min=_numero_opcional(raw.get("tempMin")),
+        temp_max=_numero_opcional(raw.get("tempMax")),
+        velocidad_cinta_min=_numero_opcional(raw.get("velocidadCintaMin")),
+        velocidad_cinta_max=_numero_opcional(raw.get("velocidadCintaMax")),
+        delta_temp1_max_c=_numero_opcional(raw.get("deltaTemp1MaxC")),
+        delta_vel_max=_numero_opcional(raw.get("deltaVelMax")),
+        temp_setpoint=_numero_opcional(raw.get("tempSetpoint")),
+        velocidad_cinta_setpoint=_numero_opcional(raw.get("velocidadCintaSetpoint")),
     )
 
 
@@ -222,7 +254,6 @@ def _lote(raw: dict) -> Lote:
         cerrado_en=_texto_opcional(raw.get("cerrado_en")),
         motivo_cierre=_texto_opcional(raw.get("motivo_cierre")),
         modo=str(raw.get("modo", "MANUAL")),
-        horno2_habilitado=bool(raw.get("horno2_habilitado", False)),
         iniciado_manualmente=bool(raw.get("iniciado_manualmente", False)),
     )
 

@@ -95,10 +95,15 @@ def main() -> int:
     habilitar_monitor_hailo()
 
     # El adaptador se arma antes de arrancar y es lo único que recibe la GUI: así
-    # las secciones nunca tocan el backend.
-    streaming = StreamingService(config)
-    controlador = AdaptadorStreaming(config, streaming)
+    # las secciones nunca tocan el backend. DeviceService va primero porque el
+    # streaming deriva la URL de publicación de su nombre y tipo vivos.
     dispositivo = DeviceService(config)
+    streaming = StreamingService(
+        config,
+        nombre_provider=lambda: dispositivo.estado().hostname,
+        tipo_provider=lambda: dispositivo.estado().tipo,
+    )
+    controlador = AdaptadorStreaming(config, streaming)
     controlador_dispositivo = AdaptadorDispositivo(dispositivo)
     # Servidor HTTP general de la app (FastAPI + uvicorn embebido). El bind
     # sale de device.public_url / device.local_port con la misma regla que usaba
@@ -178,6 +183,8 @@ def main() -> int:
         on_lote_abierto=control.on_lote_abierto,
         on_lote_cerrado=control.on_lote_cerrado,
         on_modo_actualizado=control.actualizar_modo,
+        modo_provider=control.modo_actual,
+        estado_inicial_provider=control.estado_inicial_lote,
     )
     controlador_lotes = AdaptadorLotes(lotes)
 

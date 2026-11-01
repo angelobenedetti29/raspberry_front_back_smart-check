@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config.json"
@@ -36,7 +37,9 @@ class CaptureConfig:
 
 @dataclass(frozen=True, slots=True)
 class PublisherConfig:
-    output_url: str
+    # Base RTSP (esquema + host + puerto, sin `/` final). La ruta la arma
+    # `backend.streaming.url` con el nombre y el tipo del dispositivo.
+    server_url: str
     bitrate: str
     ffmpeg_executable: str
     encoder: str
@@ -233,6 +236,7 @@ class ControlConfig:
     metricas_horno_endpoint: str
     consigna_propuesta_endpoint: str
     aplicar_consigna_endpoint: str
+    consigna_ack_endpoint: str = "/api/v1/lotes/{id}/consigna/ack"
     # Drivers de periféricos. `stub` deja todo cableado a stubs; `modbus_rtu`
     # y `modbus_tcp` se materializan en Bloque B de Fase 1.
     sensores: ModbusDriverConfig = ModbusDriverConfig()
@@ -440,8 +444,28 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
 
     # --- stream.publisher ---
     publisher_raw = _get(stream_raw, "publisher", dict, "stream")
+    # Base sin `/` final: `construir_url_publicacion` le agrega el path.
+    server_url = _get(publisher_raw, "server_url", str, "stream.publisher").rstrip("/")
+    try:
+        partes_url = urlsplit(server_url)
+    except ValueError as exc:
+        raise ConfigError(
+            f"'stream.publisher.server_url' no es una URL válida: {server_url!r}"
+        ) from exc
+    if (
+        partes_url.scheme not in {"rtsp", "rtsps"}
+        or not partes_url.netloc
+        or partes_url.path
+        or partes_url.query
+        or partes_url.fragment
+    ):
+        raise ConfigError(
+            "'stream.publisher.server_url' debe ser sólo esquema, host y puerto "
+            "(ej.: 'rtsp://host:8554'); el path se deriva del nombre y el tipo. "
+            f"Valor recibido: {server_url!r}"
+        )
     publisher = PublisherConfig(
-        output_url=_get(publisher_raw, "output_url", str, "stream.publisher"),
+        server_url=server_url,
         bitrate=_get(publisher_raw, "bitrate", str, "stream.publisher"),
         ffmpeg_executable=_get(publisher_raw, "ffmpeg_executable", str, "stream.publisher"),
         encoder=_get(publisher_raw, "encoder", str, "stream.publisher"),
@@ -731,6 +755,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         metricas_horno_endpoint="/api/v1/lotes/{id}/metricas-horno",
         consigna_propuesta_endpoint="/api/v1/lotes/{id}/consigna-propuesta",
         aplicar_consigna_endpoint="/api/v1/lotes/{id}/aplicar-consigna",
+        consigna_ack_endpoint="/api/v1/lotes/{id}/consigna/ack",
     )
     control_raw = data.get("control")
     if isinstance(control_raw, dict):
@@ -763,6 +788,12 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             aplicar_consigna_endpoint=_get(
                 control_raw, "aplicar_consigna_endpoint", str, "control"
             ),
+            consigna_ack_endpoint=_str_opcional(
+                control_raw,
+                "consigna_ack_endpoint",
+                "/api/v1/lotes/{id}/consigna/ack",
+                "control",
+            ),
             sensores=sensores,
             actuadores=actuadores,
             lotes_modo_endpoint=_get(
@@ -786,6 +817,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "metricas_horno_endpoint",
             "consigna_propuesta_endpoint",
             "aplicar_consigna_endpoint",
+            "consigna_ack_endpoint",
             "lotes_modo_endpoint",
         ):
             if not getattr(control, campo).startswith("/"):

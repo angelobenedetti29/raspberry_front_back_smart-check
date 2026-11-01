@@ -76,6 +76,8 @@ class LoteService:
         ] | None = None,
         on_lote_cerrado: Callable[[], None] | None = None,
         on_modo_actualizado: Callable[[ModoControl, LimitesAplicacion | None], None] | None = None,
+        modo_provider: Callable[[], ModoControl] | None = None,
+        estado_inicial_provider: Callable[[], dict | None] | None = None,
     ) -> None:
         self._config = config
         self._streaming = streaming
@@ -83,6 +85,12 @@ class LoteService:
         self._on_lote_abierto = on_lote_abierto
         self._on_lote_cerrado = on_lote_cerrado
         self._on_modo_actualizado = on_modo_actualizado
+        # Modo elegido en la UI de la Pi. Se envía al abrir el lote para que
+        # AUTOMATICO/SUPERVISION arranquen sin un cambio de modo posterior.
+        self._modo_provider = modo_provider
+        # Foto del horno cuando el operario ya lo puso en marcha: evita que
+        # AUTOMATICO pase por el precalentamiento y frene la cinta.
+        self._estado_inicial_provider = estado_inicial_provider
         self._cliente = ClienteLotes(config.api)
         self._almacen = AlmacenDispositivo(Path(config.paths.root) / "device.json")
 
@@ -524,12 +532,16 @@ class LoteService:
         if not producto_id:
             self._marcar_error("Producto sin resolver para abrir el lote (ver log)")
             return None
+        iniciado_manualmente, estado_inicial = self._estado_inicial_para_abrir()
         try:
             lote, _ = self._cliente.abrir_lote(
                 secret,
                 idempotency_key=str(uuid.uuid4()),
                 producto_id=producto_id,
                 momento=_ahora_iso(),
+                modo=self._modo_para_abrir(),
+                iniciado_manualmente=iniciado_manualmente,
+                estado_inicial=estado_inicial,
             )
         except ErrorLotes as exc:
             self._aplicar_error(exc)
@@ -566,12 +578,16 @@ class LoteService:
             )
             self._notificar_lote_abierto(secret, abierto)
             return
+        iniciado_manualmente, estado_inicial = self._estado_inicial_para_abrir()
         try:
             lote, creado = self._cliente.abrir_lote(
                 secret,
                 idempotency_key=str(uuid.uuid4()),
                 producto_id=producto_id,
                 momento=_ahora_iso(),
+                modo=self._modo_para_abrir(),
+                iniciado_manualmente=iniciado_manualmente,
+                estado_inicial=estado_inicial,
             )
         except ErrorLotes as exc:
             self._aplicar_error(exc)
@@ -586,6 +602,27 @@ class LoteService:
         # absorbemos: el polling de control sigue como respaldo.
         self._notificar_lote_abierto(secret, lote)
 
+    def _modo_para_abrir(self) -> str | None:
+        """Modo elegido en la UI de la Pi para sembrar el lote nuevo."""
+        if self._modo_provider is None:
+            return None
+        try:
+            return self._modo_provider().value
+        except Exception:  # noqa: BLE001 - un provider roto no debe impedir abrir
+            logger.exception("lote: modo_provider falló; se usa el default del backend")
+            return None
+
+    def _estado_inicial_para_abrir(self) -> tuple[bool, dict | None]:
+        """Devuelve (iniciado_manualmente, estado_inicial) para el alta."""
+        if self._estado_inicial_provider is None:
+            return False, None
+        try:
+            estado = self._estado_inicial_provider()
+        except Exception:  # noqa: BLE001 - no bloquear el alta por un sensor
+            logger.exception("lote: estado_inicial_provider falló")
+            return False, None
+        return (estado is not None), estado
+
     def _notificar_lote_abierto(self, secret: str, lote: Lote) -> None:
         """Cable el callback `on_lote_abierto` con el flag manual propagado."""
         if self._on_lote_abierto is None:
@@ -595,7 +632,6 @@ class LoteService:
                 secret,
                 lote.id,
                 self._modo_desde_lote(lote),
-                bool(getattr(lote, "horno2_habilitado", False)),
                 None,
                 bool(getattr(lote, "iniciado_manualmente", False)),
             )

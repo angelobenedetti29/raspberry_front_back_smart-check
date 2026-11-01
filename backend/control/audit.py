@@ -1,8 +1,8 @@
 """Audit log append-only de decisiones de control (SCA-400).
 
 Persiste cada decisión aplicada por el `ControlService` (o descartada por
-dedup / buffered por SUPERVISION / con fallo de ack al backend) a un
-JSONL rotado por tamaño. El `decision_id` del backend es la llave de
+dedup / pendiente de aprobación por SUPERVISION / con fallo de ack al
+backend) a un JSONL rotado por tamaño. El `decision_id` del backend es la llave de
 reconciliación: si el log rotó, el post-mortem puede cruzar este archivo
 con el backend para reconstruir qué se aplicó al PLC.
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 ResultadoDecision = Literal[
     "aplicada",          # el setpoint se aplicó al PLC y el ack al backend fue OK
     "descartada_dup",    # mismo decision_id dentro del TTL: no se aplica
-    "buffered",          # SUPERVISION aplaza: queda pendiente de `aplicar_pendiente`
+    "pendiente_aprobacion",  # SUPERVISION: espera aprobación del operario
     "fallo_ack",         # se aplicó al PLC pero el ack al backend falló
 ]
 
@@ -93,9 +93,9 @@ class AuditorConsignas:
         """Persiste una decisión de control al audit log.
 
         `resultado` indica el camino que tomó: aplicada, descartada por
-        dedup, buffered en SUPERVISION, o aplicada al PLC con fallo de
-        ack al backend. `detalle` agrega contexto libre (ej: "ttl
-        expirado" para un descartada_dup).
+        dedup, pendiente de aprobación en SUPERVISION, o aplicada al PLC
+        con fallo de ack al backend. `detalle` agrega contexto libre (ej:
+        "ttl expirado" para un descartada_dup).
         """
         entrada = {
             "ts": _ahora_iso(),
@@ -106,11 +106,6 @@ class AuditorConsignas:
             "resultado": resultado,
             "detalle": detalle,
             "temp_horno_1": round(propuesta.temp_horno_1, 3),
-            "temp_horno_2": (
-                round(propuesta.temp_horno_2, 3)
-                if propuesta.temp_horno_2 is not None
-                else None
-            ),
             "velocidad_cinta": round(propuesta.velocidad_cinta, 4),
         }
         linea = json.dumps(entrada, ensure_ascii=False) + "\n"

@@ -2,7 +2,7 @@
 
 El **único** módulo del frontend que importa `backend.control`. Traduce el
 `dict` que devuelve `ControlService.estado()` a `EstadoControlUI` y los
-comandos de la UI (cambiar modo, aplazar, aplicar pendiente) a llamadas
+comandos de la UI (cambiar modo, aprobar la pendiente) a llamadas
 del servicio de backend. Las secciones sólo conocen el Protocol
 `ControladorControl` y los dataclasses de `controlador_control.py`.
 """
@@ -46,7 +46,6 @@ class AdaptadorControl:
             habilitado=snap["habilitado"],
             enganchado=snap["enganchado"],
             modo=_a_modo(snap["modo"]),
-            horno2_habilitado=snap["horno2_habilitado"],
             ultimo_setpoint=_a_setpoint(snap["ultimo_setpoint"]),
             ultima_lectura=_a_lectura(snap["ultima_lectura"]),
             propuesta_pendiente=_a_setpoint(snap["propuesta_pendiente"]),
@@ -62,11 +61,11 @@ class AdaptadorControl:
         self._servicio.cambiar_modo(ModoControl(modo.value))
 
     def aplazar_siguiente(self) -> None:
-        """Operario pidió revisar la próxima propuesta antes de aplicarla."""
+        """Obsoleto: SUPERVISION siempre espera la aprobación del operario."""
         self._servicio.aplazar_siguiente()
 
     def aplicar_pendiente(self) -> bool:
-        """Aplica la propuesta pendiente guardada. True si la confirmación OK."""
+        """Aprueba y aplica la propuesta pendiente. True si salió bien."""
         return self._servicio.aplicar_pendiente()
 
 
@@ -90,9 +89,7 @@ def _a_lectura(payload: LecturaHorno | None) -> LecturaHornoUI | None:
         return None
     return LecturaHornoUI(
         temp_horno_1=payload.temp_horno_1,
-        temp_horno_2=payload.temp_horno_2,
         temp_comb_1=payload.temp_comb_1,
-        temp_comb_2=payload.temp_comb_2,
         humedad_horno=payload.humedad_horno,
         temp_ambiente=payload.temp_ambiente,
         humedad_ambiente=payload.humedad_ambiente,
@@ -109,7 +106,6 @@ def _a_setpoint(payload: SetpointPropuesto | None) -> SetpointUI | None:
         return None
     return SetpointUI(
         temp_horno_1=payload.temp_horno_1,
-        temp_horno_2=payload.temp_horno_2,
         velocidad_cinta=payload.velocidad_cinta,
         aplicado_por=payload.aplicado_por,
         ventana=payload.ventana,

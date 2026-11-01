@@ -11,7 +11,7 @@
             "read_timeout_seconds": 5.0
         },
         "publisher": {
-            "output_url": "rtsp://smartcheck.duckdns.org:8554/entrada",
+            "server_url": "rtsp://smartcheck.duckdns.org:8554",
             "bitrate": "2M",
             "ffmpeg_executable": "ffmpeg",
             "encoder": "libx264",
@@ -115,7 +115,7 @@
         "lotes_endpoint": "/api/v1/lotes"
     },
     "device": {
-        "hostname": "rb",
+        "hostname": "rb-1",
         "ping_interval_seconds": 15.0,
         "registration_poll_interval_seconds": 5.0,
         "public_url": "http://192.168.100.8:9000",
@@ -143,6 +143,7 @@
         "metricas_horno_endpoint": "/api/v1/lotes/{id}/metricas-horno",
         "consigna_propuesta_endpoint": "/api/v1/lotes/{id}/consigna-propuesta",
         "aplicar_consigna_endpoint": "/api/v1/lotes/{id}/aplicar-consigna",
+        "consigna_ack_endpoint": "/api/v1/lotes/{id}/consigna/ack",
         "lotes_modo_endpoint": "/api/v1/lotes/{id}/modo",
         "audit_path": "control_audit.jsonl",
         "audit_max_bytes": 5242880,

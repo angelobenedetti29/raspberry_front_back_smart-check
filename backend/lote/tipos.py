@@ -60,6 +60,16 @@ class Producto:
     id: str
     nombre: str
     activo: bool
+    # Límites operativos del producto (SCA-400). Opcionales: un producto
+    # viejo puede no traerlos y el control cae a defaults seguros.
+    temp_min: float | None = None
+    temp_max: float | None = None
+    velocidad_cinta_min: float | None = None
+    velocidad_cinta_max: float | None = None
+    delta_temp1_max_c: float | None = None
+    delta_vel_max: float | None = None
+    temp_setpoint: float | None = None
+    velocidad_cinta_setpoint: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +119,6 @@ class Lote:
     # SCA-400: control automático/supervisión. Los defaults preservan
     # compatibilidad con lotes previos al feature.
     modo: str = "MANUAL"
-    horno2_habilitado: bool = False
     iniciado_manualmente: bool = False
 
 
@@ -137,7 +146,7 @@ def evento_a_dict(evento: EventoDeteccion) -> dict:
         "evento_id": evento.evento_id,
         "producto_id": evento.producto_id,
         "estado": evento.estado.value,
-        "confianza": round(evento.confianza, 4),
+        "confianza": float(round(evento.confianza, 4)),
         "pista": evento.pista,
         "frame": evento.frame,
         "modelo_id": evento.modelo_id,

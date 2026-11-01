@@ -114,16 +114,67 @@ def test_obtener_propuesta_envelope_con_propuesta_none_devuelve_none() -> None:
     assert resultado is None
 
 
-def test_obtener_propuesta_camel_case_se_mapea_a_snake_case() -> None:
-    """El backend devuelve camelCase; el cliente traduce a snake_case."""
+def test_obtener_propuesta_mapea_el_contrato_real() -> None:
+    """El backend devuelve snake_case con autorizada/fase del contrato Go."""
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    propuesta_backend = {
+        "decision_id": "dec-12345",
+        "temp1_objetivo": 180.0,
+        "vel_objetivo": 1.2,
+        "generated_at": "2026-10-04T11:59:00Z",
+        "ttl_segundos": 30,
+        "ventana_inicio": "2026-10-04T12:00:00Z",
+        "ventana_fin": "2026-10-04T12:05:00Z",
+        "autorizada": False,
+        "fase": "HORNEADO",
+        "aprobada_por": "op-7",
+    }
+    cuerpo = json.dumps({"success": True, "data": propuesta_backend}).encode()
+    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
+        resultado = cliente.obtener_propuesta(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
+        )
+    assert resultado is not None
+    assert resultado.temp_horno_1 == 180.0
+    assert resultado.velocidad_cinta == 1.2
+    assert resultado.decision_id == "dec-12345"
+    assert resultado.ventana == "2026-10-04T12:00:00Z"
+    assert resultado.autorizada is False
+    assert resultado.fase == "HORNEADO"
+    # aprobada_por presente ⇒ la aprobó el operario.
+    assert resultado.aplicado_por == "OPERARIO"
+
+
+def test_obtener_propuesta_autorizada_por_mpc_y_ventana_de_ventana() -> None:
+    """AUTOMATICO: autorizada=true, sin aprobada_por, ventana bajo `ventana`."""
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    propuesta_backend = {
+        "temp1_objetivo": 180.0,
+        "vel_objetivo": 1.2,
+        "autorizada": True,
+        "ventana": "2026-10-04T12:00:00Z",
+    }
+    cuerpo = json.dumps({"success": True, "data": propuesta_backend}).encode()
+    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
+        resultado = cliente.obtener_propuesta(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
+        )
+    assert resultado is not None
+    assert resultado.autorizada is True
+    assert resultado.aplicado_por == "MPC"
+    assert resultado.fase is None
+    assert resultado.ventana == "2026-10-04T12:00:00Z"
+
+
+def test_obtener_propuesta_camel_case_viejo_sigue_parseando() -> None:
+    """Compatibilidad con backends previos al contrato snake_case."""
     cliente = ClienteControl("http://backend", timeout=1.0)
     propuesta_backend = {
         "temperaturaObjetivo": 180.0,
         "velocidadCintaObjetivo": 1.2,
-        "tempHorno2Objetivo": 175.5,
-        "aplicadoPor": "MPC",
+        "aplicadoPor": "OPERARIO",
         "ventana": "2026-10-04T12:00:00Z",
-        "decisionId": "dec-12345",
+        "decisionId": "dec-viejo",
     }
     cuerpo = json.dumps({"success": True, "data": {"propuesta": propuesta_backend}}).encode()
     with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
@@ -133,18 +184,17 @@ def test_obtener_propuesta_camel_case_se_mapea_a_snake_case() -> None:
     assert resultado is not None
     assert resultado.temp_horno_1 == 180.0
     assert resultado.velocidad_cinta == 1.2
-    assert resultado.temp_horno_2 == 175.5
-    assert resultado.aplicado_por == "MPC"
-    assert resultado.ventana == "2026-10-04T12:00:00Z"
-    assert resultado.decision_id == "dec-12345"
+    assert resultado.aplicado_por == "OPERARIO"
+    assert resultado.decision_id == "dec-viejo"
+    # Un backend viejo no manda `autorizada`: se asume autorizada.
+    assert resultado.autorizada is True
 
 
 def test_obtener_propuesta_sin_decision_id_devuelve_none() -> None:
     cliente = ClienteControl("http://backend", timeout=1.0)
     propuesta_backend = {
-        "temperaturaObjetivo": 180.0,
-        "velocidadCintaObjetivo": 1.2,
-        "aplicadoPor": "MPC",
+        "temp1_objetivo": 180.0,
+        "vel_objetivo": 1.2,
     }
     cuerpo = json.dumps({"success": True, "data": {"propuesta": propuesta_backend}}).encode()
     with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
@@ -156,7 +206,7 @@ def test_obtener_propuesta_sin_decision_id_devuelve_none() -> None:
 
 
 def test_obtener_propuesta_payload_mal_formado_se_traduce_a_error() -> None:
-    """Falta `temperaturaObjetivo` (clave obligatoria): no debe romper el lazo."""
+    """Falta `temp1_objetivo` (clave obligatoria): no debe romper el lazo."""
     cliente = ClienteControl("http://backend", timeout=1.0)
     cuerpo = json.dumps({"success": True, "data": {"propuesta": {}}}).encode()
     with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
@@ -166,32 +216,76 @@ def test_obtener_propuesta_payload_mal_formado_se_traduce_a_error() -> None:
             )
 
 
-# --- aplicar_consigna ---
+# --- aprobar_consigna / ack_consigna ---
 
 
-def test_aplicar_consigna_payload_incluye_decision_id() -> None:
-    """El ack al backend debe llevar el `decision_id` para reconciliación."""
+def test_aprobar_consigna_hace_post_sin_body_al_endpoint() -> None:
+    """La aprobación avisa al backend; el body no se usa (payload None)."""
     cliente = ClienteControl("http://backend", timeout=1.0)
-    body = {
-        "temperatura_objetivo": 180.0,
-        "velocidad_cinta_objetivo": 1.2,
-        "decision_id": "dec-9999",
-    }
     capturado: dict[str, Any] = {}
 
     def _captura(req: Any, *_args: Any, **_kwargs: Any) -> _RespuestaFalsa:
         capturado["url"] = req.full_url
-        capturado["data"] = req.data  # el body vive en Request.data
+        capturado["data"] = req.data
+        capturado["metodo"] = req.get_method()
         return _RespuestaFalsa(b"", 200)
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
-        cliente.aplicar_consigna(
-            "secret-x", "lote-1", "/api/v1/lotes/{id}/aplicar-consigna", body
+        cliente.aprobar_consigna(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/aprobar-consigna"
         )
-    # La URL debe incluir el id del lote (formato {id}).
-    assert "lote-1" in capturado["url"]
-    # El body serializado debe contener el decision_id.
-    assert b"dec-9999" in capturado["data"]
+    assert capturado["metodo"] == "POST"
+    assert capturado["url"].endswith("/api/v1/lotes/lote-1/aprobar-consigna")
+    assert capturado["data"] is None
+
+
+def test_aprobar_consigna_envia_decision_id_si_se_provee() -> None:
+    """El backend rechaza la aprobación si la propuesta vigente cambió."""
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    capturado: dict[str, Any] = {}
+
+    def _captura(req: Any, *_args: Any, **_kwargs: Any) -> _RespuestaFalsa:
+        capturado["data"] = req.data
+        return _RespuestaFalsa(b"", 200)
+
+    with mock.patch("urllib.request.urlopen", side_effect=_captura):
+        cliente.aprobar_consigna(
+            "secret-x",
+            "lote-1",
+            "/api/v1/lotes/{id}/aprobar-consigna",
+            {"decision_id": "dec-1"},
+        )
+    assert b"dec-1" in capturado["data"]
+
+
+def test_ack_consigna_envia_decision_y_valores_aplicados() -> None:
+    """El ack confirma qué aplicó la Pi con el decision_id de reconciliación."""
+    from backend.control.tipos import SetpointPropuesto
+
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    body = SetpointPropuesto(
+        temp_horno_1=180.0,
+        velocidad_cinta=1.2,
+        aplicado_por="MPC",
+        ventana=None,
+        decision_id="dec-9999",
+    ).a_payload_ack()
+    capturado: dict[str, Any] = {}
+
+    def _captura(req: Any, *_args: Any, **_kwargs: Any) -> _RespuestaFalsa:
+        capturado["url"] = req.full_url
+        capturado["data"] = req.data
+        return _RespuestaFalsa(b"", 200)
+
+    with mock.patch("urllib.request.urlopen", side_effect=_captura):
+        cliente.ack_consigna(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna/ack", body
+        )
+    assert capturado["url"].endswith("/api/v1/lotes/lote-1/consigna/ack")
+    datos = capturado["data"]
+    assert b"dec-9999" in datos
+    assert b"temp_aplicado" in datos
+    assert b"vel_aplicado" in datos
 
 
 def test_cambiar_modo_500_se_traduce_a_error_control_con_codigo() -> None:

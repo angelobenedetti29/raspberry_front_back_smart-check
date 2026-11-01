@@ -3,7 +3,8 @@
 Se ejecuta sólo en Pi ENTRADA (TipoDispositivo.ENTRADA_HORNO). El LoteService
 sigue manejando la apertura del lote por el primer producto; este servicio
 publica los heartbeats de telemetría y aplica los setpoints que el backend
-propone (modo AUTOMATICO) o aprobó (modo SUPERVISION).
+marca como autorizados (modo AUTOMATICO o SUPERVISION ya aprobada por el
+operario).
 
 Sigue el Protocol `Service` (start no bloquea, stop bloquea) y arranca
 desde run.py como un quinto hilo.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -48,6 +50,42 @@ _TIMEOUT_STOP = 5.0
 
 def _ahora_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _positivo(valor: float | None, default: float) -> float:
+    return valor if valor is not None and valor > 0 else default
+
+
+def _rango(
+    minimo: float | None,
+    maximo: float | None,
+    min_default: float,
+    max_default: float,
+) -> tuple[float, float]:
+    if minimo is None or maximo is None or minimo >= maximo:
+        return min_default, max_default
+    return minimo, maximo
+
+
+def _limites_del_producto(producto) -> LimitesAplicacion:
+    """Deriva los límites de aplicación del producto, con defaults seguros."""
+    temp_min, temp_max = _rango(
+        producto.temp_min, producto.temp_max, 0.0, 500.0
+    )
+    vel_min, vel_max = _rango(
+        producto.velocidad_cinta_min,
+        producto.velocidad_cinta_max,
+        0.0,
+        5.0,
+    )
+    return LimitesAplicacion(
+        delta_temp_max_c=_positivo(producto.delta_temp1_max_c, 10.0),
+        delta_vel_max=_positivo(producto.delta_vel_max, 0.05),
+        temp_min=temp_min,
+        temp_max=temp_max,
+        vel_min=vel_min,
+        vel_max=vel_max,
+    )
 
 
 class ControlService:
@@ -92,10 +130,12 @@ class ControlService:
         self._parar = threading.Event()
         self._hilo: threading.Thread | None = None
         self._lock = threading.Lock()
+        # El cliente Modbus no es thread-safe: serializamos las lecturas del
+        # hilo de telemetría con la foto inicial que pide LoteService.
+        self._lector_lock = threading.Lock()
         self._secret: str | None = None
         self._lote_id: str | None = None
         self._modo: ModoControl = ModoControl.MANUAL
-        self._horno2_habilitado: bool = False
         self._limites: LimitesAplicacion | None = None
         # Clave del lote/producto a la que corresponden `_limites`. Evita
         # reconsultar el catálogo entero en cada ciclo de 3 s.
@@ -118,11 +158,12 @@ class ControlService:
         # cada _publicar_telemetria aunque la lectura venga sin datos, así
         # el panel refleja "stale" en vez de "sin inicializar".
         self._ultima_lectura: LecturaHorno | None = None
-        # Buffer para SUPERVISION híbrido: si el operario clickea "aplazar la
-        # siguiente", la próxima propuesta del backend se guarda acá en vez
-        # de aplicarse. La UI la muestra y la aplica con `aplicar_pendiente`.
+        # Propuesta buffered para la UI: en SUPERVISION se guarda acá hasta
+        # que el operario la aprueba con `aplicar_pendiente`.
         self._propuesta_pendiente: SetpointPropuesto | None = None
-        self._aplazar_siguiente: bool = False
+        # Acks que no llegaron al backend (decision_id -> (temp, vel)). Se
+        # reintentan en cada ciclo sin volver a escribir el PLC.
+        self._acks_pendientes: dict[str, tuple[float, float]] = {}
 
     # --- Protocolo Service ---
 
@@ -153,7 +194,6 @@ class ControlService:
         secret: str,
         lote_id: str,
         modo: ModoControl,
-        horno2_habilitado: bool,
         limites: LimitesAplicacion | None = None,
         iniciado_manualmente: bool = False,
     ) -> None:
@@ -164,32 +204,23 @@ class ControlService:
         LoteService no los calcula, y el control los resolverá de forma
         perezosa en el próximo ciclo contra el catálogo de productos.
 
-        F-R11: si `iniciado_manualmente` es True, el lote lo abrió el
-        operador (no la Pi). En ese caso default a MANUAL: la Raspberry
-        no debe arrancar el horno/cinta, sólo monitorear. El operario
-        puede cambiar a SUPERVISION/AUTOMATICO desde la UI después.
+        `iniciado_manualmente` ya no fuerza MANUAL: el backend saltea el
+        precalentamiento y adapta en el modo del lote. Se conserva el
+        parámetro para no romper callers.
         """
-        if iniciado_manualmente and modo is not ModoControl.MANUAL:
-            logger.info(
-                "control: lote %s iniciado manualmente; default a MANUAL",
-                lote_id,
-            )
-            modo = ModoControl.MANUAL
         with self._lock:
             self._secret = secret
             self._lote_id = lote_id
             self._modo = modo
-            self._horno2_habilitado = horno2_habilitado
             self._limites = limites
             self._limites_clave = None
             self._decision_vistas.clear()
             self._propuesta_pendiente = None
-            self._aplazar_siguiente = False
+            self._acks_pendientes.clear()
         logger.info(
-            "control: enganchado al lote %s modo=%s horno2=%s manual=%s",
+            "control: enganchado al lote %s modo=%s manual=%s",
             lote_id,
             modo.value,
-            horno2_habilitado,
             iniciado_manualmente,
         )
 
@@ -199,14 +230,53 @@ class ControlService:
             self._secret = None
             self._lote_id = None
             self._modo = ModoControl.MANUAL
-            self._horno2_habilitado = False
             self._limites = None
             self._limites_clave = None
             self._ultimo_setpoint_aplicado = None
             self._decision_vistas.clear()
             self._propuesta_pendiente = None
-            self._aplazar_siguiente = False
+            self._acks_pendientes.clear()
         logger.info("control: desenganchado del lote")
+
+    def modo_actual(self) -> ModoControl:
+        """Modo elegido en la UI, para sembrar el próximo lote que abra la Pi."""
+        with self._lock:
+            return self._modo
+
+    def estado_inicial_lote(self) -> dict | None:
+        """Foto del horno si el operario ya lo puso en marcha manualmente.
+
+        La usa LoteService al abrir el lote: si la cinta ya gira o el horno
+        está caliente, el lote nace `iniciado_manualmente=true` con estos
+        valores para que el backend omita el precalentamiento y adapte desde
+        el estado real.
+        """
+        try:
+            with self._lector_lock:
+                lectura = self._lector.leer()
+        except Exception:  # noqa: BLE001 - un sensor roto no debe impedir abrir
+            logger.exception("control: lectura inicial falló")
+            return None
+        if lectura.temp_horno_1 is None or lectura.velocidad_cinta is None:
+            return None
+        en_marcha = lectura.velocidad_cinta > 0.01 or lectura.temp_horno_1 > 50.0
+        if not en_marcha:
+            return None
+        return {
+            "temp_horno_1": lectura.temp_horno_1,
+            "velocidad_cinta": lectura.velocidad_cinta,
+            "temp_objetivo": (
+                lectura.temp_objetivo
+                if lectura.temp_objetivo is not None
+                else lectura.temp_horno_1
+            ),
+            "vel_objetivo": (
+                lectura.vel_objetivo
+                if lectura.vel_objetivo is not None
+                else lectura.velocidad_cinta
+            ),
+            "confianza_deteccion": lectura.confianza_deteccion,
+        }
 
     def actualizar_modo(
         self, modo: ModoControl, limites: LimitesAplicacion | None = None
@@ -220,32 +290,37 @@ class ControlService:
                 self._limites_clave = None
         logger.info("control: modo actualizado a %s", modo.value)
 
-    # --- comandos del operario (SUPERVISION híbrido) ---
+    # --- comandos del operario (SUPERVISION) ---
 
     def aplazar_siguiente(self) -> None:
-        """El operario quiere revisar la próxima propuesta antes de aplicarla.
+        """Obsoleto: la supervisión ahora siempre espera aprobación.
 
-        La siguiente propuesta que llegue en modo SUPERVISION se guardará en
-        `_propuesta_pendiente` en lugar de aplicarse. Se consume con
-        `aplicar_pendiente()`. Sólo aplica a SUPERVISION; en AUTOMATICO/MANUAL
-        el flag se ignora (manual nunca aplica; auto siempre auto).
+        Se conserva porque la UI/protocolo pueden seguir llamándolo; sólo
+        registra un aviso y no altera el flujo.
         """
-        with self._lock:
-            self._aplazar_siguiente = True
-        logger.info("control: siguiente propuesta será pendiente")
+        logger.warning(
+            "control: aplazar_siguiente está obsoleto; "
+            "SUPERVISION siempre espera aprobación"
+        )
 
     def aplicar_pendiente(self) -> bool:
-        """Aplica la propuesta pendiente guardada y limpia el flag.
+        """Aprueba y aplica la propuesta pendiente (sólo SUPERVISION).
 
-        Devuelve True si la confirmación al backend fue exitosa. False si no
-        había propuesta pendiente, si no estamos enganchados a un lote, o si
-        la confirmación falló.
+        Primero avisa al backend (`aprobar_consigna`) y recién después aplica
+        el setpoint al PLC. Devuelve True si el backend aprobó y el PLC recibió
+        el setpoint (un fallo de ack queda pendiente de reintento). False si no
+        había propuesta, no estamos enganchados, no es SUPERVISION, o falló la
+        aprobación/aplicación.
         """
         with self._lock:
             propuesta = self._propuesta_pendiente
             secret = self._secret
             lote_id = self._lote_id
             limites = self._limites
+            modo = self._modo
+        if modo is not ModoControl.SUPERVISION:
+            logger.info("control: aplicar_pendiente sólo aplica en SUPERVISION")
+            return False
         if propuesta is None:
             logger.info("control: aplicar_pendiente sin propuesta pendiente")
             return False
@@ -255,21 +330,41 @@ class ControlService:
         if limites is None:
             logger.warning("control: aplicar_pendiente sin límites cargados")
             return False
+        try:
+            body = (
+                {"decision_id": propuesta.decision_id}
+                if propuesta.decision_id is not None
+                else None
+            )
+            self._cliente.aprobar_consigna(
+                secret,
+                lote_id,
+                self._ctrl_cfg.aplicar_consigna_endpoint,
+                body,
+            )
+        except ErrorControl as exc:
+            # Sin aprobación del backend no tocamos el PLC: la propuesta
+            # sigue pendiente para reintentar.
+            self._manejar_error(exc, "aprobar consigna")
+            return False
         if not self._aplicar_y_confirmar(propuesta, limites, secret, lote_id):
             return False
         with self._lock:
-            self._propuesta_pendiente = None
-            self._aplazar_siguiente = False
+            if (
+                self._propuesta_pendiente is not None
+                and self._propuesta_pendiente.decision_id == propuesta.decision_id
+            ):
+                self._propuesta_pendiente = None
         logger.info(
             "control: propuesta pendiente aplicada decision_id=%s",
             propuesta.decision_id,
         )
-        # F-R10: la entrada "aplicada" también cubre `aplicar_pendiente`
-        # (el operario aprobó manualmente una decisión buffered).
-        self._audit.decision_aplicada(
-            lote_id, propuesta, resultado="aplicada",
-            detalle="aplicar_pendiente (SUPERVISION)",
-        )
+        # Si el ack quedó pendiente, `_aplicar_y_confirmar` ya auditó el fallo.
+        if not self._tiene_ack_pendiente(propuesta.decision_id):
+            self._audit.decision_aplicada(
+                lote_id, propuesta, resultado="aplicada",
+                detalle="aprobacion local (SUPERVISION)",
+            )
         return True
 
     def cambiar_modo(self, modo: ModoControl) -> None:
@@ -307,11 +402,11 @@ class ControlService:
                 "habilitado": self._ctrl_cfg.habilitado,
                 "enganchado": self._lote_id is not None,
                 "modo": self._modo.value,
-                "horno2_habilitado": self._horno2_habilitado,
                 "ultimo_setpoint": self._ultimo_setpoint_aplicado,
                 "ultima_lectura": self._ultima_lectura,
                 "propuesta_pendiente": self._propuesta_pendiente,
-                "aplazar_siguiente": self._aplazar_siguiente,
+                # Clave legacy para la UI: la supervisión ya no aplaza.
+                "aplazar_siguiente": False,
                 "ultimo_error": self._ultimo_error,
                 "backend_ok": self._backend_ok,
                 "publicaciones_ok": self._publicaciones_ok,
@@ -347,6 +442,7 @@ class ControlService:
         ):
             self._ultima_telemetria = ahora
             self._publicar_telemetria(secret, lote_id)
+        self._reintentar_acks(secret, lote_id)
         self._buscar_y_aplicar_propuesta(secret, lote_id)
 
         # Espera hasta el próximo ciclo: usa el menor de los dos intervalos para
@@ -388,10 +484,11 @@ class ControlService:
                 with self._lock:
                     self._lote_id = None
                     self._modo = ModoControl.MANUAL
-                    self._horno2_habilitado = False
                     self._limites = None
                     self._limites_clave = None
                     self._ultimo_setpoint_aplicado = None
+                    self._propuesta_pendiente = None
+                    self._acks_pendientes.clear()
             return
 
         self._enganchar_o_actualizar(lote)
@@ -413,25 +510,22 @@ class ControlService:
             # en el próximo ciclo.
             return
         modo = self._modo_desde_lote(lote)
-        horno2 = bool(getattr(lote, "horno2_habilitado", False))
-        # F-R11: si el lote es manual y el modo que trae el backend no es
-        # MANUAL, respetamos el flag y default a MANUAL (sólo monitorear).
         iniciado_manualmente = bool(
             getattr(lote, "iniciado_manualmente", False)
         )
-        if iniciado_manualmente and modo is not ModoControl.MANUAL:
-            modo = ModoControl.MANUAL
         with self._lock:
             enganchado = self._lote_id == lote.id
             self._lote_id = lote.id
             self._modo = modo
-            self._horno2_habilitado = horno2
             self._limites = limites
             self._limites_clave = clave
             if not enganchado:
+                # Lote nuevo: no arrastrar propuestas ni acks del anterior.
+                self._propuesta_pendiente = None
+                self._acks_pendientes.clear()
                 logger.info(
-                    "control: enganchado al lote %s modo=%s horno2=%s manual=%s",
-                    lote.id, modo.value, horno2, iniciado_manualmente,
+                    "control: enganchado al lote %s modo=%s manual=%s",
+                    lote.id, modo.value, iniciado_manualmente,
                 )
 
     @staticmethod
@@ -445,9 +539,9 @@ class ControlService:
     def _limites_desde_producto(self, lote: Lote) -> LimitesAplicacion | None:
         """Consulta el catálogo y deriva los límites del producto del lote.
 
-        El Producto expone temp_min/max, velocidad_cinta_min/max y los
-        delta_temp1/2_max_c y delta_vel_max. Para v1 usamos el delta_temp1
-        como tope de cambio de T (T2 hereda el mismo si horno2=true).
+        Usa los campos de límites del `Producto` (rango de T/velocidad y los
+        Δmáx por ciclo). Si el backend no los informa, cae a defaults seguros:
+        el clamp acá es sólo un cinturón por si el MPC propusiera algo fuera.
         """
         with self._lock:
             secret = self._secret
@@ -462,24 +556,14 @@ class ControlService:
             return None
         for p in productos:
             if p.id == producto_id:
-                # El Producto del backend expone temp_min/max pero no deltas
-                # (es el espejo del schema sin horno2). Para v1 usamos defaults
-                # seguros: el MPC ya respeta los rangos. El clamp aquí es sólo
-                # un cinturón por si el backend propusiera algo fuera.
-                return LimitesAplicacion(
-                    delta_temp_max_c=10.0,
-                    delta_vel_max=0.05,
-                    temp_min=0.0,
-                    temp_max=500.0,
-                    vel_min=0.0,
-                    vel_max=5.0,
-                )
+                return _limites_del_producto(p)
         return None
 
     # --- publicación de telemetría ---
 
     def _publicar_telemetria(self, secret: str, lote_id: str) -> None:
-        lectura = self._lector.leer()
+        with self._lector_lock:
+            lectura = self._lector.leer()
         with self._lock:
             self._ultima_lectura = lectura
         if not self._lectura_tiene_datos(lectura):
@@ -506,9 +590,7 @@ class ControlService:
             getattr(lectura, campo) is not None
             for campo in (
                 "temp_horno_1",
-                "temp_horno_2",
                 "temp_comb_1",
-                "temp_comb_2",
                 "humedad_horno",
                 "temp_ambiente",
                 "humedad_ambiente",
@@ -538,6 +620,28 @@ class ControlService:
         if propuesta is None:
             return
 
+        # SUPERVISION pendiente de aprobación: se guarda para la UI y no se
+        # aplica ni se marca como vista (el operario puede aprobarla después).
+        if not propuesta.autorizada:
+            with self._lock:
+                ya_pendiente = (
+                    self._propuesta_pendiente is not None
+                    and self._propuesta_pendiente.decision_id
+                    == propuesta.decision_id
+                )
+                self._propuesta_pendiente = propuesta
+            if not ya_pendiente:
+                # Sólo auditamos cuando la propuesta entra al buffer: el
+                # backend la repite en cada poll hasta que se apruebe.
+                logger.info(
+                    "control: propuesta pendiente de aprobación decision_id=%s",
+                    propuesta.decision_id,
+                )
+                self._audit.decision_aplicada(
+                    lote_id, propuesta, resultado="pendiente_aprobacion",
+                )
+            return
+
         # Dedup por decision_id: si el backend reintenta la misma propuesta
         # dentro del TTL, la descartamos sin volver a tocar el PLC.
         if not self._decision_fresca(propuesta.decision_id):
@@ -558,40 +662,27 @@ class ControlService:
             logger.warning("control: propuesta recibida sin límites cargados")
             return
 
-        # SUPERVISION híbrido: si el operario pidió aplazar la siguiente,
-        # guardamos la propuesta en el buffer en vez de aplicarla. La UI
-        # la muestra y se aplica con `aplicar_pendiente`.
-        if modo is ModoControl.SUPERVISION:
-            with self._lock:
-                aplazar = self._aplazar_siguiente
-            if aplazar:
-                with self._lock:
-                    self._propuesta_pendiente = propuesta
-                logger.info(
-                    "control: propuesta buffered decision_id=%s "
-                    "(operario pidió aplazar)",
-                    propuesta.decision_id,
-                )
-                # F-R10: queda pendiente de `aplicar_pendiente`.
-                self._audit.decision_aplicada(
-                    lote_id, propuesta, resultado="buffered",
-                    detalle="SUPERVISION: aplazar_siguiente",
-                )
-                return
-
         aplicada = self._aplicar_y_confirmar(propuesta, limites, secret, lote_id)
         if not aplicada:
             return
+        with self._lock:
+            if (
+                self._propuesta_pendiente is not None
+                and self._propuesta_pendiente.decision_id == propuesta.decision_id
+            ):
+                self._propuesta_pendiente = None
         logger.info(
             "control: decision_id=%s aplicada T1=%.1f V=%.2f",
             propuesta.decision_id,
             propuesta.temp_horno_1,
             propuesta.velocidad_cinta,
         )
-        # F-R10: la entrada "aplicada" cubre el lazo automático.
-        self._audit.decision_aplicada(
-            lote_id, propuesta, resultado="aplicada",
-        )
+        # F-R10: la entrada "aplicada" cubre el lazo automático. Si el ack
+        # quedó pendiente, `_aplicar_y_confirmar` ya auditó "fallo_ack".
+        if not self._tiene_ack_pendiente(propuesta.decision_id):
+            self._audit.decision_aplicada(
+                lote_id, propuesta, resultado="aplicada",
+            )
 
     def _limites_snapshot(self) -> LimitesAplicacion | None:
         with self._lock:
@@ -623,6 +714,13 @@ class ControlService:
         with self._lock:
             self._decision_vistas[decision_id] = time.monotonic()
 
+    def _tiene_ack_pendiente(self, decision_id: str | None) -> bool:
+        """True si el ack de esa decisión quedó pendiente de reintento."""
+        if decision_id is None:
+            return False
+        with self._lock:
+            return decision_id in self._acks_pendientes
+
     def _aplicar_y_confirmar(
         self,
         propuesta: SetpointPropuesto,
@@ -634,19 +732,43 @@ class ControlService:
 
         Usado por el lazo automático (`_buscar_y_aplicar_propuesta`) y por
         la aplicación manual de una propuesta pendiente (`aplicar_pendiente`).
-        Devuelve True sólo si la confirmación al backend fue exitosa.
+        Devuelve True si el PLC recibió el setpoint; un fallo del ack al
+        backend no invalida la aplicación local (queda pendiente de reintento).
         """
-        aplicada = self._clampear_y_aplicar(propuesta, limites)
-        if not aplicada:
+        aplicados = self._clampear_y_aplicar(propuesta, limites)
+        if aplicados is None:
             return False
+        t1_aplicado, v_aplicado = aplicados
+        # El backend debe auditar lo que realmente quedó en el PLC, no lo que
+        # el MPC propuso antes del clamp defensivo.
+        aplicada_prop = replace(
+            propuesta,
+            temp_horno_1=t1_aplicado,
+            velocidad_cinta=v_aplicado,
+        )
+        # Registramos la decisión apenas escribimos el PLC: si el ack falla,
+        # el reintento no debe volver a escribir el mismo setpoint.
+        self._registrar_decision_aplicada(propuesta.decision_id)
+        with self._lock:
+            self._ultimo_setpoint_aplicado = aplicada_prop
+            self._aplicaciones_ok += 1
+            self._backend_ok = True
+            self._ultimo_error = ""
+        if propuesta.decision_id is None:
+            return True
         try:
-            self._cliente.aplicar_consigna(
+            self._cliente.ack_consigna(
                 secret,
                 lote_id,
-                self._ctrl_cfg.aplicar_consigna_endpoint,
-                propuesta.a_payload_aplicacion(),
+                self._ctrl_cfg.consigna_ack_endpoint,
+                aplicada_prop.a_payload_ack(),
             )
         except ErrorControl as exc:
+            with self._lock:
+                self._acks_pendientes[propuesta.decision_id] = (
+                    t1_aplicado,
+                    v_aplicado,
+                )
             self._manejar_error(exc, "ack de aplicación")
             # F-R10: el setpoint se aplicó al PLC pero el backend no se
             # enteró. Esta es la entrada más importante del audit: sin
@@ -656,67 +778,86 @@ class ControlService:
                 lote_id, propuesta, resultado="fallo_ack",
                 detalle=str(exc),
             )
-            return False
-        # Recién ahora registramos la decisión como vista: si el ack falla,
-        # permitimos reintento en el próximo ciclo.
-        self._registrar_decision_aplicada(propuesta.decision_id)
-        with self._lock:
-            self._ultimo_setpoint_aplicado = propuesta
-            self._aplicaciones_ok += 1
-            self._backend_ok = True
-            self._ultimo_error = ""
+            return True
         return True
+
+    def _reintentar_acks(self, secret: str, lote_id: str) -> None:
+        """Reenvía los acks que no llegaron al backend en ciclos anteriores.
+
+        Un 4xx que no sea 429 indica que el backend ya no aceptará ese ack
+        (p. ej. decisión vencida): se descarta. Ante red/5xx/429 se conserva
+        para el próximo ciclo.
+        """
+        with self._lock:
+            pendientes = dict(self._acks_pendientes)
+        for decision_id, (temp, vel) in pendientes.items():
+            try:
+                self._cliente.ack_consigna(
+                    secret,
+                    lote_id,
+                    self._ctrl_cfg.consigna_ack_endpoint,
+                    {
+                        "decision_id": decision_id,
+                        "temp_aplicado": temp,
+                        "vel_aplicado": vel,
+                    },
+                )
+            except ErrorControl as exc:
+                codigo = exc.codigo
+                if codigo is not None and 400 <= codigo < 500 and codigo != 429:
+                    with self._lock:
+                        self._acks_pendientes.pop(decision_id, None)
+                    logger.warning(
+                        "control: ack de %s rechazado con %s; se descarta",
+                        decision_id,
+                        codigo,
+                    )
+                continue
+            with self._lock:
+                self._acks_pendientes.pop(decision_id, None)
 
     def _clampear_y_aplicar(
         self,
         propuesta: SetpointPropuesto,
         limites: LimitesAplicacion,
-    ) -> bool:
+    ) -> tuple[float, float] | None:
         """Aplica el setpoint respetando los Δmáx por ciclo (cinturón de seguridad).
 
-        Devuelve True si la aplicación tuvo éxito, False si falló o si el
-        setpoint fue rechazado por el aplicador.
+        Devuelve los valores efectivamente aplicados al PLC, o None si el
+        aplicador los rechazó. El ack al backend usa estos valores, no los
+        propuestos, para que el audit refleje el clamp real.
         """
         with self._lock:
-            actual_t1 = (
-                self._ultimo_setpoint_aplicado.temp_horno_1
-                if self._ultimo_setpoint_aplicado is not None
-                else propuesta.temp_horno_1
-            )
-            actual_v = (
-                self._ultimo_setpoint_aplicado.velocidad_cinta
-                if self._ultimo_setpoint_aplicado is not None
-                else propuesta.velocidad_cinta
-            )
+            lectura = self._ultima_lectura
+            ultimo = self._ultimo_setpoint_aplicado
+            # Base del clamp: el setpoint activo real del horno en la última
+            # lectura (sobrevive a reinicios), luego el último aplicado por
+            # este proceso, y por último la propia propuesta.
+            actual_t1 = lectura.temp_objetivo if lectura is not None else None
+            actual_v = lectura.vel_objetivo if lectura is not None else None
+            if actual_t1 is None and ultimo is not None:
+                actual_t1 = ultimo.temp_horno_1
+            if actual_v is None and ultimo is not None:
+                actual_v = ultimo.velocidad_cinta
+            if actual_t1 is None:
+                actual_t1 = propuesta.temp_horno_1
+            if actual_v is None:
+                actual_v = propuesta.velocidad_cinta
 
         t1 = self._clampear_temp(
             propuesta.temp_horno_1, actual_t1, limites
         )
         v = self._clampear_vel(propuesta.velocidad_cinta, actual_v, limites)
 
-        t2: float | None = None
-        if self._horno2_habilitado and propuesta.temp_horno_2 is not None:
-            actual_t2 = (
-                self._ultimo_setpoint_aplicado.temp_horno_2
-                if (
-                    self._ultimo_setpoint_aplicado is not None
-                    and self._ultimo_setpoint_aplicado.temp_horno_2 is not None
-                )
-                else propuesta.temp_horno_2
-            )
-            t2 = self._clampear_temp(
-                propuesta.temp_horno_2, actual_t2, limites
-            )
-
         try:
-            self._aplicador.aplicar(t1, t2, v)
+            self._aplicador.aplicar(t1, v)
         except Exception as exc:  # noqa: BLE001 - defendemos contra drivers
             with self._lock:
                 self._aplicaciones_error += 1
                 self._ultimo_error = f"aplicador: {exc}"
             logger.exception("control: aplicador rechazó el setpoint")
-            return False
-        return True
+            return None
+        return (t1, v)
 
     @staticmethod
     def _clampear_temp(
@@ -773,6 +914,7 @@ class ControlService:
                 metricas_horno_endpoint="/api/v1/lotes/{id}/metricas-horno",
                 consigna_propuesta_endpoint="/api/v1/lotes/{id}/consigna-propuesta",
                 aplicar_consigna_endpoint="/api/v1/lotes/{id}/aplicar-consigna",
+                consigna_ack_endpoint="/api/v1/lotes/{id}/consigna/ack",
                 # sensores/actuadores/lotes_modo_endpoint usan defaults del dataclass
             )
         return cfg
