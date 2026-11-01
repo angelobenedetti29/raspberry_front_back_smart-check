@@ -263,3 +263,22 @@ def test_estado_inicial_no_dispara_con_horno_frio(tmp_path) -> None:
     servicio._lector = _LectorConLectura(_lectura(20.0, 0.0))
 
     assert servicio.estado_inicial_lote() is None
+
+
+def test_estado_inicial_respeta_los_umbrales_configurados(tmp_path) -> None:
+    """Temp 40 °C + vel 0.005 no arrancan; 40 °C + 0.02 o 60 °C + 0 sí."""
+    servicio, _ = _servicio(tmp_path, _ClienteFalso())
+    servicio._ctrl_cfg = replace(
+        servicio._ctrl_cfg,
+        umbral_marcha_temp_c=50.0,
+        umbral_marcha_velocidad=0.01,
+    )
+
+    servicio._lector = _LectorConLectura(_lectura(40.0, 0.005))
+    assert servicio.estado_inicial_lote() is None
+
+    servicio._lector = _LectorConLectura(_lectura(40.0, 0.02))
+    assert servicio.estado_inicial_lote() is not None
+
+    servicio._lector = _LectorConLectura(_lectura(60.0, 0.0))
+    assert servicio.estado_inicial_lote() is not None

@@ -148,6 +148,10 @@
         "audit_path": "control_audit.jsonl",
         "audit_max_bytes": 5242880,
         "audit_max_files": 5,
+        "consigna_reg_temp1": 100,
+        "consigna_reg_vel": 104,
+        "umbral_marcha_temp_c": 50.0,
+        "umbral_marcha_velocidad": 0.01,
         "sensores": {
             "driver": "simulado"
         },

@@ -160,8 +160,16 @@ def main() -> int:
     # lotes por su propio polling.
     control = ControlService(
         config,
-        lector=crear_lector(config.control.sensores),
-        aplicador=crear_aplicador(config.control.actuadores),
+        lector=crear_lector(
+            config.control.sensores,
+            config.control.consigna_reg_temp1,
+            config.control.consigna_reg_vel,
+        ),
+        aplicador=crear_aplicador(
+            config.control.actuadores,
+            config.control.consigna_reg_temp1,
+            config.control.consigna_reg_vel,
+        ),
         tipo_provider=lambda: dispositivo.estado().tipo,
         secret_provider=dispositivo.secret,
         on_credencial_invalida=dispositivo.invalidar_credencial,

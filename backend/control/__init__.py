@@ -259,7 +259,10 @@ class ControlService:
             return None
         if lectura.temp_horno_1 is None or lectura.velocidad_cinta is None:
             return None
-        en_marcha = lectura.velocidad_cinta > 0.01 or lectura.temp_horno_1 > 50.0
+        en_marcha = (
+            lectura.velocidad_cinta > self._ctrl_cfg.umbral_marcha_velocidad
+            or lectura.temp_horno_1 > self._ctrl_cfg.umbral_marcha_temp_c
+        )
         if not en_marcha:
             return None
         return {
@@ -915,6 +918,10 @@ class ControlService:
                 consigna_propuesta_endpoint="/api/v1/lotes/{id}/consigna-propuesta",
                 aplicar_consigna_endpoint="/api/v1/lotes/{id}/aplicar-consigna",
                 consigna_ack_endpoint="/api/v1/lotes/{id}/consigna/ack",
+                consigna_reg_temp1=100,
+                consigna_reg_vel=104,
+                umbral_marcha_temp_c=50.0,
+                umbral_marcha_velocidad=0.01,
                 # sensores/actuadores/lotes_modo_endpoint usan defaults del dataclass
             )
         return cfg

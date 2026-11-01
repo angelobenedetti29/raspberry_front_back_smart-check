@@ -310,3 +310,76 @@ def test_storage_path_siempre_es_eventos_db(repo_root: Path) -> None:
     cfg = load_config(repo_root / "config.json")
     assert cfg.stream.storage.path.parent == (repo_root / "data").resolve()
     assert cfg.stream.storage.path.name == "eventos.db"
+
+
+# --- control: registros de consigna y umbrales de marcha ---
+
+
+def _control_valido() -> dict:
+    """Bloque `control` con los campos obligatorios (el resto usa defaults)."""
+    return {
+        "habilitado": True,
+        "publicar_telemetria_segundos": 5.0,
+        "poll_consigna_propuesta_segundos": 3.0,
+        "metricas_horno_endpoint": "/api/v1/lotes/{id}/metricas-horno",
+        "consigna_propuesta_endpoint": "/api/v1/lotes/{id}/consigna-propuesta",
+        "aplicar_consigna_endpoint": "/api/v1/lotes/{id}/aplicar-consigna",
+        "lotes_modo_endpoint": "/api/v1/lotes/{id}/modo",
+    }
+
+
+def test_control_defaults_de_config_json() -> None:
+    """El config.json versionado trae los registros y umbrales acordados."""
+    cfg = load_config()
+    assert cfg.control.consigna_reg_temp1 == 100
+    assert cfg.control.consigna_reg_vel == 104
+    assert cfg.control.umbral_marcha_temp_c == 50.0
+    assert cfg.control.umbral_marcha_velocidad == 0.01
+
+
+def test_control_parsea_registros_y_umbrales(repo_root: Path) -> None:
+    data = _config_minima()
+    control = _control_valido()
+    control["consigna_reg_temp1"] = 110
+    control["consigna_reg_vel"] = 114
+    control["umbral_marcha_temp_c"] = 70.0
+    control["umbral_marcha_velocidad"] = 0.5
+    data["control"] = control
+    _escribir(repo_root, data)
+
+    cfg = load_config(repo_root / "config.json")
+
+    assert cfg.control.consigna_reg_temp1 == 110
+    assert cfg.control.consigna_reg_vel == 114
+    assert cfg.control.umbral_marcha_temp_c == 70.0
+    assert cfg.control.umbral_marcha_velocidad == 0.5
+
+
+def test_control_registro_de_consigna_cero_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    control = _control_valido()
+    control["consigna_reg_vel"] = 0
+    data["control"] = control
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="consigna_reg_vel"):
+        load_config(repo_root / "config.json")
+
+
+def test_control_umbral_marcha_negativo_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    control = _control_valido()
+    control["umbral_marcha_temp_c"] = -1.0
+    data["control"] = control
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="umbral_marcha_temp_c"):
+        load_config(repo_root / "config.json")
+
+
+def test_control_sin_seccion_usa_defaults_nuevos(repo_root: Path) -> None:
+    """Un config viejo sin `control` sigue funcionando con los defaults."""
+    _escribir(repo_root, _config_minima())
+    cfg = load_config(repo_root / "config.json")
+    assert cfg.control.consigna_reg_temp1 == 100
+    assert cfg.control.consigna_reg_vel == 104
+    assert cfg.control.umbral_marcha_temp_c == 50.0
+    assert cfg.control.umbral_marcha_velocidad == 0.01

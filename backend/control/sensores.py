@@ -102,22 +102,34 @@ class AplicadorConsignaStub:
 # --- Factory ---------------------------------------------------------------
 
 
-def crear_lector(cfg: ModbusDriverConfig) -> LectorSensores:
+def crear_lector(
+    cfg: ModbusDriverConfig,
+    consigna_reg_temp1: int = DIRECCION_TEMP1_OBJETIVO,
+    consigna_reg_vel: int = DIRECCION_VEL_OBJETIVO,
+) -> LectorSensores:
     """Devuelve la implementación adecuada según `cfg.driver`.
 
     Con `driver == "stub"` no se instancia nada de Modbus, así que este
     factory es seguro de llamar aunque `pymodbus` no esté instalado. Con
     `"simulado"` lee la planta en memoria de `simulado.py` (sin hardware
     ni Modbus). Con `"modbus_rtu"`/`"modbus_tcp"` usa el driver real.
+    `consigna_reg_temp1`/`consigna_reg_vel` son las direcciones configuradas
+    de los setpoints aplicados (`config.control`).
     """
     if cfg.driver == "stub":
         return LectorSensoresStub()
     if cfg.driver == "simulado":
         return LectorSensoresSimulado()
-    return LectorSensoresModbus(ClienteModbus(cfg))
+    return LectorSensoresModbus(
+        ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel
+    )
 
 
-def crear_aplicador(cfg: ModbusDriverConfig) -> AplicadorConsigna:
+def crear_aplicador(
+    cfg: ModbusDriverConfig,
+    consigna_reg_temp1: int = DIRECCION_TEMP1_OBJETIVO,
+    consigna_reg_vel: int = DIRECCION_VEL_OBJETIVO,
+) -> AplicadorConsigna:
     """Devuelve la implementación adecuada según `cfg.driver`.
 
     Igual que `crear_lector`: stub no hace nada, `simulado` fija los
@@ -127,7 +139,9 @@ def crear_aplicador(cfg: ModbusDriverConfig) -> AplicadorConsigna:
         return AplicadorConsignaStub()
     if cfg.driver == "simulado":
         return AplicadorConsignaSimulado()
-    return AplicadorConsignaModbus(ClienteModbus(cfg))
+    return AplicadorConsignaModbus(
+        ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel
+    )
 
 
 # --- Implementaciones Modbus -------------------------------------------------
@@ -138,13 +152,28 @@ class LectorSensoresModbus:
 
     Decodifica cada par como float32 LE y mapea a los campos de
     `LecturaHorno` definidos por el PLC genérico (ver mapa en modbus.py).
-    Los campos que no estén en el mapa quedan `None`. Si la transacción
-    falla, devuelve un `LecturaHorno` con todos los campos en `None` — el
-    `ControlService._lectura_tiene_datos` lo filtra y no publica telemetría.
+    Los campos que no estén en el mapa quedan `None`. Los setpoints
+    aplicados se leen de las direcciones configuradas (2 regs cada uno). Si
+    la transacción falla, devuelve un `LecturaHorno` con todos los campos en
+    `None` — el `ControlService._lectura_tiene_datos` lo filtra y no publica
+    telemetría.
     """
 
-    def __init__(self, cliente: ClienteModbus) -> None:
+    def __init__(
+        self,
+        cliente: ClienteModbus,
+        consigna_reg_temp1: int = DIRECCION_TEMP1_OBJETIVO,
+        consigna_reg_vel: int = DIRECCION_VEL_OBJETIVO,
+    ) -> None:
         self._cliente = cliente
+        self._consigna_reg_temp1 = consigna_reg_temp1
+        self._consigna_reg_vel = consigna_reg_vel
+
+    def _leer_setpoint(self, direccion: int) -> float | None:
+        regs = self._cliente.leer_bloque(direccion, 2)
+        if regs is None:
+            return None
+        return self._cliente.convertir_float32(regs)
 
     def leer(self) -> LecturaHorno:
         regs = self._cliente.leer_bloque(
@@ -176,8 +205,8 @@ class LectorSensoresModbus:
             temp_ambiente=valores.get("temp_ambiente"),
             humedad_ambiente=valores.get("humedad_ambiente"),
             velocidad_cinta=valores.get("velocidad_cinta"),
-            temp_objetivo=None,
-            vel_objetivo=None,
+            temp_objetivo=self._leer_setpoint(self._consigna_reg_temp1),
+            vel_objetivo=self._leer_setpoint(self._consigna_reg_vel),
             confianza_deteccion=None,
         )
 
@@ -191,8 +220,15 @@ class AplicadorConsignaModbus:
     captura excepciones, pero devolver `None` evita el throw.
     """
 
-    def __init__(self, cliente: ClienteModbus) -> None:
+    def __init__(
+        self,
+        cliente: ClienteModbus,
+        consigna_reg_temp1: int = DIRECCION_TEMP1_OBJETIVO,
+        consigna_reg_vel: int = DIRECCION_VEL_OBJETIVO,
+    ) -> None:
         self._cliente = cliente
+        self._consigna_reg_temp1 = consigna_reg_temp1
+        self._consigna_reg_vel = consigna_reg_vel
 
     def aplicar(
         self,
@@ -202,14 +238,14 @@ class AplicadorConsignaModbus:
         # T1 — siempre presente.
         regs_t1 = self._cliente.codificar_float32(temp_objetivo)
         t1_ok = self._cliente.escribir_verificado(
-            DIRECCION_TEMP1_OBJETIVO, regs_t1
+            self._consigna_reg_temp1, regs_t1
         )
         t1_efectivo = temp_objetivo if t1_ok else None
 
         # Velocidad de cinta.
         regs_v = self._cliente.codificar_float32(velocidad_objetivo)
         v_ok = self._cliente.escribir_verificado(
-            DIRECCION_VEL_OBJETIVO, regs_v
+            self._consigna_reg_vel, regs_v
         )
         v_efectivo = velocidad_objetivo if v_ok else None
 

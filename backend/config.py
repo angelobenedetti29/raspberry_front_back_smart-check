@@ -249,6 +249,14 @@ class ControlConfig:
     audit_path: str = "control_audit.jsonl"
     audit_max_bytes: int = 5_242_880  # 5 MiB
     audit_max_files: int = 5
+    # Direcciones Modbus (base-0) de los setpoints aplicados. Deben coincidir
+    # con OVEN_MODBUS_REG_TEMP1/OVEN_MODBUS_REG_VEL del backend Go (default
+    # 100/104); si no, cada extremo escribe en un registro distinto.
+    consigna_reg_temp1: int = 100
+    consigna_reg_vel: int = 104
+    # Umbrales de "horno en marcha" para `estado_inicial_lote`.
+    umbral_marcha_temp_c: float = 50.0
+    umbral_marcha_velocidad: float = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +333,22 @@ def _int_opcional(raw: dict[str, Any], key: str, default: int, where: str) -> in
     if valor <= 0:
         raise ConfigError(f"'{where}.{key}' debe ser > 0")
     return valor
+
+
+def _float_opcional(
+    raw: dict[str, Any], key: str, default: float, where: str
+) -> float:
+    """Lee un float opcional de `where.*` con default tolerante (acepta >= 0)."""
+    valor = raw.get(key)
+    if valor is None:
+        return default
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+        raise ConfigError(
+            f"'{where}.{key}' debe ser numérico, no {type(valor).__name__}"
+        )
+    if valor < 0:
+        raise ConfigError(f"'{where}.{key}' no puede ser negativo")
+    return float(valor)
 
 
 def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
@@ -804,6 +828,18 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             audit_path=_str_opcional(control_raw, "audit_path", "control_audit.jsonl", "control"),
             audit_max_bytes=_int_opcional(control_raw, "audit_max_bytes", 5_242_880, "control"),
             audit_max_files=_int_opcional(control_raw, "audit_max_files", 5, "control"),
+            consigna_reg_temp1=_int_opcional(
+                control_raw, "consigna_reg_temp1", 100, "control"
+            ),
+            consigna_reg_vel=_int_opcional(
+                control_raw, "consigna_reg_vel", 104, "control"
+            ),
+            umbral_marcha_temp_c=_float_opcional(
+                control_raw, "umbral_marcha_temp_c", 50.0, "control"
+            ),
+            umbral_marcha_velocidad=_float_opcional(
+                control_raw, "umbral_marcha_velocidad", 0.01, "control"
+            ),
         )
         if control.publicar_telemetria_segundos <= 0:
             raise ConfigError(
