@@ -18,6 +18,7 @@ from backend.control.tipos import (
     ModoControl,
     SetpointPropuesto,
 )
+from backend.lote.tipos import Conteos, EstadoLote, Lote, Producto
 
 _LIMITES = LimitesAplicacion(
     delta_temp_max_c=10.0,
@@ -94,6 +95,18 @@ class _ClienteFalso:
             raise self.error_aprobar
         self.aprobaciones += 1
         self.aprobaciones_body.append(body)
+
+
+class _ClienteLotesFalso:
+    """Sólo lo que usa el control: el catálogo de productos."""
+
+    def __init__(self, productos: tuple[Producto, ...] = ()) -> None:
+        self._productos = productos
+        self.llamadas_productos = 0
+
+    def productos(self, secret: str) -> list[Producto]:
+        self.llamadas_productos += 1
+        return list(self._productos)
 
 
 def _servicio(tmp_path, cliente: _ClienteFalso) -> tuple[ControlService, _AplicadorFalso]:
@@ -180,6 +193,89 @@ def test_ack_reporta_el_setpoint_efectivo_despues_del_clamp(tmp_path) -> None:
     ]
 
 
+def test_limites_de_la_propuesta_mandan_sobre_el_snapshot(tmp_path) -> None:
+    """La propuesta trae los límites vivos del lote: no se consulta el catálogo."""
+    limites_lote = LimitesAplicacion(
+        delta_temp_max_c=2.0,
+        delta_vel_max=0.05,
+        temp_min=100.0,
+        temp_max=300.0,
+        vel_min=0.05,
+        vel_max=5.0,
+    )
+    propuesta = _propuesta(autorizada=True, limites=limites_lote)
+    cliente = _ClienteFalso(propuesta)
+    servicio, aplicador = _servicio(tmp_path, cliente)
+    lotes = _ClienteLotesFalso()
+    servicio._cliente_lotes = lotes
+    servicio._modo = ModoControl.AUTOMATICO
+    # Sin snapshot cargado: si no usara los límites de la propuesta, fallaría.
+    servicio._limites = None
+    servicio._ultima_lectura = LecturaHorno(
+        temp_horno_1=100.0,
+        temp_comb_1=None,
+        humedad_horno=None,
+        temp_ambiente=None,
+        humedad_ambiente=None,
+        velocidad_cinta=1.0,
+        temp_objetivo=100.0,
+        vel_objetivo=1.0,
+        confianza_deteccion=None,
+    )
+
+    servicio._buscar_y_aplicar_propuesta("secret", "lote-1")
+
+    # +10 °C de salto se clampea a +2 (delta_temp_max_c del lote).
+    assert aplicador.aplicados == [(102.0, 1.05)]
+    assert lotes.llamadas_productos == 0
+
+
+def test_sin_limites_en_la_propuesta_cae_al_producto(tmp_path) -> None:
+    """Compatibilidad: una propuesta sin `limites` usa el catálogo de productos."""
+    producto = Producto(
+        id="prod-1",
+        nombre="Producto",
+        activo=True,
+        delta_temp1_max_c=2.0,
+        delta_vel_max=0.05,
+    )
+    lotes = _ClienteLotesFalso((producto,))
+    propuesta = _propuesta(autorizada=True, limites=None)
+    servicio, aplicador = _servicio(tmp_path, _ClienteFalso(propuesta))
+    servicio._cliente_lotes = lotes
+    servicio._limites = None
+    servicio._enganchar_o_actualizar(
+        Lote(
+            id="lote-1",
+            sector_id="sector-1",
+            estado=EstadoLote.ABIERTO,
+            producto_id="prod-1",
+            producto_nombre="Producto",
+            abierto_en="2026-01-01T00:00:00Z",
+            abierto_por=None,
+            conteos=Conteos(ok=None, crudo=None, quemado=None, total=0),
+            inactividad_segundos=0.0,
+            modo="AUTOMATICO",
+        )
+    )
+    servicio._ultima_lectura = LecturaHorno(
+        temp_horno_1=100.0,
+        temp_comb_1=None,
+        humedad_horno=None,
+        temp_ambiente=None,
+        humedad_ambiente=None,
+        velocidad_cinta=1.0,
+        temp_objetivo=100.0,
+        vel_objetivo=1.0,
+        confianza_deteccion=None,
+    )
+
+    servicio._buscar_y_aplicar_propuesta("secret", "lote-1")
+
+    assert lotes.llamadas_productos == 1
+    assert aplicador.aplicados == [(102.0, 1.05)]
+
+
 def test_fallo_de_ack_no_reescribe_el_plc_y_queda_pendiente(tmp_path) -> None:
     propuesta = _propuesta(autorizada=True)
     cliente = _ClienteFalso(propuesta, error_ack=ErrorControl("sin red"))
@@ -214,6 +310,37 @@ def test_aprobacion_llama_al_backend_y_despues_aplica(tmp_path) -> None:
     assert cliente.aprobaciones_body == [{"decision_id": "dec-1"}]
     assert aplicador.aplicados == [(180.0, 1.2)]
     assert servicio.estado()["propuesta_pendiente"] is None
+
+
+def test_aprobacion_usa_los_limites_de_la_propuesta(tmp_path) -> None:
+    """La aprobación manual también prioriza los límites del lote."""
+    limites_lote = LimitesAplicacion(
+        delta_temp_max_c=2.0,
+        delta_vel_max=0.05,
+        temp_min=100.0,
+        temp_max=300.0,
+        vel_min=0.05,
+        vel_max=5.0,
+    )
+    propuesta = _propuesta(autorizada=False, limites=limites_lote)
+    servicio, aplicador = _servicio(tmp_path, _ClienteFalso(propuesta))
+    servicio._modo = ModoControl.SUPERVISION
+    servicio._limites = None
+    servicio._ultima_lectura = LecturaHorno(
+        temp_horno_1=100.0,
+        temp_comb_1=None,
+        humedad_horno=None,
+        temp_ambiente=None,
+        humedad_ambiente=None,
+        velocidad_cinta=1.0,
+        temp_objetivo=100.0,
+        vel_objetivo=1.0,
+        confianza_deteccion=None,
+    )
+    servicio._buscar_y_aplicar_propuesta("secret", "lote-1")
+
+    assert servicio.aplicar_pendiente() is True
+    assert aplicador.aplicados == [(102.0, 1.05)]
 
 
 def test_si_falla_la_aprobacion_la_propuesta_queda_pendiente(tmp_path) -> None:

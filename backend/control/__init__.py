@@ -330,6 +330,9 @@ class ControlService:
         if secret is None or lote_id is None:
             logger.info("control: aplicar_pendiente sin lote enganchado")
             return False
+        # Prioridad a los límites que vinieron con la propuesta (tuning vivo
+        # del lote); el snapshot del producto es el respaldo.
+        limites = propuesta.limites or limites
         if limites is None:
             logger.warning("control: aplicar_pendiente sin límites cargados")
             return False
@@ -660,7 +663,9 @@ class ControlService:
             )
             return
 
-        limites = self._limites_snapshot()
+        # Los límites del lote que vienen con la propuesta mandan; si no
+        # llegaron, se usa el snapshot del producto cargado al enganchar.
+        limites = propuesta.limites or self._limites_snapshot()
         if limites is None:
             logger.warning("control: propuesta recibida sin límites cargados")
             return

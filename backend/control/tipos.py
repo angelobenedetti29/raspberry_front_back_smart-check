@@ -100,6 +100,9 @@ class SetpointPropuesto:
     decision_id: str | None = None  # id de la decisión en el backend (dedup + TTL)
     autorizada: bool = True  # la Pi sólo aplica las autorizadas
     fase: str | None = None  # fase del lote, si el backend la informa
+    # Límites vivos del lote que manda el backend con la propuesta. Si llegan,
+    # el clamp defensivo los usa en vez del snapshot del producto.
+    limites: LimitesAplicacion | None = None
 
     def a_payload_aplicacion(self) -> dict:
         """Body legacy del POST de aprobación de consigna.

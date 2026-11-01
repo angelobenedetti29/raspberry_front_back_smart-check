@@ -13,6 +13,8 @@ compartida (backend.api) se ocupa de serializar y mapear errores.
 
 from __future__ import annotations
 
+import math
+
 from backend.api import (
     ClienteHTTP,
     ErrorConexion,
@@ -20,7 +22,12 @@ from backend.api import (
     ErrorHttp,
     desenvolver,
 )
-from backend.control.tipos import ErrorControl, ModoControl, SetpointPropuesto
+from backend.control.tipos import (
+    ErrorControl,
+    LimitesAplicacion,
+    ModoControl,
+    SetpointPropuesto,
+)
 
 
 class ClienteControl:
@@ -258,6 +265,46 @@ def _a_setpoint(payload: dict) -> SetpointPropuesto:
         decision_id=decision_id,
         autorizada=bool(payload.get("autorizada", True)),
         fase=str(fase_raw) if fase_raw is not None else None,
+        limites=_limites_de_payload(payload),
+    )
+
+
+def _limites_de_payload(payload: dict) -> LimitesAplicacion | None:
+    """Mapea el bloque `limites` de la propuesta; None si falta o es inválido.
+
+    Un bloque incompleto o incoherente se descarta en silencio: el clamp cae
+    al snapshot del producto y la propuesta se aplica igual.
+    """
+    bruto = payload.get("limites")
+    if not isinstance(bruto, dict):
+        return None
+    try:
+        temp_min = float(bruto["temp_min"])
+        temp_max = float(bruto["temp_max"])
+        vel_min = float(bruto["vel_min"])
+        vel_max = float(bruto["vel_max"])
+        # El backend lo llama delta_temp1_max_c (T1); el dominio usa
+        # delta_temp_max_c.
+        delta_temp_max_c = float(bruto["delta_temp1_max_c"])
+        delta_vel_max = float(bruto["delta_vel_max"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    valores = (
+        temp_min, temp_max, vel_min, vel_max, delta_temp_max_c, delta_vel_max
+    )
+    if not all(math.isfinite(v) for v in valores):
+        return None
+    if temp_max <= temp_min or vel_max <= vel_min:
+        return None
+    if delta_temp_max_c <= 0 or delta_vel_max <= 0:
+        return None
+    return LimitesAplicacion(
+        delta_temp_max_c=delta_temp_max_c,
+        delta_vel_max=delta_vel_max,
+        temp_min=temp_min,
+        temp_max=temp_max,
+        vel_min=vel_min,
+        vel_max=vel_max,
     )
 
 

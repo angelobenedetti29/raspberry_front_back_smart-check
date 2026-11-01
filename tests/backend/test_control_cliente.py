@@ -205,6 +205,112 @@ def test_obtener_propuesta_sin_decision_id_devuelve_none() -> None:
     assert resultado.decision_id is None
 
 
+def test_obtener_propuesta_mapea_limites_del_lote() -> None:
+    """El bloque `limites` viaja con la propuesta y mapea al dominio."""
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    propuesta_backend = {
+        "temp1_objetivo": 180.0,
+        "vel_objetivo": 1.2,
+        "limites": {
+            "temp_min": 100.0,
+            "temp_max": 300.0,
+            "vel_min": 0.05,
+            "vel_max": 0.5,
+            "delta_temp1_max_c": 2.0,
+            "delta_vel_max": 0.01,
+            "tolerancia_temp_c": 1.5,  # informativo: el clamp no lo usa
+        },
+    }
+    cuerpo = json.dumps({"success": True, "data": propuesta_backend}).encode()
+    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
+        resultado = cliente.obtener_propuesta(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
+        )
+    assert resultado is not None
+    assert resultado.limites is not None
+    assert resultado.limites.temp_min == 100.0
+    assert resultado.limites.temp_max == 300.0
+    assert resultado.limites.vel_min == 0.05
+    assert resultado.limites.vel_max == 0.5
+    # delta_temp1_max_c del backend → delta_temp_max_c del dominio.
+    assert resultado.limites.delta_temp_max_c == 2.0
+    assert resultado.limites.delta_vel_max == 0.01
+
+
+def test_obtener_propuesta_sin_limites_devuelve_none() -> None:
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    propuesta_backend = {"temp1_objetivo": 180.0, "vel_objetivo": 1.2}
+    cuerpo = json.dumps({"success": True, "data": propuesta_backend}).encode()
+    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
+        resultado = cliente.obtener_propuesta(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
+        )
+    assert resultado is not None
+    assert resultado.limites is None
+
+
+@pytest.mark.parametrize(
+    "limites",
+    [
+        # Falta una de las seis claves obligatorias.
+        {
+            "temp_min": 100.0,
+            "temp_max": 300.0,
+            "vel_min": 0.05,
+            "vel_max": 0.5,
+            "delta_temp1_max_c": 2.0,
+        },
+        # No numérico.
+        {
+            "temp_min": 100.0,
+            "temp_max": "caliente",
+            "vel_min": 0.05,
+            "vel_max": 0.5,
+            "delta_temp1_max_c": 2.0,
+            "delta_vel_max": 0.01,
+        },
+        # max <= min.
+        {
+            "temp_min": 300.0,
+            "temp_max": 100.0,
+            "vel_min": 0.05,
+            "vel_max": 0.5,
+            "delta_temp1_max_c": 2.0,
+            "delta_vel_max": 0.01,
+        },
+        # Delta no positivo.
+        {
+            "temp_min": 100.0,
+            "temp_max": 300.0,
+            "vel_min": 0.05,
+            "vel_max": 0.5,
+            "delta_temp1_max_c": 0.0,
+            "delta_vel_max": 0.01,
+        },
+        # El bloque no es un objeto.
+        [100.0, 300.0],
+    ],
+)
+def test_obtener_propuesta_limites_mal_formados_no_rompen(
+    limites: object,
+) -> None:
+    """Un bloque `limites` inválido se ignora; la propuesta sigue siendo válida."""
+    cliente = ClienteControl("http://backend", timeout=1.0)
+    propuesta_backend = {
+        "temp1_objetivo": 180.0,
+        "vel_objetivo": 1.2,
+        "limites": limites,
+    }
+    cuerpo = json.dumps({"success": True, "data": propuesta_backend}).encode()
+    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
+        resultado = cliente.obtener_propuesta(
+            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
+        )
+    assert resultado is not None
+    assert resultado.temp_horno_1 == 180.0
+    assert resultado.limites is None
+
+
 def test_obtener_propuesta_payload_mal_formado_se_traduce_a_error() -> None:
     """Falta `temp1_objetivo` (clave obligatoria): no debe romper el lazo."""
     cliente = ClienteControl("http://backend", timeout=1.0)
