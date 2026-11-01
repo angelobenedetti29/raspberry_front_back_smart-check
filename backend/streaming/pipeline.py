@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -58,10 +58,12 @@ class Pipeline:
         config: AppConfig,
         registro: RegistroEstado,
         suscriptores: RegistroSuscriptores,
+        url_publicacion_provider: Callable[[], str | None],
     ) -> None:
         self._config = config
         self._registro = registro
         self._suscriptores = suscriptores
+        self._url_publicacion_provider = url_publicacion_provider
         self._lock = threading.Lock()
         self._parar = threading.Event()
         self._frame_nuevo = threading.Event()
@@ -89,6 +91,7 @@ class Pipeline:
         self._publicador: PublicadorFFmpeg | None = None
         self._fuente_actual: str = config.stream.capture.source
         self._publicando_aplicado = False
+        self._url_publicada: str | None = None
         self._numero_frame = 0
         self._ventana_frames = 0
         self._ventana_inicio = time.monotonic()
@@ -202,9 +205,7 @@ class Pipeline:
                 self._consolidar()
         finally:
             self._cerrar_captura()
-            if self._publicador is not None:
-                self._publicador.detener()
-                self._publicador = None
+            self._detener_publicador()
             self._publicando_aplicado = False
             with self._lock:
                 self._slot_preview = None
@@ -216,9 +217,9 @@ class Pipeline:
             )
 
     def _activo(self) -> bool:
-        """True si hay que capturar: publicar o mostrar alcanza."""
+        """True si hay que capturar: mostrar o publicar con URL conocida."""
         with self._lock:
-            return self._desea_publicar or self._desea_preview
+            return self._desea_preview or (self._desea_publicar and self._publicando_aplicado)
 
     def _producir_frame(self) -> None:
         """Captura, anota si corresponde, deja el frame y publica."""
@@ -264,27 +265,44 @@ class Pipeline:
                 self._registro.sumar("frames_publicados")
 
     def _reconciliar_publicacion(self) -> None:
-        """Arranca o detiene el publicador según la intención de la interfaz."""
+        """Alinea el publicador con la intención de la UI y la URL vigente.
+
+        La URL se re-deriva en cada vuelta: el nombre y el tipo pueden cambiar
+        en runtime (rename del backend / aprobación del alta). Sin tipo todavía
+        no hay URL, así que no se publica ni se captura.
+        """
         with self._lock:
             desea = self._desea_publicar
-        if desea == self._publicando_aplicado:
+        url = self._url_publicacion_provider() if desea else None
+
+        if url is None:
+            self._detener_publicador()
+            self._publicando_aplicado = False
             return
 
-        if desea:
-            if self._publicador is None:
-                self._publicador = PublicadorFFmpeg(
-                    self._config.stream.publisher,
-                    self._config.stream.reconnect,
-                    self._config.stream.capture.width,
-                    self._config.stream.capture.height,
-                    self._config.stream.capture.fps,
-                )
+        if self._publicador is not None and url != self._url_publicada:
+            logger.info("Streaming: URL de publicación cambió a %s", url)
+            self._detener_publicador()
+
+        if self._publicador is None:
+            self._publicador = PublicadorFFmpeg(
+                self._config.stream.publisher,
+                self._config.stream.reconnect,
+                self._config.stream.capture.width,
+                self._config.stream.capture.height,
+                self._config.stream.capture.fps,
+                url,
+            )
             self._publicador.iniciar()
-        elif self._publicador is not None:
+
+        self._url_publicada = url
+        self._publicando_aplicado = True
+
+    def _detener_publicador(self) -> None:
+        if self._publicador is not None:
             self._publicador.detener()
             self._publicador = None
-
-        self._publicando_aplicado = desea
+        self._url_publicada = None
 
     def _asegurar_captura(self) -> None:
         """Abre la captura si no lo está."""

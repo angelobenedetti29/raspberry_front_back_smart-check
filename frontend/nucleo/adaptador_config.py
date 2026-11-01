@@ -126,11 +126,12 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
     ),
     # Publicación
     _CampoEsquema(
-        "stream.publisher.output_url",
+        "stream.publisher.server_url",
         "Publicación",
-        "URL de salida",
+        "Servidor RTSP (base)",
         TipoCampo.TEXTO,
-        "Destino RTSP al que se publica el stream.",
+        "Esquema + host + puerto. La ruta se arma automáticamente con el "
+        "nombre y el tipo del dispositivo.",
     ),
     _CampoEsquema(
         "stream.publisher.bitrate",

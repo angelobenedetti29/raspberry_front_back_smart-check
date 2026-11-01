@@ -39,7 +39,6 @@ logger = logging.getLogger(__name__)
 # la convergencia se vea en la gráfica del panel.
 
 T1_INICIAL_C = 150.0
-T2_INICIAL_C = 140.0
 V_INICIAL_M_S = 0.15
 
 # Constantes de tiempo de la convergencia (primer orden).
@@ -50,10 +49,7 @@ TAU_VEL_SEGUNDOS = 8.0  # variador: responde en segundos
 RUIDO_TEMP_C = 0.2
 RUIDO_VEL_M_S = 0.003
 
-# Sin objetivo propio (línea de un horno), la 2ª zona sigue a la 1ª.
-T2_FACTOR_UN_HORNO = 0.92
-COMB1_FACTOR = 0.78  # cámaras de combustión: rezagadas respecto de T1
-COMB2_FACTOR = 0.70
+COMB1_FACTOR = 0.78  # cámara de combustión: rezagada respecto de T1
 
 # Magnitudes ambiente: reversión a la media alrededor de estos centros.
 HUMEDAD_HORNO_PCT = 35.0
@@ -64,23 +60,20 @@ HUMEDAD_AMBIENTE_PCT = 55.0
 class PlantaSimulada:
     """Modelo dinámico del horno + cinta para pruebas sin hardware.
 
-    Estado interno (T1, T2, V, cámaras, humedades, ambiente) + objetivos de
-    consigna. `avanzar()` integra un paso de primer orden hacia el objetivo
-    usando el tiempo transcurrido real: puede llamarse desde cualquier hilo
-    y con cualquier cadencia sin acumular error.
+    Estado interno (T1, V, cámara de combustión, humedades, ambiente) +
+    objetivos de consigna. `avanzar()` integra un paso de primer orden hacia
+    el objetivo usando el tiempo transcurrido real: puede llamarse desde
+    cualquier hilo y con cualquier cadencia sin acumular error.
 
     - Sin `aplicar_setpoint(...)`: los objetivos son los valores iniciales
       y la planta queda (casi) quieta, con el ruido del termómetro.
-    - Con consigna: T1/T2/V convergen exponencialmente (`tau_temp`/
-      `tau_vel`); T2 sin objetivo propio deriva hacia `T1 * 0.92` (la
-      segunda zona sigue a la primera, línea de un solo horno).
+    - Con consigna: T1/V convergen exponencialmente (`tau_temp`/`tau_vel`).
     """
 
     def __init__(
         self,
         *,
         t1_inicial: float = T1_INICIAL_C,
-        t2_inicial: float = T2_INICIAL_C,
         v_inicial: float = V_INICIAL_M_S,
         tau_temp: float = TAU_TEMP_SEGUNDOS,
         tau_vel: float = TAU_VEL_SEGUNDOS,
@@ -92,16 +85,13 @@ class PlantaSimulada:
         self._rng = random.Random(semilla)
         # Estado físico inicial.
         self._t1 = t1_inicial
-        self._t2 = t2_inicial
         self._v = v_inicial
         self._comb1 = t1_inicial * COMB1_FACTOR
-        self._comb2 = t1_inicial * COMB2_FACTOR
         self._humedad_horno = HUMEDAD_HORNO_PCT
         self._temp_ambiente = TEMP_AMBIENTE_C
         self._humedad_ambiente = HUMEDAD_AMBIENTE_PCT
-        # Objetivos: sin consigna, quieto (T2 arranca sin objetivo propio).
+        # Objetivos: sin consigna, quieto.
         self._obj_t1: float = t1_inicial
-        self._obj_t2: float | None = None
         self._obj_v: float = v_inicial
         # Dinámica.
         self._tau_temp = tau_temp
@@ -115,14 +105,11 @@ class PlantaSimulada:
     def aplicar_setpoint(
         self,
         temp_1: float,
-        temp_2: float | None,
         velocidad: float,
     ) -> None:
-        """Fija los objetivos de una vez (`temp_2=None` deja el actual)."""
+        """Fija los objetivos de una vez."""
         with self._lock:
             self._obj_t1 = temp_1
-            if temp_2 is not None:
-                self._obj_t2 = temp_2
             self._obj_v = max(0.0, velocidad)
 
     # --- dinámica ---
@@ -140,20 +127,10 @@ class PlantaSimulada:
         """Un paso de integración (requiere el lock tomado)."""
         k_temp = 1.0 - math.exp(-dt / self._tau_temp)
         k_vel = 1.0 - math.exp(-dt / self._tau_vel)
-        # T2 sin objetivo propio: la segunda zona sigue a la primera.
-        obj_t2 = (
-            self._obj_t2
-            if self._obj_t2 is not None
-            else self._t1 * T2_FACTOR_UN_HORNO
-        )
         self._t1 = self._converger(self._t1, self._obj_t1, k_temp, self._ruido_temp)
-        self._t2 = self._converger(self._t2, obj_t2, k_temp, self._ruido_temp)
-        # Cámaras de combustión: rezagadas respecto de T1.
+        # Cámara de combustión: rezagada respecto de T1.
         self._comb1 = self._converger(
             self._comb1, self._t1 * COMB1_FACTOR, k_temp, self._ruido_temp
-        )
-        self._comb2 = self._converger(
-            self._comb2, self._t1 * COMB2_FACTOR, k_temp, self._ruido_temp
         )
         # Velocidad: nunca negativa.
         self._v = max(0.0, self._converger(self._v, self._obj_v, k_vel, self._ruido_vel))
@@ -183,9 +160,7 @@ class PlantaSimulada:
         with self._lock:
             return LecturaHorno(
                 temp_horno_1=self._t1,
-                temp_horno_2=self._t2,
                 temp_comb_1=self._comb1,
-                temp_comb_2=self._comb2,
                 humedad_horno=self._humedad_horno,
                 temp_ambiente=self._temp_ambiente,
                 humedad_ambiente=self._humedad_ambiente,
@@ -239,14 +214,12 @@ class AplicadorConsignaSimulado:
     def aplicar(
         self,
         temp_objetivo: float,
-        temp_objetivo_2: float | None,
         velocidad_objetivo: float,
-    ) -> tuple[float | None, float | None, float | None]:
-        self._planta.aplicar_setpoint(temp_objetivo, temp_objetivo_2, velocidad_objetivo)
+    ) -> tuple[float | None, float | None]:
+        self._planta.aplicar_setpoint(temp_objetivo, velocidad_objetivo)
         logger.info(
-            "aplicador simulado: T1=%.2f T2=%s V=%.3f",
+            "aplicador simulado: T1=%.2f V=%.3f",
             temp_objetivo,
-            temp_objetivo_2,
             velocidad_objetivo,
         )
-        return (temp_objetivo, temp_objetivo_2, velocidad_objetivo)
+        return (temp_objetivo, velocidad_objetivo)

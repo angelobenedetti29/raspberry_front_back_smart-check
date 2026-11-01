@@ -59,7 +59,7 @@ def _config_minima() -> dict:
                 "read_timeout_seconds": 5.0,
             },
             "publisher": {
-                "output_url": "rtsp://localhost:8554/test",
+                "server_url": "rtsp://localhost:8554",
                 "bitrate": "1M",
                 "ffmpeg_executable": "ffmpeg",
                 "encoder": "libx264",
@@ -208,6 +208,40 @@ def test_rtsp_transport_invalido_falla(repo_root: Path) -> None:
     data["stream"]["publisher"]["rtsp_transport"] = "sctp"
     _escribir(repo_root, data)
     with pytest.raises(ConfigError, match="rtsp_transport"):
+        load_config(repo_root / "config.json")
+
+
+def test_server_url_debe_ser_rtsp(repo_root: Path) -> None:
+    """La base de publicación sólo acepta rtsp:// o rtsps://."""
+    data = _config_minima()
+    data["stream"]["publisher"]["server_url"] = "http://localhost:8554"
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="server_url"):
+        load_config(repo_root / "config.json")
+
+
+def test_server_url_sin_barra_final(repo_root: Path) -> None:
+    data = _config_minima()
+    data["stream"]["publisher"]["server_url"] = "rtsp://localhost:8554/"
+    _escribir(repo_root, data)
+    cfg = load_config(repo_root / "config.json")
+    assert cfg.stream.publisher.server_url == "rtsp://localhost:8554"
+
+
+def test_server_url_con_path_falla(repo_root: Path) -> None:
+    """La base no puede traer el path: se deriva del nombre y el tipo."""
+    data = _config_minima()
+    data["stream"]["publisher"]["server_url"] = "rtsp://localhost:8554/entrada"
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="server_url"):
+        load_config(repo_root / "config.json")
+
+
+def test_server_url_sin_host_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    data["stream"]["publisher"]["server_url"] = "rtsp://"
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="server_url"):
         load_config(repo_root / "config.json")
 
 

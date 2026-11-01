@@ -171,6 +171,11 @@ configurados: no asumas comandos de lint/build.
   `flush_segundos` (debe ser < cierre), `max_eventos_por_envio` ∈ [1,100],
   `cola_eventos` ≥ 1, `max_pendientes` ≥ `max_eventos_por_envio`,
   `refresco_catalogo_segundos` y el backoff de reintentos.
+- `stream.publisher.server_url` es sólo la base RTSP (esquema + host + puerto, sin
+  `/` final). El path de publicación se deriva como `<nombre>-<entrada|salida>`
+  (`backend/streaming/url.py`) con el nombre y el tipo vivos del dispositivo; el
+  front web arma el WHEP con el mismo path. Si el tipo todavía no se conoce
+  (dispositivo sin registrar), no se publica hasta que el alta lo provea.
 - `stream.publisher.write_timeout`: tiempo máximo que puede tardar un frame en entrar
   al pipe de ffmpeg antes de dar el proceso por trabado y reiniciarlo. Un ffmpeg sano
   acepta un frame de 720p en pocos milisegundos, así que un valor chico no afecta el

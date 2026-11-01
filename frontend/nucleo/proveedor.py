@@ -49,7 +49,7 @@ class ProveedorServicio:
         items = (
             self._fila_captura(estado, captura.width, captura.height),
             self._fila_inferencia(estado),
-            self._fila_publicacion(estado, config.stream.publisher.output_url),
+            self._fila_publicacion(estado, config.stream.publisher.server_url),
             EstadoItem(
                 clave="api",
                 etiqueta="Backend",

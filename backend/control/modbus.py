@@ -45,15 +45,14 @@ logger = logging.getLogger(__name__)
 # Los offsets dentro del bloque de sensores son **en pares de registros**.
 
 DIRECCION_BASE_SENSORES = 0
-# Bloque de lectura de sensores: 8 magnitudes × 2 regs = 16 regs contiguos.
+# Bloque de lectura de sensores: 16 regs contiguos (los offsets 2 y 6 quedan
+# sin usar, pero no se renumeran para no romper el PLC).
 CANTIDAD_REGS_SENSORES = 16
 
 # Offset dentro del bloque de sensores (en regs). Cada entrada es 1 float32.
 _OFFSET_SENSORES: dict[str, int] = {
     "temp_horno_1": 0,
-    "temp_horno_2": 2,
     "temp_comb_1": 4,
-    "temp_comb_2": 6,
     "humedad_horno": 8,
     "temp_ambiente": 10,
     "humedad_ambiente": 12,
@@ -62,7 +61,6 @@ _OFFSET_SENSORES: dict[str, int] = {
 
 # Direcciones del actuador (no son contiguas: cada setpoint es 2 regs).
 DIRECCION_TEMP1_OBJETIVO = 100
-DIRECCION_TEMP2_OBJETIVO = 102
 DIRECCION_VEL_OBJETIVO = 104
 
 # --- Tiempos ---------------------------------------------------------------

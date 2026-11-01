@@ -39,7 +39,7 @@ _ENCODERS_CON_PRESET = ("libx264", "libx265")
 
 
 def construir_comando(
-    publicador: PublisherConfig, ancho: int, alto: int, fps: int
+    publicador: PublisherConfig, ancho: int, alto: int, fps: int, output_url: str
 ) -> list[str]:
     """Arma la línea de comandos de ffmpeg a partir de la configuración.
 
@@ -82,7 +82,7 @@ def construir_comando(
     ]
     if publicador.rtsp_transport:
         comando += ["-rtsp_transport", publicador.rtsp_transport]
-    comando += ["-f", "rtsp", publicador.output_url]
+    comando += ["-f", "rtsp", output_url]
     return comando
 
 
@@ -100,9 +100,11 @@ class PublicadorFFmpeg:
         ancho: int,
         alto: int,
         fps: int,
+        output_url: str,
     ) -> None:
         self._pub = publicador
         self._recon = reconexion
+        self._output_url = output_url
         self._ancho = ancho
         self._alto = alto
         self._fps = fps
@@ -169,7 +171,7 @@ class PublicadorFFmpeg:
             target=self._bucle_supervisor, name="publisher-supervisor", daemon=True
         )
         self._supervisor.start()
-        logger.info("Publisher: publicando en %s", self._pub.output_url)
+        logger.info("Publisher: publicando en %s", self._output_url)
 
     def enviar(self, frame_bgr: np.ndarray) -> bool:
         """Convierte el frame a I420 y lo encola. Nunca bloquea.
@@ -343,7 +345,7 @@ class PublicadorFFmpeg:
 
     def _lanzar(self) -> None:
         """Crea el proceso y sus hilos auxiliares."""
-        comando = construir_comando(self._pub, self._ancho, self._alto, self._fps)
+        comando = construir_comando(self._pub, self._ancho, self._alto, self._fps, self._output_url)
         try:
             proceso = subprocess.Popen(
                 comando,

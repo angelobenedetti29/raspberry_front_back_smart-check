@@ -17,6 +17,13 @@ class TipoDispositivo(str, Enum):
     ENTRADA_HORNO = "ENTRADA_HORNO"
     SALIDA_HORNO = "SALIDA_HORNO"
 
+    @property
+    def sufijo_stream(self) -> str:
+        """Sufijo del path de publicación: `entrada` o `salida`."""
+        if self is TipoDispositivo.ENTRADA_HORNO:
+            return "entrada"
+        return "salida"
+
     @classmethod
     def desde(cls, valor: object) -> "TipoDispositivo":
         """Normaliza `valor` a un TipoDispositivo válido.

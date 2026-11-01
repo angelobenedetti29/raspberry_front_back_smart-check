@@ -15,11 +15,15 @@ from backend.config import ModelEntry
 from backend.streaming.estado import ModoPublicacion, RegistroEstado
 from backend.streaming.pipeline import Pipeline
 from backend.streaming.suscripcion import ColaEventos, RegistroSuscriptores
+from backend.streaming.url import construir_url_publicacion
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
 
     from backend.config import AppConfig
+    from backend.device.tipos import TipoDispositivo
     from backend.streaming.estado import EstadoStreaming
 
 logger = logging.getLogger(__name__)
@@ -51,8 +55,17 @@ class StreamingService:
 
     name = "streaming"
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        nombre_provider: Callable[[], str] | None = None,
+        tipo_provider: Callable[[], TipoDispositivo | None] | None = None,
+    ) -> None:
         self._config = config
+        # Nombre y tipo vivos: el rename del backend Go y la aprobación del
+        # alta pueden cambiarlos después del arranque.
+        self._nombre_provider = nombre_provider or (lambda: config.device.hostname)
+        self._tipo_provider = tipo_provider
         entrada = _entrada_por_defecto(config)
         self._registro = RegistroEstado(
             fuente=config.stream.capture.source,
@@ -76,7 +89,9 @@ class StreamingService:
         with self._lock:
             if self._pipeline is not None:
                 return
-            pipeline = Pipeline(self._config, self._registro, self._suscriptores)
+            pipeline = Pipeline(
+                self._config, self._registro, self._suscriptores, self._url_publicacion
+            )
             self._pipeline = pipeline
         pipeline.iniciar()
         logger.info("streaming: servicio iniciado")
@@ -160,6 +175,17 @@ class StreamingService:
         with self._lock:
             pipeline = self._pipeline
         return None if pipeline is None else pipeline.segundos_sin_detecciones()
+
+    def _url_publicacion(self) -> str | None:
+        """URL RTSP vigente, o None mientras no se conozca el tipo."""
+        tipo = self._tipo_provider() if self._tipo_provider is not None else None
+        if tipo is None:
+            return None
+        return construir_url_publicacion(
+            self._config.stream.publisher.server_url,
+            self._nombre_provider(),
+            tipo,
+        )
 
     def _exigir_pipeline(self) -> Pipeline:
         with self._lock:

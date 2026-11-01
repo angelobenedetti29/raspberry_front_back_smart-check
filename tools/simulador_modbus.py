@@ -16,12 +16,13 @@ de registros y el modelo dinámico están duplicados del lado de acá.
 Mapa de registros (espejo del de `backend/control/modbus.py`; si cambiás
 uno, cambiá el otro):
 
-- Sensores: dirección 0, 16 holding regs contiguos = 8 magnitudes, cada
-  una un float32 en 2 regs. Offsets (en regs): `temp_horno_1` 0,
-  `temp_horno_2` 2, `temp_comb_1` 4, `temp_comb_2` 6, `humedad_horno` 8,
-  `temp_ambiente` 10, `humedad_ambiente` 12, `velocidad_cinta` 14.
-- Consignas (setpoints): T1 en 100, T2 en 102, velocidad en 104 (2 regs
-  c/u, no contiguas entre bloques).
+- Sensores: dirección 0, 16 holding regs contiguos, cada magnitud un
+  float32 en 2 regs. Offsets (en regs): `temp_horno_1` 0, `temp_comb_1` 4,
+  `humedad_horno` 8, `temp_ambiente` 10, `humedad_ambiente` 12,
+  `velocidad_cinta` 14. Los offsets 2 y 6 quedan sin uso (bloque fijo del
+  PLC), pero no se renumeran.
+- Consignas (setpoints): T1 en 100, velocidad en 104 (2 regs c/u).
+  102-103 queda sin uso.
 - Direcciones base-0. Los huecos (16-99) quedan inválidos: un request
   ahí falla con excepción, como en un PLC real.
 
@@ -31,10 +32,6 @@ Convenciones:
   que usa el cliente de la app (`convertir_float32` con
   `word_order="little"`). NOTA: NO usar `DataType.FLOAT32` de pymodbus
   acá: guarda los words al revés (`[MSW, LSW]`).
-- T2 de consigna en 0.0 significa "sin objetivo propio": la segunda zona
-  deriva hacia `T1 * 0.92` (línea de un solo horno). La app nunca escribe
-  0 en T2 (salta el bloque si el setpoint de T2 es None), así que 0.0
-  queda como valor "unset" seguro.
 
 Uso:
 
@@ -67,19 +64,16 @@ from pymodbus.simulator import DataType, SimData, SimDevice
 # --- mapa de registros (espejo de backend/control/modbus.py) ------------------
 
 DIRECCION_BASE_SENSORES = 0
-CANTIDAD_REGS_SENSORES = 16  # 8 magnitudes x 2 regs
+CANTIDAD_REGS_SENSORES = 16  # bloque fijo; 2 y 6 quedan sin uso
 OFFSET_SENSORES: dict[str, int] = {  # offset en regs dentro del bloque
     "temp_horno_1": 0,
-    "temp_horno_2": 2,
     "temp_comb_1": 4,
-    "temp_comb_2": 6,
     "humedad_horno": 8,
     "temp_ambiente": 10,
     "humedad_ambiente": 12,
     "velocidad_cinta": 14,
 }
 DIRECCION_TEMP1_OBJETIVO = 100
-DIRECCION_TEMP2_OBJETIVO = 102
 DIRECCION_VEL_OBJETIVO = 104
 
 # --- codificación float32 (word order "little" del cliente de la app) --------
@@ -102,9 +96,7 @@ def decodificar_float32(regs: list[int]) -> float:
 
 # --- planta (modelo duplicado del driver in-process de la app) ---------------
 
-T2_FACTOR_UN_HORNO = 0.92  # sin objetivo propio, la 2ª zona sigue a la 1ª
-COMB1_FACTOR = 0.78  # cámaras de combustión: rezagadas respecto de T1
-COMB2_FACTOR = 0.70
+COMB1_FACTOR = 0.78  # cámara de combustión: rezagada respecto de T1
 HUMEDAD_HORNO_PCT = 35.0
 TEMP_AMBIENTE_C = 24.0
 HUMEDAD_AMBIENTE_PCT = 55.0
@@ -113,7 +105,7 @@ HUMEDAD_AMBIENTE_PCT = 55.0
 class PlantaHorno:
     """Modelo de primer orden del horno + cinta, register-driven.
 
-    En cada `avanzar()` lee los objetivos de los 6 regs de consigna y da
+    En cada `avanzar()` lee los objetivos de los regs de consigna y da
     un paso de convergencia exponencial hacia ellos (mismo modelo que el
     driver `simulado` in-process de la app, duplicado acá a propósito
     para no acoplar este script a la app). Wall-clock: puede llamarse con
@@ -124,7 +116,6 @@ class PlantaHorno:
         self,
         *,
         t1_inicial: float,
-        t2_inicial: float,
         v_inicial: float,
         tau_t: float,
         tau_v: float,
@@ -136,10 +127,8 @@ class PlantaHorno:
         self._rng = random.Random(semilla)
         # Estado físico inicial.
         self._t1 = t1_inicial
-        self._t2 = t2_inicial
         self._v = v_inicial
         self._comb1 = t1_inicial * COMB1_FACTOR
-        self._comb2 = t1_inicial * COMB2_FACTOR
         self._humedad_horno = HUMEDAD_HORNO_PCT
         self._temp_ambiente = TEMP_AMBIENTE_C
         self._humedad_ambiente = HUMEDAD_AMBIENTE_PCT
@@ -158,20 +147,15 @@ class PlantaHorno:
             if dt <= 0.0:
                 return
             obj_t1 = decodificar_float32(regs_consigna[0:2])
-            obj_t2 = decodificar_float32(regs_consigna[2:4])
             obj_v = decodificar_float32(regs_consigna[4:6])
-            if obj_t2 == 0.0:  # convención: sin objetivo propio
-                obj_t2 = self._t1 * T2_FACTOR_UN_HORNO
-            self._paso(dt, obj_t1, obj_t2, obj_v)
+            self._paso(dt, obj_t1, obj_v)
 
-    def _paso(self, dt: float, obj_t1: float, obj_t2: float, obj_v: float) -> None:
+    def _paso(self, dt: float, obj_t1: float, obj_v: float) -> None:
         """Un paso de integración (requiere el lock tomado)."""
         k_t = 1.0 - math.exp(-dt / self._tau_t)
         k_v = 1.0 - math.exp(-dt / self._tau_v)
         self._t1 = self._converger(self._t1, obj_t1, k_t, self._ruido_t)
-        self._t2 = self._converger(self._t2, obj_t2, k_t, self._ruido_t)
         self._comb1 = self._converger(self._comb1, self._t1 * COMB1_FACTOR, k_t, self._ruido_t)
-        self._comb2 = self._converger(self._comb2, self._t1 * COMB2_FACTOR, k_t, self._ruido_t)
         self._v = max(0.0, self._converger(self._v, obj_v, k_v, self._ruido_v))
         self._humedad_horno = self._deambular(self._humedad_horno, HUMEDAD_HORNO_PCT, 0.05)
         self._temp_ambiente = self._deambular(self._temp_ambiente, TEMP_AMBIENTE_C, 0.05)
@@ -193,9 +177,7 @@ class PlantaHorno:
         with self._lock:
             return {
                 "temp_horno_1": self._t1,
-                "temp_horno_2": self._t2,
                 "temp_comb_1": self._comb1,
-                "temp_comb_2": self._comb2,
                 "humedad_horno": self._humedad_horno,
                 "temp_ambiente": self._temp_ambiente,
                 "humedad_ambiente": self._humedad_ambiente,
@@ -214,7 +196,6 @@ Accion = Callable[
 
 NOMBRE_CONSIGNA = {
     DIRECCION_TEMP1_OBJETIVO: "T1",
-    DIRECCION_TEMP2_OBJETIVO: "T2",
     DIRECCION_VEL_OBJETIVO: "V",
 }
 
@@ -272,14 +253,13 @@ def construir_dispositivo(planta: PlantaHorno, args: argparse.Namespace) -> SimD
     `DataType.REGISTERS` (regs crudos) en ambos: el encoding float32 lo
     hacemos nosotros para matchear el word order del cliente de la app
     (el `DataType.FLOAT32` de pymodbus guarda los words invertidos).
-    Consignas iniciales: T1/V en sus valores de arranque (planta quieta)
-    y T2 en 0.0 (sin objetivo propio).
+    Consignas iniciales: T1/V en sus valores de arranque (planta quieta).
+    El par 102-103 queda en 0.0 porque el bloque se mantiene contiguo.
     """
     valores = planta.valores()
-    regs_sensores: list[int] = []
-    for campo in OFFSET_SENSORES:
-        regs_sensores.extend(codificar_float32(valores[campo]))
-    assert len(regs_sensores) == CANTIDAD_REGS_SENSORES
+    regs_sensores = [0] * CANTIDAD_REGS_SENSORES
+    for campo, offset in OFFSET_SENSORES.items():
+        regs_sensores[offset : offset + 2] = codificar_float32(valores[campo])
     regs_consignas = (
         codificar_float32(args.t1_inicial)
         + codificar_float32(0.0)
@@ -315,7 +295,6 @@ def _parsear_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1", help="bind (default: 127.0.0.1)")
     parser.add_argument("--puerto", type=int, default=5020, help="puerto TCP (default: 5020)")
     parser.add_argument("--t1-inicial", type=float, default=150.0, help="°C (default: 150)")
-    parser.add_argument("--t2-inicial", type=float, default=140.0, help="°C (default: 140)")
     parser.add_argument("--v-inicial", type=float, default=0.15, help="m/s (default: 0.15)")
     parser.add_argument("--tau-t", type=float, default=60.0, help="τ de T en s (default: 60)")
     parser.add_argument("--tau-v", type=float, default=8.0, help="τ de V en s (default: 8)")
@@ -339,7 +318,6 @@ def main() -> None:
     )
     planta = PlantaHorno(
         t1_inicial=args.t1_inicial,
-        t2_inicial=args.t2_inicial,
         v_inicial=args.v_inicial,
         tau_t=args.tau_t,
         tau_v=args.tau_v,
@@ -350,13 +328,12 @@ def main() -> None:
     dispositivo = construir_dispositivo(planta, args)
     logging.info(
         "simulador SCA-400 en %s:%d (unit_id: cualquiera) | sensores @%d (%d regs) "
-        "| consignas @%d/@%d/@%d%s",
+        "| consignas @%d/@%d%s",
         args.host,
         args.puerto,
         DIRECCION_BASE_SENSORES,
         CANTIDAD_REGS_SENSORES,
         DIRECCION_TEMP1_OBJETIVO,
-        DIRECCION_TEMP2_OBJETIVO,
         DIRECCION_VEL_OBJETIVO,
         " [READONLY]" if args.rechazar_setpoints else "",
     )

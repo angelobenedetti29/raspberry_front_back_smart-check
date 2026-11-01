@@ -91,7 +91,7 @@ def decodificar_salida(
         resultados.append(
             ResultadoDeteccion(
                 label=etiqueta(clases[i]),
-                confianza=confianzas[i],
+                confianza=float(confianzas[i]),
                 bbox=(left, top, caja_ancho, caja_alto),
             )
         )
