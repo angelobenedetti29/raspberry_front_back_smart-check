@@ -266,6 +266,7 @@ def _a_setpoint(payload: dict) -> SetpointPropuesto:
         autorizada=bool(payload.get("autorizada", True)),
         fase=str(fase_raw) if fase_raw is not None else None,
         limites=_limites_de_payload(payload),
+        manual_override=bool(payload.get("manual_override", False)),
     )
 
 

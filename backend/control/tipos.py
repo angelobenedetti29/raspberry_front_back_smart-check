@@ -6,6 +6,8 @@ La Pi ENTRADA ejecuta el ControlService, que:
   2. Pollea el último setpoint propuesto/aplicable por el backend
      (`GET /api/v1/lotes/{id}/consigna-propuesta`) y lo aplica al PLC/variador
      con un clamp previo al `delta_temp_max_c` y `delta_vel_max` por ciclo.
+     Un override manual ya aprobado se aplica sin ese Δmáx, sólo con el
+     rango del producto.
 
 En SUPERVISION la propuesta requiere la aprobación del operario; la Pi sólo
 aplica las que llegan con `autorizada=true` (AUTOMATICO, o SUPERVISION ya
@@ -90,7 +92,9 @@ class SetpointPropuesto:
 
     En modo AUTOMATICO llega con `autorizada=True` y la Pi lo aplica sin pedir
     confirmación. En SUPERVISION llega con `autorizada=False` hasta que el
-    operario aprueba; recién entonces la Pi lo aplica. En MANUAL nunca llega.
+    operario aprueba; recién entonces la Pi lo aplica. En MANUAL el MPC no
+    propone, pero puede llegar una consigna manual del operario ya aprobada
+    (`manual_override=True`).
     """
 
     temp_horno_1: float
@@ -103,6 +107,10 @@ class SetpointPropuesto:
     # Límites vivos del lote que manda el backend con la propuesta. Si llegan,
     # el clamp defensivo los usa en vez del snapshot del producto.
     limites: LimitesAplicacion | None = None
+    # True cuando el backend reenvía una consigna manual del operario ya
+    # aprobada; en ese caso no se aplica el Δmáx por ciclo, sólo el rango del
+    # producto.
+    manual_override: bool = False
 
     def a_payload_aplicacion(self) -> dict:
         """Body legacy del POST de aprobación de consigna.

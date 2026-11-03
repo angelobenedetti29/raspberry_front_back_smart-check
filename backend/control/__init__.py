@@ -610,10 +610,10 @@ class ControlService:
     # --- aplicación de consignas ---
 
     def _buscar_y_aplicar_propuesta(self, secret: str, lote_id: str) -> None:
+        # En MANUAL el MPC no propone; el panel puede encolar un override
+        # manual ya aprobado, que sí se aplica (ver guard más abajo).
         with self._lock:
             modo = self._modo
-        if modo is ModoControl.MANUAL:
-            return  # el sistema nunca propone ni aplica en MANUAL
 
         try:
             propuesta = self._cliente.obtener_propuesta(
@@ -624,6 +624,11 @@ class ControlService:
             return
 
         if propuesta is None:
+            return
+
+        # En MANUAL el MPC no propone, pero el panel puede encolar un override
+        # manual ya aprobado; sólo se aplican propuestas autorizadas.
+        if modo is ModoControl.MANUAL and not propuesta.autorizada:
             return
 
         # SUPERVISION pendiente de aprobación: se guarda para la UI y no se
@@ -852,10 +857,16 @@ class ControlService:
             if actual_v is None:
                 actual_v = propuesta.velocidad_cinta
 
-        t1 = self._clampear_temp(
-            propuesta.temp_horno_1, actual_t1, limites
-        )
-        v = self._clampear_vel(propuesta.velocidad_cinta, actual_v, limites)
+        if propuesta.manual_override:
+            # El valor del operario ya se validó contra el rango del producto:
+            # no se escalona por Δmáx.
+            t1 = max(limites.temp_min, min(limites.temp_max, propuesta.temp_horno_1))
+            v = max(limites.vel_min, min(limites.vel_max, propuesta.velocidad_cinta))
+        else:
+            t1 = self._clampear_temp(
+                propuesta.temp_horno_1, actual_t1, limites
+            )
+            v = self._clampear_vel(propuesta.velocidad_cinta, actual_v, limites)
 
         try:
             self._aplicador.aplicar(t1, v)
