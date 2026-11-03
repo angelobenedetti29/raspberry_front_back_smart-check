@@ -153,10 +153,14 @@
         "umbral_marcha_temp_c": 50.0,
         "umbral_marcha_velocidad": 0.01,
         "sensores": {
-            "driver": "simulado"
+            "driver": "modbus_tcp",
+            "host": "127.0.0.1",
+            "port": 5020
         },
         "actuadores": {
-            "driver": "simulado"
+            "driver": "modbus_tcp",
+            "host": "127.0.0.1",
+            "port": 5020
         }
     }
 }
