@@ -497,26 +497,34 @@ class LoteService:
             self._ultimo_envio = time.monotonic()
         self._marcar_ok()
 
-    def _asegurar_lote(self, secret: str, producto_id: str | None) -> str | None:
-        """Attach al lote abierto del sector o abre uno degradado desde la salida."""
+    def _attach_o_abrir(
+        self, secret: str, producto_id: str | None, *, marcar_ok: bool
+    ) -> tuple[Lote | None, bool]:
+        """Attach al lote abierto del sector o abre uno nuevo.
+
+        Devuelve `(lote, creado)`: `creado` distingue el alta propia del attach
+        a un lote preexistente.
+        """
+        # F-R11: antes de abrir uno nuevo, miramos si el sector ya tiene
+        # un lote abierto (puede haber sido iniciado manualmente por el
+        # operador o por otra Pi del sector). Si lo hay, nos attachamos:
+        # abrir un segundo lote en el mismo sector rompería el reporte
+        # de productos y dejaría al horno "fuera de control" si el lote
+        # preexistente fue abierto en modo MANUAL.
         try:
             abierto = self._cliente.lote_abierto(secret)
         except ErrorLotes as exc:
             self._aplicar_error(exc)
-            return None
+            return None, False
         if abierto is not None:
-            # F-R11: ya hay lote en el sector (pudo haber sido abierto
-            # manualmente por el operador desde el frontend). Nos
-            # attachamos y notificamos al control para que opere en modo
-            # monitor (no aplica consignas) si está marcado como manual.
             with self._lock:
                 self._lote = abierto
                 self._ultimo_modo_emitido = self._modo_desde_lote(abierto)
             self._notificar_lote_abierto(secret, abierto)
-            return abierto.id
+            return abierto, False
         if not producto_id:
             self._marcar_error("Producto sin resolver para abrir el lote (ver log)")
-            return None
+            return None, False
         iniciado_manualmente, estado_inicial = self._estado_inicial_para_abrir()
         try:
             lote, _ = self._cliente.abrir_lote(
@@ -530,62 +538,42 @@ class LoteService:
             )
         except ErrorLotes as exc:
             self._aplicar_error(exc)
-            return None
+            return None, False
         with self._lock:
             self._lote = lote
+            self._ultimo_modo_emitido = self._modo_desde_lote(lote)
+        if marcar_ok:
+            self._marcar_ok()
+        # Notificar al ControlService para que se enganche de forma reactiva,
+        # sin esperar al próximo /lotes/abierto. Si el callback falla, lo
+        # absorbemos: el polling de control sigue como respaldo.
         self._notificar_lote_abierto(secret, lote)
-        logger.info("lote: abierto degradado por la salida %s", lote.id)
+        return lote, True
+
+    def _asegurar_lote(self, secret: str, producto_id: str | None) -> str | None:
+        """Attach al lote abierto del sector o abre uno degradado desde la salida."""
+        lote, creado = self._attach_o_abrir(secret, producto_id, marcar_ok=False)
+        if lote is None:
+            return None
+        if creado:
+            logger.info("lote: abierto degradado por la salida %s", lote.id)
         return lote.id
 
     def _abrir_lote(self, producto_id: str) -> None:
         secret = self._secret
         if not secret:
             return
-        # F-R11: antes de abrir uno nuevo, miramos si el sector ya tiene
-        # un lote abierto (puede haber sido iniciado manualmente por el
-        # operador o por otra Pi del sector). Si lo hay, nos attachamos:
-        # abrir un segundo lote en el mismo sector rompería el reporte
-        # de productos y dejaría al horno "fuera de control" si el lote
-        # preexistente fue abierto en modo MANUAL.
-        try:
-            abierto = self._cliente.lote_abierto(secret)
-        except ErrorLotes as exc:
-            self._aplicar_error(exc)
+        lote, creado = self._attach_o_abrir(secret, producto_id, marcar_ok=True)
+        if lote is None:
             return
-        if abierto is not None:
-            with self._lock:
-                self._lote = abierto
-                self._ultimo_modo_emitido = self._modo_desde_lote(abierto)
+        if creado:
+            logger.info("lote: abierto %s", lote.id)
+        else:
             logger.info(
                 "lote: attach a lote preexistente %s (iniciado_manualmente=%s)",
-                abierto.id,
-                getattr(abierto, "iniciado_manualmente", False),
+                lote.id,
+                getattr(lote, "iniciado_manualmente", False),
             )
-            self._notificar_lote_abierto(secret, abierto)
-            return
-        iniciado_manualmente, estado_inicial = self._estado_inicial_para_abrir()
-        try:
-            lote, creado = self._cliente.abrir_lote(
-                secret,
-                idempotency_key=str(uuid.uuid4()),
-                producto_id=producto_id,
-                momento=ahora_iso_local(),
-                modo=self._modo_para_abrir(),
-                iniciado_manualmente=iniciado_manualmente,
-                estado_inicial=estado_inicial,
-            )
-        except ErrorLotes as exc:
-            self._aplicar_error(exc)
-            return
-        with self._lock:
-            self._lote = lote
-            self._ultimo_modo_emitido = self._modo_desde_lote(lote)
-        self._marcar_ok()
-        logger.info("lote: abierto %s (creado=%s)", lote.id, creado)
-        # Notificar al ControlService para que se enganche de forma reactiva,
-        # sin esperar al próximo /lotes/abierto. Si el callback falla, lo
-        # absorbemos: el polling de control sigue como respaldo.
-        self._notificar_lote_abierto(secret, lote)
 
     def _modo_para_abrir(self) -> str | None:
         """Modo elegido en la UI de la Pi para sembrar el lote nuevo."""
