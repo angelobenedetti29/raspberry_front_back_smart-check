@@ -52,6 +52,8 @@ class _CampoEsquema:
     maximo: float | None = None
     decimales: int = 0
     paso: float = 1.0
+    visible_si: tuple[str, object] | None = None
+    defecto: object = _FALTA
 
 
 # --- Esquema del subconjunto operativo aprobado ---------------------------------
@@ -510,6 +512,50 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Ruta que la Pi usa para sincronizar el modo del lote con el "
         'backend (ej.: "/api/v1/lotes/{id}/modo").',
     ),
+    _CampoEsquema(
+        "control.sensores.host",
+        "Control",
+        "Host Modbus TCP (sensores)",
+        TipoCampo.TEXTO,
+        "Host del PLC de sensores (ej. 127.0.0.1). Sólo se usa con driver "
+        "modbus_tcp.",
+        defecto="127.0.0.1",
+        visible_si=(_CLAVE_DRIVER_SENSORES, "modbus_tcp"),
+    ),
+    _CampoEsquema(
+        "control.sensores.port",
+        "Control",
+        "Puerto Modbus TCP (sensores)",
+        TipoCampo.ENTERO,
+        "Puerto TCP del PLC de sensores (default 5020). Sólo se usa con "
+        "driver modbus_tcp.",
+        minimo=1,
+        maximo=65535,
+        defecto=5020,
+        visible_si=(_CLAVE_DRIVER_SENSORES, "modbus_tcp"),
+    ),
+    _CampoEsquema(
+        "control.actuadores.host",
+        "Control",
+        "Host Modbus TCP (actuadores)",
+        TipoCampo.TEXTO,
+        "Host del PLC de actuadores (ej. 127.0.0.1). Sólo se usa con driver "
+        "modbus_tcp.",
+        defecto="127.0.0.1",
+        visible_si=(_CLAVE_DRIVER_ACTUADORES, "modbus_tcp"),
+    ),
+    _CampoEsquema(
+        "control.actuadores.port",
+        "Control",
+        "Puerto Modbus TCP (actuadores)",
+        TipoCampo.ENTERO,
+        "Puerto TCP del PLC de actuadores (default 5020). Sólo se usa con "
+        "driver modbus_tcp.",
+        minimo=1,
+        maximo=65535,
+        defecto=5020,
+        visible_si=(_CLAVE_DRIVER_ACTUADORES, "modbus_tcp"),
+    ),
 )
 
 
@@ -623,11 +669,14 @@ class AdaptadorConfig:
         """Arma un campo de la UI, con valor por defecto si falta en el JSON."""
         opciones = self._opciones(esquema.clave, cruda)
         crudo = _resolver(cruda, esquema.clave)
-        valor = (
-            _defecto(esquema.tipo, opciones)
-            if crudo is _FALTA
-            else _convertir(crudo, esquema.tipo)
-        )
+        if crudo is _FALTA:
+            valor = (
+                esquema.defecto
+                if esquema.defecto is not _FALTA
+                else _defecto(esquema.tipo, opciones)
+            )
+        else:
+            valor = _convertir(crudo, esquema.tipo)
         return CampoConfigUI(
             clave=esquema.clave,
             grupo=esquema.grupo,
@@ -640,6 +689,7 @@ class AdaptadorConfig:
             maximo=esquema.maximo,
             decimales=esquema.decimales,
             paso=esquema.paso,
+            visible_si=esquema.visible_si,
         )
 
     @staticmethod

@@ -47,6 +47,9 @@ class CampoConfigUI:
     maximo: float | None = None
     decimales: int = 0
     paso: float = 1.0
+    # Condición `(clave, valor)` que otro campo debe cumplir para mostrarse;
+    # None = siempre visible.
+    visible_si: tuple[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

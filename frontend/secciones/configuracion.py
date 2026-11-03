@@ -102,6 +102,7 @@ class Configuracion(SeccionBase):
         super().__init__(ctx, parent)
         self._campos: dict[str, CampoConfigUI] = {}
         self._editores: dict[str, QWidget] = {}
+        self._celdas: dict[str, QWidget] = {}
         self._sucio = False
         self._construir()
         self.setStyleSheet(self._hoja())
@@ -288,6 +289,7 @@ class Configuracion(SeccionBase):
         except Exception as exc:  # el backend no debe romper la sección
             self._campos = {}
             self._editores = {}
+            self._celdas = {}
             self._limpiar_contenedor()
             self._sucio = False
             self._actualizar_barra()
@@ -308,11 +310,13 @@ class Configuracion(SeccionBase):
         """Arma una tarjeta por grupo, en el orden de aparición de los campos."""
         self._limpiar_contenedor()
         self._editores = {}
+        self._celdas = {}
 
         grupos = tuple(dict.fromkeys(campo.grupo for campo in campos))
         for grupo in grupos:
             del_grupo = tuple(campo for campo in campos if campo.grupo == grupo)
             self._layout_campos.addWidget(self._tarjeta(grupo, del_grupo))
+        self._aplicar_condiciones()
 
     def _tarjeta(
         self, grupo: str, campos: tuple[CampoConfigUI, ...]
@@ -364,6 +368,7 @@ class Configuracion(SeccionBase):
             ayuda.setWordWrap(True)
             layout.addWidget(ayuda)
 
+        self._celdas[campo.clave] = celda
         return celda
 
     def _editor(self, campo: CampoConfigUI) -> QWidget:
@@ -419,6 +424,7 @@ class Configuracion(SeccionBase):
         if indice >= 0:
             editor.setCurrentIndex(indice)
         editor.currentIndexChanged.connect(self._marcar_sucio)
+        editor.currentIndexChanged.connect(self._aplicar_condiciones)
         return editor
 
     @staticmethod
@@ -464,10 +470,26 @@ class Configuracion(SeccionBase):
             return editor.currentData()  # type: ignore[attr-defined]
         return editor.value()  # type: ignore[attr-defined]
 
+    def _aplicar_condiciones(self, *_args: object) -> None:
+        """Muestra u oculta cada celda según la condición de su campo."""
+        for clave, campo in self._campos.items():
+            if campo.visible_si is None:
+                continue
+            clave_cond, valor_cond = campo.visible_si
+            cond = self._campos.get(clave_cond)
+            visible = cond is None or self._leer_valor(cond) == valor_cond
+            celda = self._celdas.get(clave)
+            if celda is not None:
+                celda.setVisible(visible)
+
     def _guardar(self) -> None:
         """Manda los valores al backend y muestra el resultado."""
         valores = {
-            clave: self._leer_valor(campo) for clave, campo in self._campos.items()
+            clave: self._leer_valor(campo)
+            for clave, campo in self._campos.items()
+            # Oculto por su condición: no se envía, para no crear claves
+            # que el driver activo no usa (ej. host/port con "simulado").
+            if (celda := self._celdas.get(clave)) is None or not celda.isHidden()
         }
         try:
             resultado = self.ctx.controlador_config.guardar(valores)
