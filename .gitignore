@@ -40,6 +40,9 @@ streaming/data/*
 # Base SQLite de eventos y su rotación (runtime)
 data/*.db*
 
+# Audit log de control y su rotación (runtime)
+data/control_audit.jsonl*
+
 # Grafo local de graphify y config de OpenCode (solo local)
 graphify-out/
 .opencode/
