@@ -3,8 +3,8 @@
 Muestra el estado actual del horno (T1, velocidad de cinta), el setpoint
 objetivo con tolerancia, el modo de control seleccionado, una propuesta
 pendiente de aprobación del operario y la cola de los últimos setpoints
-aplicados. Consume `ctx.controlador_control` (Protocol + dataclasses UI);
-no importa `backend.*`.
+aplicados. Consume `ctx.controlador_control` y `ctx.controlador_lotes`
+(Protocols + dataclasses UI); no importa `backend.*`.
 """
 
 from __future__ import annotations

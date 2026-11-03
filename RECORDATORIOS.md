@@ -19,7 +19,6 @@ productos del backend (ver `backend/etiquetas.py`).
 | Borrar `_ALIAS_TRANSITORIOS` (mapea `tcq`/`tcok`/`tostada quemada`/`tostadas ok` → `tostada_comun`) y sus casos en los tests | `backend/etiquetas.py` + `tests/backend/test_etiquetas.py` | Al deployar el modelo reentrenado |
 | Actualizar `class_thresholds` a claves compuestas (hoy quedaron `tcq`/`tcok`/`chaq`/`chaok`/`chacr`, que matchean el modelo actual; la clave es la etiqueta compuesta completa, en minúscula) | `config.json` → `models.catalog` | Al deployar el modelo reentrenado |
 | Los eventos viejos de `data/eventos.db` tienen labels crudos (`TCQ`, `Tostada Quemada`): no hay migración | `data/eventos.db` | Sólo si se necesitan métricas históricas unificadas |
-| El docstring del módulo menciona sólo `controlador_control` (ahora también consume `controlador_lotes`) | `frontend/secciones/horno_cinta.py` (~6) | Al tocar esa sección por otro motivo |
 
 ## 2. Docs desactualizados
 
@@ -33,8 +32,8 @@ productos del backend (ver `backend/etiquetas.py`).
 |-----|-------|--------|
 | Verificar contra el PLC real el mapa de registros (direcciones base-0, offsets, `unit_id`, read-back y las direcciones 100/104); hoy el único ejercicio es contra `tools/simulador_modbus.py` | `backend/control/modbus.py` (~41-60) | Al conectar el PLC |
 | Los defaults de `_limites_del_producto` (`delta_temp_max_c=10.0`, `delta_vel_max=0.05`, temp 0-500, vel 0-5) se usan si el `Producto` del Go no trae límites; confirmar que coincidan con los productos reales | `backend/control/__init__.py` (~70-88) | Cuando se carguen los productos reales |
-| Docstrings de `modbus.py` ("con el default `stub` el módulo entero no se importa en runtime") y del factory de `sensores.py` ("seguro de llamar aunque `pymodbus` no esté instalado") no se cumplen: `sensores.py` importa `backend.control.modbus` a nivel de módulo y ese importa `pymodbus` arriba ⇒ en modo `stub` igual hace falta `pymodbus` (hoy no rompe porque está en `requirements.txt`) | `backend/control/sensores.py` (~19-27, ~104-108), `backend/control/modbus.py` (~24-25, ~34) | Si se quiere que el modo stub corra sin `pymodbus` (mover el import dentro de las ramas del factory), o al tocar estos módulos por el driver real |
-| Docstring de `LectorSensores` ("el stub devuelve todo None: la Pi publica un heartbeat con los campos en null") vs comportamiento: `_publicar_telemetria` filtra la lectura todo-None con `_lectura_tiene_datos` y no publica telemetría del horno en modo stub | `backend/control/sensores.py` (~33-39) vs `backend/control/__init__.py` (~570-607) | Al definir qué telemetría de horno espera el backend Go cuando no hay datos (heartbeat explícito o silencio) |
+| Modo `stub` todavía requiere `pymodbus`: `sensores.py` importa `backend.control.modbus` a nivel de módulo y ese importa `pymodbus`. Los docstrings ya lo aclaran; queda como mejora opcional mover el import dentro de las ramas `modbus_*` | `backend/control/sensores.py`, `backend/control/modbus.py` | Si se quiere que el modo stub corra sin `pymodbus` |
+| Definir el contrato de telemetría cuando la lectura está toda en `None`: hoy `_publicar_telemetria` filtra la lectura vacía y no publica (silencio); confirmar si el backend Go espera un heartbeat explícito | `backend/control/__init__.py` (`_lectura_tiene_datos`) | Al definir qué telemetría de horno espera el backend Go sin datos |
 
 ## 4. Backend Go
 
@@ -54,8 +53,6 @@ productos del backend (ver `backend/etiquetas.py`).
 
 | Qué | Dónde | Cuándo |
 |-----|-------|--------|
-| `.gitignore` ya cubre `data/*.db*`, `data/control_audit.jsonl*` y `multimedia/videos/t3.mp4`, pero no `data/dlq.jsonl*` ni `multimedia/output/` (salida de `validar.py`); además conserva `streaming/data/*`, ruta que ya no existe | `.gitignore` (~36-47) | Antes del próximo commit con datos de runtime |
-| Piso de `pymodbus`: `requirements.txt` declara `>=3.11,<4`, pero el simulador usa `pymodbus.simulator` y necesita `>=3.15`. Pip resuelve la última 3.x, pero una instalación con 3.11/3.12 deja el simulador sin arrancar | `requirements.txt`, `tools/simulador_modbus.py` | Si se fija la versión para producción o se instala en un entorno con 3.11/3.12 |
 | `multimedia/videos/t3.mp4` no se versiona porque supera el límite de GitHub: una copia o un clon nuevo no lo tiene. Usar `t1.mp4`/`t2.mp4` o copiarlo a mano | `multimedia/videos/`, `.gitignore` | Al preparar una instancia nueva o una demo |
 | `yolo26n-coco` referencia `yolo26n.onnx`, que no existe en `models/` (elegirlo falla por archivo ausente); `yolo11n.onnx` existe pero no tiene entrada de catálogo | `config.json` (~51-54), `models/` | Al elegir ese modelo desde la UI, o al ordenar `models/` |
 | No hay config local de lint/format (`pyproject.toml`/`ruff.toml`): la CI pasa `ruff` (select E,F,I,B,UP,SIM) y `black` inline | `.github/workflows/ci.yml` | Cuando se quiera lint local |
