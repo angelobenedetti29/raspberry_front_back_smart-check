@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador SCA-400</title>
+  <style>
+    :root {
+      --bg: #101418;
+      --panel: #171C22;
+      --panel_alto: #1F262E;
+      --borde: #2A323B;
+      --texto: #ECEFF3;
+      --texto_muted: #94A1AE;
+      --accent: #3DD6D0;
+      --accent_soft: #123B3A;
+      --ok: #3FE07A;
+      --alerta: #FFB020;
+      --error: #FF5A5F;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--texto);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+
+    header .container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--borde);
+      padding-bottom: 1rem;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--texto);
+    }
+
+    .title p {
+      margin: 0;
+      color: var(--texto_muted);
+      font-size: 0.875rem;
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      background: var(--panel);
+      border: 1px solid var(--borde);
+      padding: 0.375rem 0.75rem;
+      border-radius: 0.375rem;
+      font-size: 0.875rem;
+      color: var(--texto);
+    }
+
+    .dot {
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: var(--texto_muted);
+    }
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--alerta); }
+
+    .note {
+      width: 100%;
+      font-size: 0.75rem;
+      color: var(--texto_muted);
+      margin-top: 0.25rem;
+    }
+
+    main { padding-top: 1rem; }
+
+    .live-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--borde);
+      border-radius: 0.5rem;
+      padding: 1rem;
+    }
+
+    .card.accent {
+      background: var(--accent_soft);
+      border-color: var(--accent);
+    }
+
+    .card-label {
+      margin: 0 0 0.25rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--texto_muted);
+    }
+
+    .card-value {
+      margin: 0;
+      font-size: 1.75rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--texto);
+    }
+
+    .card.accent .card-value { color: var(--accent); }
+    .unit { color: var(--texto_muted); font-size: 0.875rem; font-weight: 400; }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .chart-card {
+      background: var(--panel);
+      border: 1px solid var(--borde);
+      border-radius: 0.5rem;
+      padding: 1rem;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .chart-title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--texto);
+    }
+
+    .legend {
+      display: flex;
+      gap: 0.75rem;
+      font-size: 0.75rem;
+      color: var(--texto_muted);
+    }
+
+    .legend span { display: inline-flex; align-items: center; gap: 0.25rem; }
+    .line { width: 1rem; height: 2px; display: inline-block; }
+    .line.accent { background: var(--accent); }
+    .line.setpoint { background: var(--texto_muted); border-top: 1px dashed var(--texto_muted); height: 0; }
+
+    canvas {
+      width: 100%;
+      height: 200px;
+      display: block;
+      background: transparent;
+    }
+
+    .placeholder {
+      text-align: center;
+      color: var(--texto_muted);
+      font-size: 0.875rem;
+      padding: 3rem 0;
+    }
+
+    .panels-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--borde);
+      border-radius: 0.5rem;
+      padding: 1rem;
+    }
+
+    .panel h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--texto);
+      border-bottom: 1px solid var(--borde);
+      padding-bottom: 0.5rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 100px;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .form-row.full {
+      grid-template-columns: 1fr;
+    }
+
+    label {
+      color: var(--texto_muted);
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+
+    input[type="number"],
+    input[type="text"] {
+      width: 100%;
+      background: var(--panel_alto);
+      color: var(--texto);
+      border: 1px solid var(--borde);
+      border-radius: 0.25rem;
+      padding: 0.375rem 0.5rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      margin: 0.5rem 0 0;
+    }
+
+    input:focus, button:focus, [role="switch"]:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .current-value {
+      font-size: 0.875rem;
+      color: var(--texto_muted);
+      margin-bottom: 0.75rem;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    button {
+      background: var(--accent_soft);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0.25rem;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 0.875rem;
+    }
+
+    button:hover { background: var(--panel_alto); }
+    button:active { transform: translateY(1px); }
+
+    .status-msg {
+      font-size: 0.75rem;
+      color: var(--texto_muted);
+      margin-left: auto;
+      align-self: center;
+    }
+
+    .hint {
+      font-size: 0.75rem;
+      color: var(--texto_muted);
+      margin-top: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    [role="switch"] {
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .switch-track {
+      position: relative;
+      width: 2.75rem;
+      height: 1.5rem;
+      background: var(--panel_alto);
+      border: 1px solid var(--borde);
+      border-radius: 999px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+
+    .switch-thumb {
+      position: absolute;
+      top: 0.125rem;
+      left: 0.125rem;
+      width: 1.125rem;
+      height: 1.125rem;
+      background: var(--texto_muted);
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+
+    [aria-checked="true"] .switch-track {
+      background: var(--accent_soft);
+      border-color: var(--accent);
+    }
+
+    [aria-checked="true"] .switch-thumb {
+      transform: translateX(1.25rem);
+      background: var(--accent);
+    }
+
+    .log-panel { grid-column: 1 / -1; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--borde);
+    }
+
+    th {
+      color: var(--texto_muted);
+      font-weight: 500;
+    }
+
+    td.numeric { font-variant-numeric: tabular-nums; }
+    .ok { color: var(--ok); font-weight: 500; }
+    .rejected { color: var(--error); font-weight: 500; }
+
+    footer {
+      border-top: 1px solid var(--borde);
+      margin-top: 2rem;
+      padding: 1rem 0 4rem;
+      color: var(--texto_muted);
+      font-size: 0.875rem;
+    }
+
+    footer p { margin: 0.25rem 0; }
+    .disclaimer { color: var(--alerta); }
+
+    .banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--error);
+      color: #fff;
+      text-align: center;
+      padding: 0.75rem;
+      font-weight: 500;
+      z-index: 100;
+    }
+
+    .hidden { display: none; }
+
+    @media (max-width: 640px) {
+      header .container { flex-direction: column; align-items: flex-start; }
+      .form-row { grid-template-columns: 1fr; }
+      .chart-card { min-width: auto; }
+      .log-panel { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div id="banner" class="banner hidden" role="status" aria-live="polite">Sin conexión con el simulador</div>
+
+  <header>
+    <div class="container">
+      <div class="title">
+        <h1>Simulador SCA-400</h1>
+        <p>PLC falso Modbus TCP · panel de pruebas</p>
+      </div>
+      <div class="badges">
+        <span class="badge" id="badge-modbus">—</span>
+        <span class="badge" id="badge-conn"><span class="dot" id="conn-dot"></span><span id="conn-text">Esperando…</span></span>
+      </div>
+      <p class="note">Herramienta de pruebas sin autenticación</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="live-grid" aria-label="Lecturas en vivo">
+      <article class="card accent">
+        <p class="card-label">T1 horno</p>
+        <p class="card-value"><span id="live-t1">—</span> <span class="unit">°C</span></p>
+      </article>
+      <article class="card">
+        <p class="card-label">Cámara combustión</p>
+        <p class="card-value"><span id="live-comb">—</span> <span class="unit">°C</span></p>
+      </article>
+      <article class="card accent">
+        <p class="card-label">Velocidad cinta</p>
+        <p class="card-value"><span id="live-v">—</span> <span class="unit">m/s</span></p>
+      </article>
+      <article class="card">
+        <p class="card-label">Humedad horno</p>
+        <p class="card-value"><span id="live-hh">—</span> <span class="unit">%</span></p>
+      </article>
+      <article class="card">
+        <p class="card-label">Temp. ambiente</p>
+        <p class="card-value"><span id="live-ta">—</span> <span class="unit">°C</span></p>
+      </article>
+      <article class="card">
+        <p class="card-label">Humedad ambiente</p>
+        <p class="card-value"><span id="live-ha">—</span> <span class="unit">%</span></p>
+      </article>
+    </section>
+
+    <section class="charts-grid" aria-label="Tendencias">
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">T1 vs consigna T1</h3>
+          <div class="legend"><span><span class="line accent"></span>T1</span><span><span class="line setpoint"></span>Consigna</span></div>
+        </div>
+        <canvas id="chart-t1" aria-label="Gráfica de temperatura T1"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3 class="chart-title">Velocidad vs consigna V</h3>
+          <div class="legend"><span><span class="line accent"></span>V</span><span><span class="line setpoint"></span>Consigna</span></div>
+        </div>
+        <canvas id="chart-v" aria-label="Gráfica de velocidad de cinta"></canvas>
+      </div>
+    </section>
+
+    <div class="panels-grid">
+      <section class="panel" aria-labelledby="titulo-consignas">
+        <h2 id="titulo-consignas">Consignas</h2>
+        <p class="current-value">Planta: T1 <strong id="current-t1">—</strong> °C · V <strong id="current-v">—</strong> m/s</p>
+        <div class="form-row full">
+          <label for="input-t1">T1 objetivo (°C)</label>
+          <input type="range" id="slider-t1" min="0" max="500" step="1" aria-label="Deslizador T1">
+          <input type="number" id="input-t1" min="0" max="500" step="1">
+        </div>
+        <div class="form-row full">
+          <label for="input-v">Velocidad objetivo (m/s)</label>
+          <input type="range" id="slider-v" min="0" max="5" step="0.01" aria-label="Deslizador velocidad">
+          <input type="number" id="input-v" min="0" max="5" step="0.01">
+        </div>
+        <div class="button-row">
+          <button id="btn-consignas" type="button">Aplicar consignas</button>
+          <span class="status-msg" id="status-consignas"></span>
+        </div>
+        <p class="hint">Si la app está conectada, sus escrituras Modbus pisan estas consignas; el log muestra el origen.</p>
+      </section>
+
+      <section class="panel" aria-labelledby="titulo-dinamica">
+        <h2 id="titulo-dinamica">Dinámica de la planta</h2>
+        <div class="form-row">
+          <label for="tau_t">τ temperatura (s)</label>
+          <input type="number" id="tau_t" step="0.1">
+        </div>
+        <div class="form-row">
+          <label for="tau_v">τ velocidad (s)</label>
+          <input type="number" id="tau_v" step="0.1">
+        </div>
+        <div class="form-row">
+          <label for="ruido_t">Ruido T (°C)</label>
+          <input type="number" id="ruido_t" step="0.01">
+        </div>
+        <div class="form-row">
+          <label for="ruido_v">Ruido V (m/s)</label>
+          <input type="number" id="ruido_v" step="0.001">
+        </div>
+        <div class="form-row">
+          <label for="comb1_factor">Factor combustión (0–1.5)</label>
+          <input type="number" id="comb1_factor" min="0" max="1.5" step="0.01">
+        </div>
+        <div class="button-row">
+          <button id="btn-dinamica" type="button">Aplicar parámetros</button>
+          <span class="status-msg" id="status-dinamica"></span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="titulo-ambiente">
+        <h2 id="titulo-ambiente">Ambiente</h2>
+        <div class="form-row">
+          <label for="env-humedad_horno">Humedad horno (%)</label>
+          <input type="number" id="env-humedad_horno" step="0.1">
+        </div>
+        <div class="form-row">
+          <label for="env-temp_ambiente">Temp. ambiente (°C)</label>
+          <input type="number" id="env-temp_ambiente" step="0.1">
+        </div>
+        <div class="form-row">
+          <label for="env-humedad_ambiente">Humedad ambiente (%)</label>
+          <input type="number" id="env-humedad_ambiente" step="0.1">
+        </div>
+        <div class="button-row">
+          <button id="btn-ambiente" type="button">Aplicar parámetros</button>
+          <span class="status-msg" id="status-ambiente"></span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="titulo-reiniciar">
+        <h2 id="titulo-reiniciar">Reiniciar planta</h2>
+        <div class="form-row">
+          <label for="t1_inicial">T1 inicial (°C)</label>
+          <input type="number" id="t1_inicial" step="1">
+        </div>
+        <div class="form-row">
+          <label for="v_inicial">V inicial (m/s)</label>
+          <input type="number" id="v_inicial" step="0.01">
+        </div>
+        <div class="form-row">
+          <label for="semilla">Semilla (vacío = aleatoria)</label>
+          <input type="number" id="semilla" step="1">
+        </div>
+        <div class="button-row">
+          <button id="btn-reiniciar" type="button">Reiniciar planta</button>
+          <span class="status-msg" id="status-reiniciar"></span>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="titulo-rechazar">
+        <h2 id="titulo-rechazar">Rechazar setpoints Modbus</h2>
+        <div class="switch-row">
+          <span id="switch-label">Activar rechazo</span>
+          <button id="switch-rechazar" type="button" role="switch" aria-checked="false" aria-labelledby="switch-label">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+          </button>
+        </div>
+        <p class="hint">Simula un bloque readonly: las escrituras de consigna por Modbus fallan y la app debe detectarlo en el read-back. No afecta a las consignas aplicadas desde este panel.</p>
+      </section>
+
+      <section class="panel log-panel" aria-labelledby="titulo-log">
+        <h2 id="titulo-log">Últimas escrituras de consigna</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Hora</th>
+                <th scope="col">Origen</th>
+                <th scope="col">Consigna</th>
+                <th scope="col">Valor</th>
+                <th scope="col">Estado</th>
+              </tr>
+            </thead>
+            <tbody id="log-body"><tr><td colspan="5" class="placeholder">Esperando datos…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="container">
+    <p><strong>Endpoints usados:</strong> GET /api/estado · POST /api/consignas · POST /api/parametros · POST /api/reiniciar · POST /api/rechazar</p>
+    <p class="disclaimer">Aviso: este panel no tiene autenticación. Usarlo solo en entornos de prueba controlados.</p>
+  </footer>
+
+  <script>
+    // Constantes de polling y gráficas
+    const POLL_MS = 500;
+    const TIMEOUT_MS = 1000;
+    const WINDOW_MS = 5 * 60 * 1000;
+    const MAX_SAMPLES = 600;
+
+    // Formateadores numéricos para la UI
+    const fmtTemp = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const fmtVel = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtPct = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    const fmtNum = new Intl.NumberFormat('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+    // Referencias a elementos de lecturas en vivo
+    const live = {
+      t1: document.getElementById('live-t1'),
+      comb: document.getElementById('live-comb'),
+      v: document.getElementById('live-v'),
+      hh: document.getElementById('live-hh'),
+      ta: document.getElementById('live-ta'),
+      ha: document.getElementById('live-ha')
+    };
+
+    const badgeModbus = document.getElementById('badge-modbus');
+    const connDot = document.getElementById('conn-dot');
+    const connText = document.getElementById('conn-text');
+    const banner = document.getElementById('banner');
+
+    // Consignas
+    const inputT1 = document.getElementById('input-t1');
+    const sliderT1 = document.getElementById('slider-t1');
+    const inputV = document.getElementById('input-v');
+    const sliderV = document.getElementById('slider-v');
+    const currentT1 = document.getElementById('current-t1');
+    const currentV = document.getElementById('current-v');
+    const btnConsignas = document.getElementById('btn-consignas');
+    const statusConsignas = document.getElementById('status-consignas');
+
+    // Parámetros dinámicos
+    const dinamicaIds = ['tau_t', 'tau_v', 'ruido_t', 'ruido_v', 'comb1_factor'];
+    const btnDinamica = document.getElementById('btn-dinamica');
+    const statusDinamica = document.getElementById('status-dinamica');
+
+    // Ambiente
+    const ambienteMap = {
+      'env-humedad_horno': 'humedad_horno',
+      'env-temp_ambiente': 'temp_ambiente',
+      'env-humedad_ambiente': 'humedad_ambiente'
+    };
+    const btnAmbiente = document.getElementById('btn-ambiente');
+    const statusAmbiente = document.getElementById('status-ambiente');
+
+    // Reinicio
+    const inputT1Ini = document.getElementById('t1_inicial');
+    const inputVIni = document.getElementById('v_inicial');
+    const inputSemilla = document.getElementById('semilla');
+    const btnReiniciar = document.getElementById('btn-reiniciar');
+    const statusReiniciar = document.getElementById('status-reiniciar');
+
+    // Rechazo de setpoints
+    const switchRechazar = document.getElementById('switch-rechazar');
+
+    // Log
+    const logBody = document.getElementById('log-body');
+
+    // Canvases
+    const chartT1 = document.getElementById('chart-t1');
+    const chartV = document.getElementById('chart-v');
+
+    // Series temporales
+    const series = {
+      t1: [],
+      spT1: [],
+      v: [],
+      spV: []
+    };
+
+    let lastState = null;
+    let connected = false;
+
+    // Utilidades
+    function setStatus(el, text) {
+      if (!el) return;
+      el.textContent = text;
+      if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 2500);
+    }
+
+    function showBanner() {
+      banner.classList.remove('hidden');
+    }
+
+    function hideBanner() {
+      banner.classList.add('hidden');
+    }
+
+    function safeNumber(value) {
+      if (value == null) return null;
+      if (String(value).trim() === '') return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function setDirty(...els) {
+      els.forEach(el => { if (el) el.dataset.dirty = '1'; });
+    }
+
+    function clearDirty(...els) {
+      els.forEach(el => { if (el) delete el.dataset.dirty; });
+    }
+
+    // Sincroniza slider <-> input numérico y marca ambos como dirty al editar
+    function bindSlider(input, slider) {
+      input.addEventListener('input', () => { slider.value = input.value; setDirty(input, slider); });
+      slider.addEventListener('input', () => { input.value = slider.value; setDirty(input, slider); });
+    }
+    bindSlider(inputT1, sliderT1);
+    bindSlider(inputV, sliderV);
+
+    // Marca dirty a los inputs de parámetros y reinicio
+    dinamicaIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', () => setDirty(el));
+    });
+    Object.keys(ambienteMap).forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', () => setDirty(el));
+    });
+    [inputT1Ini, inputVIni, inputSemilla].forEach(el => {
+      if (el) el.addEventListener('input', () => setDirty(el));
+    });
+
+    // Actualiza lecturas en vivo
+    function renderLive(s) {
+      live.t1.textContent = fmtTemp.format(s.temp_horno_1 ?? 0);
+      live.comb.textContent = fmtTemp.format(s.temp_comb_1 ?? 0);
+      live.v.textContent = fmtVel.format(s.velocidad_cinta ?? 0);
+      live.hh.textContent = fmtPct.format(s.humedad_horno ?? 0);
+      live.ta.textContent = fmtTemp.format(s.temp_ambiente ?? 0);
+      live.ha.textContent = fmtPct.format(s.humedad_ambiente ?? 0);
+    }
+
+    // Actualiza badges de conexión
+    function renderConnection(data) {
+      const mb = data.modbus || {};
+      badgeModbus.textContent = `${mb.host || '127.0.0.1'}:${mb.puerto || 502}`;
+
+      const ultimo = data.ultimo_request;
+      if (ultimo == null) {
+        connDot.className = 'dot';
+        connText.textContent = 'Sin datos';
+        return;
+      }
+      const ahora = data.ahora ?? (Date.now() / 1000);
+      const age = ahora - ultimo;
+      connDot.classList.remove('ok', 'warn');
+      if (age < 5) {
+        connDot.classList.add('ok');
+        connText.textContent = 'En línea';
+      } else if (age < 30) {
+        connDot.classList.add('warn');
+        connText.textContent = 'Lento';
+      } else {
+        connText.textContent = 'Sin datos';
+      }
+    }
+
+    // Actualiza inputs de consignas respetando el dirty tracking
+    function renderSetpoints(consignas) {
+      currentT1.textContent = fmtTemp.format(consignas.t1 ?? 0);
+      currentV.textContent = fmtVel.format(consignas.v ?? 0);
+      if (inputT1.dataset.dirty !== '1' && sliderT1.dataset.dirty !== '1') {
+        inputT1.value = consignas.t1 ?? 0;
+        sliderT1.value = consignas.t1 ?? 0;
+      }
+      if (inputV.dataset.dirty !== '1' && sliderV.dataset.dirty !== '1') {
+        inputV.value = consignas.v ?? 0;
+        sliderV.value = consignas.v ?? 0;
+      }
+    }
+
+    // Actualiza parámetros respetando el dirty tracking
+    function renderParametros(params) {
+      dinamicaIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.dataset.dirty !== '1') el.value = params[id] ?? '';
+      });
+      Object.entries(ambienteMap).forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el && el.dataset.dirty !== '1') el.value = params[key] ?? '';
+      });
+      if (inputT1Ini.dataset.dirty !== '1') inputT1Ini.value = params.t1_inicial ?? '';
+      if (inputVIni.dataset.dirty !== '1') inputVIni.value = params.v_inicial ?? '';
+      if (inputSemilla.dataset.dirty !== '1') inputSemilla.value = params.semilla ?? '';
+    }
+
+    // Actualiza switch de rechazo
+    function renderRechazar(value) {
+      switchRechazar.setAttribute('aria-checked', String(Boolean(value)));
+    }
+
+    // Renderiza la tabla de log
+    function renderLog(log) {
+      const entries = (log || []).slice().reverse().slice(0, 20);
+      if (entries.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.className = 'placeholder';
+        td.textContent = 'Esperando datos…';
+        tr.appendChild(td);
+        logBody.replaceChildren(tr);
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      entries.forEach(entry => {
+        const tr = document.createElement('tr');
+        const hora = document.createElement('td');
+        hora.textContent = new Date((entry.ts || 0) * 1000).toLocaleTimeString('es-AR');
+        const origen = document.createElement('td');
+        origen.textContent = String(entry.origen || '').toUpperCase();
+        const nombre = document.createElement('td');
+        nombre.textContent = entry.nombre || '';
+        const valor = document.createElement('td');
+        valor.className = 'numeric';
+        valor.textContent = entry.nombre === 'V' ? fmtVel.format(entry.valor ?? 0) : fmtTemp.format(entry.valor ?? 0);
+        const estado = document.createElement('td');
+        estado.textContent = entry.aceptada ? 'OK' : 'RECHAZADA';
+        estado.className = entry.aceptada ? 'ok' : 'rejected';
+        tr.append(hora, origen, nombre, valor, estado);
+        frag.appendChild(tr);
+      });
+      logBody.replaceChildren(frag);
+    }
+
+    // Agrega muestras a las series y recorta el límite
+    function pushSamples(sensores, consignas) {
+      const now = Date.now();
+      function push(arr, value) {
+        arr.push({ t: now, y: Number(value) || 0 });
+        if (arr.length > MAX_SAMPLES) arr.shift();
+      }
+      push(series.t1, sensores.temp_horno_1);
+      push(series.spT1, consignas.t1);
+      push(series.v, sensores.velocidad_cinta);
+      push(series.spV, consignas.v);
+    }
+
+    // Dibuja una gráfica en canvas
+    function drawChart(canvas, dataSeries, spSeries, label) {
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(0, Math.floor(rect.width));
+      const h = Math.max(0, Math.floor(rect.height));
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      if (dataSeries.length < 2) {
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--texto_muted').trim();
+        ctx.font = '0.875rem system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Acumulando muestras…', w / 2, h / 2);
+        return;
+      }
+
+      const now = Date.now();
+      const xMax = now;
+      const xMin = Math.max(dataSeries[0].t, xMax - WINDOW_MS);
+      const visible = dataSeries.filter(p => p.t >= xMin && p.t <= xMax);
+      const spVisible = spSeries.filter(p => p.t >= xMin && p.t <= xMax);
+      if (visible.length < 2) {
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--texto_muted').trim();
+        ctx.font = '0.875rem system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Acumulando muestras…', w / 2, h / 2);
+        return;
+      }
+
+      const currentSp = spSeries.length ? spSeries[spSeries.length - 1].y : 0;
+      const yValues = visible.map(p => p.y);
+      yValues.push(currentSp);
+      let yMin = Math.min(...yValues);
+      let yMax = Math.max(...yValues);
+      if (yMin === yMax) { yMin -= 1; yMax += 1; }
+      const pad = (yMax - yMin) * 0.1;
+      yMin -= pad;
+      yMax += pad;
+
+      const padLeft = 36;
+      const padBottom = 24;
+      const plotW = Math.max(1, w - padLeft - 8);
+      const plotH = Math.max(1, h - padBottom - 8);
+
+      const mapX = t => padLeft + ((t - xMin) / (xMax - xMin)) * plotW;
+      const mapY = v => 4 + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+      // Grilla
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--borde').trim();
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= 4; i++) {
+        const y = 4 + (plotH * i) / 4;
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(padLeft + plotW, y);
+      }
+      for (let i = 0; i <= 4; i++) {
+        const x = padLeft + (plotW * i) / 4;
+        ctx.moveTo(x, 4);
+        ctx.lineTo(x, 4 + plotH);
+      }
+      ctx.stroke();
+
+      // Ejes
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--texto_muted').trim();
+      ctx.beginPath();
+      ctx.moveTo(padLeft, 4);
+      ctx.lineTo(padLeft, 4 + plotH);
+      ctx.lineTo(padLeft + plotW, 4 + plotH);
+      ctx.stroke();
+
+      // Etiquetas Y
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--texto_muted').trim();
+      ctx.font = '10px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (let i = 0; i <= 4; i++) {
+        const v = yMax - ((yMax - yMin) * i) / 4;
+        ctx.fillText(fmtNum.format(v), padLeft - 6, 4 + (plotH * i) / 4);
+      }
+
+      // Línea de consigna punteada
+      const spY = mapY(currentSp);
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--texto_muted').trim();
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(padLeft, spY);
+      ctx.lineTo(padLeft + plotW, spY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Línea de la variable
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      visible.forEach((p, i) => {
+        const x = mapX(p.t);
+        const y = mapY(p.y);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    function drawAll() {
+      drawChart(chartT1, series.t1, series.spT1, 'T1');
+      drawChart(chartV, series.v, series.spV, 'V');
+    }
+
+    // Observa cambios de tamaño para redibujar
+    const resizeObserver = new ResizeObserver(() => drawAll());
+    resizeObserver.observe(chartT1);
+    resizeObserver.observe(chartV);
+
+    // Render completo a partir del estado recibido
+    function render(data) {
+      lastState = data;
+      renderLive(data.sensores || {});
+      renderConnection(data);
+      renderSetpoints(data.consignas || {});
+      renderParametros(data.parametros || {});
+      renderRechazar(data.rechazar_setpoints);
+      renderLog(data.log);
+      pushSamples(data.sensores || {}, data.consignas || {});
+      requestAnimationFrame(drawAll);
+    }
+
+    // Polling de estado
+    async function fetchEstado() {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      try {
+        const resp = await fetch('/api/estado', { signal: controller.signal });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        connected = true;
+        hideBanner();
+        render(data);
+      } catch (err) {
+        connected = false;
+        showBanner();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // Helpers para POST. Devuelve true si tuvo éxito, false si falló.
+    async function postJSON(url, body, statusEl, successText) {
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || 'HTTP ' + resp.status);
+        }
+        setStatus(statusEl, successText);
+        fetchEstado();
+        return true;
+      } catch (err) {
+        setStatus(statusEl, 'Error: ' + err.message);
+        return false;
+      }
+    }
+
+    // Aplicar consignas
+    btnConsignas.addEventListener('click', async () => {
+      const t1 = safeNumber(inputT1.value);
+      const v = safeNumber(inputV.value);
+      if (t1 === null || v === null) {
+        setStatus(statusConsignas, 'Valores inválidos');
+        return;
+      }
+      const ok = await postJSON('/api/consignas', { t1, v }, statusConsignas, 'Aplicado');
+      if (ok) clearDirty(inputT1, sliderT1, inputV, sliderV);
+    });
+
+    // Aplicar parámetros dinámicos
+    btnDinamica.addEventListener('click', async () => {
+      const body = {};
+      for (const id of dinamicaIds) {
+        const v = safeNumber(document.getElementById(id).value);
+        if (v === null) { setStatus(statusDinamica, 'Valores inválidos'); return; }
+        body[id] = v;
+      }
+      const ok = await postJSON('/api/parametros', body, statusDinamica, 'Aplicado');
+      if (ok) clearDirty(...dinamicaIds.map(id => document.getElementById(id)));
+    });
+
+    // Aplicar parámetros de ambiente
+    btnAmbiente.addEventListener('click', async () => {
+      const body = {};
+      for (const [id, key] of Object.entries(ambienteMap)) {
+        const v = safeNumber(document.getElementById(id).value);
+        if (v === null) { setStatus(statusAmbiente, 'Valores inválidos'); return; }
+        body[key] = v;
+      }
+      const ok = await postJSON('/api/parametros', body, statusAmbiente, 'Aplicado');
+      if (ok) clearDirty(...Object.keys(ambienteMap).map(id => document.getElementById(id)));
+    });
+
+    // Reiniciar planta
+    btnReiniciar.addEventListener('click', async () => {
+      const t1 = safeNumber(inputT1Ini.value);
+      const v = safeNumber(inputVIni.value);
+      const semillaRaw = inputSemilla.value.trim();
+      const semilla = semillaRaw === '' ? null : safeNumber(semillaRaw);
+      if (t1 === null || v === null || (semillaRaw !== '' && semilla === null)) {
+        setStatus(statusReiniciar, 'Valores inválidos');
+        return;
+      }
+      if (semilla !== null && !Number.isInteger(semilla)) {
+        setStatus(statusReiniciar, 'La semilla debe ser un entero');
+        return;
+      }
+      const ok = await postJSON('/api/reiniciar', { t1_inicial: t1, v_inicial: v, semilla }, statusReiniciar, 'Reiniciado');
+      if (ok) clearDirty(inputT1Ini, inputVIni, inputSemilla);
+    });
+
+    // Toggle rechazo de setpoints
+    switchRechazar.addEventListener('click', () => {
+      const actual = switchRechazar.getAttribute('aria-checked') === 'true';
+      postJSON('/api/rechazar', { rechazar: !actual }, null, '');
+    });
+
+    // Arranque
+    fetchEstado();
+    setInterval(fetchEstado, POLL_MS);
+  </script>
+</body>
+</html>
