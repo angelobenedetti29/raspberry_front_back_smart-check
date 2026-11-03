@@ -18,7 +18,6 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 
 from backend.config import AppConfig
@@ -44,17 +43,13 @@ from backend.lote.tipos import (
 )
 from backend.streaming import StreamingService
 from backend.streaming.suscripcion import ColaEventos, EventoObservado
+from backend.tiempo import ahora_iso_local
 
 logger = logging.getLogger(__name__)
 
 _ESPERA_SIN_REGISTRO = 1.0
 _TIMEOUT_CIERRE = 5.0
 _HISTORIAL_MAX = 20
-
-
-def _ahora_iso() -> str:
-    """Timestamp local con offset, informativo para el backend."""
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 class LoteService:
@@ -71,9 +66,9 @@ class LoteService:
         config: AppConfig,
         streaming: StreamingService,
         on_credencial_invalida: Callable[[], None] | None = None,
-        on_lote_abierto: Callable[
-            [str, str, ModoControl, bool, LimitesAplicacion | None, bool], None
-        ] | None = None,
+        on_lote_abierto: (
+            Callable[[str, str, ModoControl, LimitesAplicacion | None, bool], None] | None
+        ) = None,
         on_lote_cerrado: Callable[[], None] | None = None,
         on_modo_actualizado: Callable[[ModoControl, LimitesAplicacion | None], None] | None = None,
         modo_provider: Callable[[], ModoControl] | None = None,
@@ -143,9 +138,7 @@ class LoteService:
         self._cierre_manual = False
 
         # --- sólo el hilo del servicio ---
-        self._pendientes: deque[EventoDeteccion] = deque(
-            maxlen=max(1, config.lote.max_pendientes)
-        )
+        self._pendientes: deque[EventoDeteccion] = deque(maxlen=max(1, config.lote.max_pendientes))
         self._reportadas: set[tuple[str | None, int]] = set()
         self._conteos_locales: dict[EstadoProducto, int] = {}
         self._estados_por_modelo: dict[str, set[EstadoProducto]] = {}
@@ -316,9 +309,7 @@ class LoteService:
         if lote is None or self._on_modo_actualizado is None:
             return
         with self._lock:
-            enganchado_al_mismo = (
-                lote_anterior is not None and lote_anterior.id == lote.id
-            )
+            enganchado_al_mismo = lote_anterior is not None and lote_anterior.id == lote.id
             ultimo_emitido = self._ultimo_modo_emitido
         if not enganchado_al_mismo:
             return
@@ -351,9 +342,7 @@ class LoteService:
                 continue
             producto = self._resolver_producto(observado.evento.label)
             if producto is None:
-                self._marcar_error(
-                    "Etiqueta sin producto en el catálogo del backend (ver log)"
-                )
+                self._marcar_error("Etiqueta sin producto en el catálogo del backend (ver log)")
                 continue
             self._abrir_lote(producto.id)
             return
@@ -463,7 +452,7 @@ class LoteService:
             pista=evento.pista_id,
             frame=observado.numero_frame,
             modelo_id=observado.modelo_id,
-            momento=_ahora_iso(),
+            momento=ahora_iso_local(),
         )
 
     # --- reporte al backend ---
@@ -487,11 +476,7 @@ class LoteService:
             return
         with self._lock:
             lote = self._lote
-            lote_id = (
-                lote.id
-                if lote is not None and lote.estado is EstadoLote.ABIERTO
-                else None
-            )
+            lote_id = lote.id if lote is not None and lote.estado is EstadoLote.ABIERTO else None
             producto_id = self._pendientes[0].producto_id if self._pendientes else None
             batch = list(self._pendientes)[: self._max_envio]
         if not batch:
@@ -538,7 +523,7 @@ class LoteService:
                 secret,
                 idempotency_key=str(uuid.uuid4()),
                 producto_id=producto_id,
-                momento=_ahora_iso(),
+                momento=ahora_iso_local(),
                 modo=self._modo_para_abrir(),
                 iniciado_manualmente=iniciado_manualmente,
                 estado_inicial=estado_inicial,
@@ -584,7 +569,7 @@ class LoteService:
                 secret,
                 idempotency_key=str(uuid.uuid4()),
                 producto_id=producto_id,
-                momento=_ahora_iso(),
+                momento=ahora_iso_local(),
                 modo=self._modo_para_abrir(),
                 iniciado_manualmente=iniciado_manualmente,
                 estado_inicial=estado_inicial,
@@ -671,9 +656,7 @@ class LoteService:
             inactividad = self._inactividad_sector()
             if inactividad is None or inactividad < self._x:
                 return
-        self._cerrar_lote(
-            MotivoCierre.MANUAL if manual else MotivoCierre.SIN_DETECCIONES
-        )
+        self._cerrar_lote(MotivoCierre.MANUAL if manual else MotivoCierre.SIN_DETECCIONES)
 
     def _inactividad_sector(self) -> float | None:
         secret = self._secret
@@ -722,7 +705,7 @@ class LoteService:
                 idempotency_key=str(uuid.uuid4()),
                 motivo=motivo,
                 conteos=conteos,
-                momento=_ahora_iso(),
+                momento=ahora_iso_local(),
             )
         except ErrorLotes as exc:
             if exc.codigo == 409:
@@ -769,9 +752,7 @@ class LoteService:
         cache = self._estados_por_modelo.get(modelo_id)
         if cache is not None:
             return cache
-        entrada = next(
-            (m for m in self._catalogo if m.model_id == modelo_id), None
-        )
+        entrada = next((m for m in self._catalogo if m.model_id == modelo_id), None)
         estados: set[EstadoProducto] = set()
         if entrada is not None:
             try:
@@ -788,9 +769,7 @@ class LoteService:
 
     # --- manejo de errores ---
 
-    def _aplicar_error(
-        self, exc: ErrorLotes, batch: list[EventoDeteccion] | None = None
-    ) -> None:
+    def _aplicar_error(self, exc: ErrorLotes, batch: list[EventoDeteccion] | None = None) -> None:
         ahora = time.monotonic()
         if exc.reintentable:
             self._espera_hasta = ahora + self._backoff_actual
@@ -817,9 +796,7 @@ class LoteService:
                     lote_id=lote_id,
                 )
                 if self._intentos_fallidos == 10:
-                    logger.warning(
-                        "lote: 10 envíos fallidos consecutivos; DLQ creciendo"
-                    )
+                    logger.warning("lote: 10 envíos fallidos consecutivos; DLQ creciendo")
             return
         if exc.codigo in (401, 403):
             # La credencial fue rechazada: se avisa al dueño (DeviceService),
@@ -874,9 +851,7 @@ class LoteService:
                 self._pendientes.append(ev)
             for ev in existentes:
                 self._pendientes.append(ev)
-        logger.info(
-            "lote: drenados %d eventos del DLQ al boot", len(eventos_recuperados)
-        )
+        logger.info("lote: drenados %d eventos del DLQ al boot", len(eventos_recuperados))
         # Si el primer reenvío sale OK, `_reportar`/`_marcar_ok` resetea
         # `_intentos_fallidos` y vacía el DLQ. No lo hacemos acá: el
         # camino feliz lo cubre el lazo normal.
@@ -889,11 +864,7 @@ class LoteService:
         la única copia que sobrevive a un corte: borrarlo antes de
         reenviarlos los perdería para siempre.
         """
-        if (
-            self._intentos_fallidos == 0
-            and not self._pendientes
-            and self._dlq.path.exists()
-        ):
+        if self._intentos_fallidos == 0 and not self._pendientes and self._dlq.path.exists():
             self._dlq.vaciar()
 
     def _descartar(self, batch: list[EventoDeteccion] | None) -> None:

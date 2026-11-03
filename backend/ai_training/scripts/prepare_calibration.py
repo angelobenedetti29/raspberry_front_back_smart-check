@@ -36,8 +36,7 @@ def parse_args(argv=None):
         "--image-size",
         type=int,
         default=None,
-        help="Lado de entrada del modelo. Default: stream.inference.image_size "
-        "de config.json.",
+        help="Lado de entrada del modelo. Default: stream.inference.image_size " "de config.json.",
     )
     parser.add_argument(
         "--max-imagenes",
@@ -52,9 +51,7 @@ def _resolver_imagenes(cli_value):
     valor = cli_value or rutas.valor_entorno(ENV_IMAGENES)
     if not valor:
         print("[ERROR] No se especificó la carpeta de imágenes de calibración.")
-        print(
-            f"        Pasá --images-dir /ruta/a/train/images o definí {ENV_IMAGENES}."
-        )
+        print(f"        Pasá --images-dir /ruta/a/train/images o definí {ENV_IMAGENES}.")
         sys.exit(1)
     return Path(valor).expanduser()
 

@@ -6,16 +6,16 @@ sólo para correr tests.
 
 Expone además `http_error` como side_effect de mock para los tests que
 necesitan hacer que `urllib.request.urlopen` levante un `HTTPError` real
-con un cuerpo específico, y `captura_request` para inspeccionar el body
-que `api/cliente.py` puso en el `Request.data`.
+con un cuerpo específico.
 """
 
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.error import HTTPError
 
 _RAIZ_REPO = Path(__file__).resolve().parents[2]

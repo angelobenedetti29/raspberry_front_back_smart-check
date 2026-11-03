@@ -84,18 +84,14 @@ class AlmacenDispositivo:
         donde vive en la Raspberry y no debe ser legible por otros usuarios.
         """
         if estado.tipo is not None and not isinstance(estado.tipo, TipoDispositivo):
-            raise ErrorAlmacen(
-                f"Tipo de dispositivo inválido en el estado: {estado.tipo!r}"
-            )
+            raise ErrorAlmacen(f"Tipo de dispositivo inválido en el estado: {estado.tipo!r}")
         payload = asdict(estado)
         if estado.tipo is not None:
             payload["tipo"] = estado.tipo.value
         payload = json.dumps(payload, indent=2, ensure_ascii=False)
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(
-                dir=self._path.parent, prefix=".device-", suffix=".tmp"
-            )
+            fd, tmp_name = tempfile.mkstemp(dir=self._path.parent, prefix=".device-", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as tmp:
                     tmp.write(payload)

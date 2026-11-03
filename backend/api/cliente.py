@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from backend.api.errores import ErrorConexion, ErrorFormato, ErrorHttp
 
@@ -52,16 +53,12 @@ class ClienteHTTP:
         if token is not None:
             headers["Authorization"] = f"Bearer {token}"
 
-        peticion = urllib.request.Request(
-            url, data=datos, headers=headers, method=metodo
-        )
+        peticion = urllib.request.Request(url, data=datos, headers=headers, method=metodo)
         try:
             with urllib.request.urlopen(peticion, timeout=self._timeout) as respuesta:
                 cuerpo = respuesta.read()
         except urllib.error.HTTPError as exc:
-            raise ErrorHttp(
-                exc.code, _detalle_error(exc), metodo=metodo, url=url
-            ) from exc
+            raise ErrorHttp(exc.code, _detalle_error(exc), metodo=metodo, url=url) from exc
         except urllib.error.URLError as exc:
             raise ErrorConexion(str(exc.reason), metodo=metodo, url=url) from exc
         except OSError as exc:
@@ -89,10 +86,7 @@ def desenvolver(data: Any) -> Any:
         raise ErrorFormato("respuesta del backend no es un objeto JSON")
     if not data.get("success", False):
         detalle = str(
-            data.get("errors")
-            or data.get("error")
-            or data.get("message")
-            or "respuesta sin éxito"
+            data.get("errors") or data.get("error") or data.get("message") or "respuesta sin éxito"
         )
         raise ErrorFormato(detalle)
     return data.get("data")
@@ -109,11 +103,6 @@ def _detalle_error(exc: urllib.error.HTTPError) -> str:
     except json.JSONDecodeError:
         return cuerpo.strip()[:200] or str(exc.reason or "error HTTP")
     if isinstance(datos, dict):
-        detalle = (
-            datos.get("errors")
-            or datos.get("error")
-            or datos.get("message")
-            or cuerpo
-        )
+        detalle = datos.get("errors") or datos.get("error") or datos.get("message") or cuerpo
         return str(detalle)[:200]
     return cuerpo[:200]

@@ -26,7 +26,7 @@ from frontend.nucleo.controlador_dispositivo import (
 )
 from frontend.nucleo.estado import EstadoItem, NivelEstado, SnapshotSistema
 from frontend.nucleo.iconos import icono
-from frontend.nucleo.tema import color
+from frontend.nucleo.tema import color, repolish
 
 _GLIFO_NIVEL: dict[NivelEstado, str] = {
     NivelEstado.ACTIVO: "●",
@@ -41,14 +41,6 @@ _ALTO_FILA_ESTADO = 34
 # cambiar de etiqueta entre estados ("Registrar dispositivo" es la más larga).
 _ANCHO_BOTON_DISPOSITIVO = 200
 _ALTO_BOTON_DISPOSITIVO = 42
-
-
-def _repolish(widget: QWidget) -> None:
-    """Reaplica la hoja de estilos tras cambiar una propiedad que un selector usa."""
-    estilo = widget.style()
-    estilo.unpolish(widget)
-    estilo.polish(widget)
-    widget.update()
 
 
 class _TarjetaAcceso(QFrame):
@@ -76,9 +68,7 @@ class _TarjetaAcceso(QFrame):
         layout.setSpacing(14)
 
         icono_lbl = QLabel()
-        icono_lbl.setPixmap(
-            icono(clave_icono, color=color("accent"), px=32).pixmap(32, 32)
-        )
+        icono_lbl.setPixmap(icono(clave_icono, color=color("accent"), px=32).pixmap(32, 32))
         icono_lbl.setFixedSize(32, 32)
 
         textos = QVBoxLayout()
@@ -178,14 +168,10 @@ class Inicio(SeccionBase):
         en_vivo = _TarjetaAcceso("camara", "En vivo", "Supervisión con cámara")
         en_vivo.clicked.connect(lambda: self.ctx.navegar("en_vivo"))
 
-        metricas = _TarjetaAcceso(
-            "metricas", "Métricas", "Hardware y envíos al backend"
-        )
+        metricas = _TarjetaAcceso("metricas", "Métricas", "Hardware y envíos al backend")
         metricas.clicked.connect(lambda: self.ctx.navegar("metricas"))
 
-        configuracion = _TarjetaAcceso(
-            "configuracion", "Configuración", "Ajustes del equipo"
-        )
+        configuracion = _TarjetaAcceso("configuracion", "Configuración", "Ajustes del equipo")
         configuracion.clicked.connect(lambda: self.ctx.navegar("configuracion"))
 
         # 2+1: las dos pantallas de supervisión comparten la fila de arriba y
@@ -215,9 +201,7 @@ class Inicio(SeccionBase):
         fila.setSpacing(12)
 
         icono_lbl = QLabel()
-        icono_lbl.setPixmap(
-            icono("herramienta", color=color("accent"), px=28).pixmap(28, 28)
-        )
+        icono_lbl.setPixmap(icono("herramienta", color=color("accent"), px=28).pixmap(28, 28))
         icono_lbl.setFixedSize(28, 28)
 
         textos = QVBoxLayout()
@@ -249,9 +233,7 @@ class Inicio(SeccionBase):
         self._boton_dispositivo = QPushButton()
         self._boton_dispositivo.setObjectName("botonPrimario")
         self._boton_dispositivo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._boton_dispositivo.setFixedSize(
-            _ANCHO_BOTON_DISPOSITIVO, _ALTO_BOTON_DISPOSITIVO
-        )
+        self._boton_dispositivo.setFixedSize(_ANCHO_BOTON_DISPOSITIVO, _ALTO_BOTON_DISPOSITIVO)
         self._boton_dispositivo.clicked.connect(self._accion_dispositivo)
 
         fila.addWidget(icono_lbl)
@@ -277,12 +259,8 @@ class Inicio(SeccionBase):
 
         self._combo_tipo = QComboBox()
         self._combo_tipo.setObjectName("tipoDispositivo")
-        self._combo_tipo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        self._combo_tipo.setToolTip(
-            "Tipo con el que la Raspberry se registra en el backend."
-        )
+        self._combo_tipo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._combo_tipo.setToolTip("Tipo con el que la Raspberry se registra en el backend.")
         # La primera opción no tiene valor: sin tipo elegido no se puede registrar.
         self._combo_tipo.addItem("Seleccionar tipo", None)
         for tipo in (TipoDispositivoUI.ENTRADA_HORNO, TipoDispositivoUI.SALIDA_HORNO):
@@ -293,9 +271,7 @@ class Inicio(SeccionBase):
         # Etiqueta que reemplaza al selector cuando el tipo ya está definido.
         self._valor_tipo = QLabel()
         self._valor_tipo.setObjectName("etiquetaEstado")
-        self._valor_tipo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._valor_tipo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         fila.addWidget(etiqueta)
         fila.addWidget(self._combo_tipo, 1)
@@ -353,9 +329,7 @@ class Inicio(SeccionBase):
 
         total = len(snapshot.items)
         for indice, item in enumerate(snapshot.items):
-            self._layout_estado.addWidget(
-                self._fila(item, es_ultima=indice == total - 1)
-            )
+            self._layout_estado.addWidget(self._fila(item, es_ultima=indice == total - 1))
 
     def _fila(self, item: EstadoItem, es_ultima: bool) -> QWidget:
         fila = QFrame()
@@ -378,9 +352,7 @@ class Inicio(SeccionBase):
 
         detalle = QLabel(item.detalle)
         detalle.setObjectName("detalleEstado")
-        detalle.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        detalle.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(punto)
         layout.addWidget(etiqueta)
@@ -401,7 +373,7 @@ class Inicio(SeccionBase):
 
         self._punto_dispositivo.setText(_GLIFO_NIVEL[nivel])
         self._punto_dispositivo.setProperty("nivel", nivel.value)
-        _repolish(self._punto_dispositivo)
+        repolish(self._punto_dispositivo)
 
         self._detalle_dispositivo.setText(detalle)
 
@@ -410,7 +382,7 @@ class Inicio(SeccionBase):
         # repolish el botón conservaría el aspecto anterior.
         if self._boton_dispositivo.objectName() != variante:
             self._boton_dispositivo.setObjectName(variante)
-            _repolish(self._boton_dispositivo)
+            repolish(self._boton_dispositivo)
 
         self._reflejar_selector(estado)
 

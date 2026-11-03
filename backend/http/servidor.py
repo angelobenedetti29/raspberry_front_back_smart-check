@@ -84,9 +84,7 @@ class ServidorHTTP:
             hilo.start()
             self._server = server
             self._hilo = hilo
-            logger.info(
-                "http: servidor escuchando en %s:%s", self._bind_host, self._bind_port
-            )
+            logger.info("http: servidor escuchando en %s:%s", self._bind_host, self._bind_port)
 
     def stop(self) -> None:
         """Señala el cese y espera al hilo de uvicorn (bloquea, idempotente)."""
@@ -100,15 +98,6 @@ class ServidorHTTP:
         server.should_exit = True
         if hilo is not None:
             hilo.join(timeout=TIEMPO_ESPERA_HILO)
-
-    def is_alive(self) -> bool:
-        """True si el servidor está arrancado y su hilo sigue vivo."""
-        with self._lock:
-            return (
-                self._server is not None
-                and self._hilo is not None
-                and self._hilo.is_alive()
-            )
 
     def rebind(self, bind_host: str, bind_port: int) -> None:
         """Reemplaza el servidor actual por uno nuevo en el bind indicado.
@@ -159,9 +148,7 @@ class ServidorHTTP:
         # routers) sale con `{"error": "..."}`, el mismo shape que consumía el
         # backend Go. Sin esto FastAPI devolvería `{"detail": "..."}`.
         @app.exception_handler(StarletteHTTPException)
-        async def _error_http(
-            _request: Request, exc: StarletteHTTPException
-        ) -> JSONResponse:
+        async def _error_http(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"error": exc.detail},

@@ -39,7 +39,7 @@ def color_clase(indice: int) -> tuple[int, int, int]:
 
 
 def resumen_por_clase(
-    detecciones: Sequence["ResultadoDeteccion"],
+    detecciones: Sequence[ResultadoDeteccion],
 ) -> dict[str, int]:
     """Cuenta detecciones por etiqueta."""
     conteo: dict[str, int] = {}
@@ -49,10 +49,10 @@ def resumen_por_clase(
 
 
 def anotar(
-    frame: "np.ndarray",
-    detecciones: Sequence["ResultadoDeteccion"],
+    frame: np.ndarray,
+    detecciones: Sequence[ResultadoDeteccion],
     nombres: Sequence[str],
-) -> "np.ndarray":
+) -> np.ndarray:
     """Dibuja cajas y etiquetas sobre el frame (in place) y lo devuelve."""
     import cv2
 
@@ -77,7 +77,7 @@ def anotar(
 
 
 def anotar_imagen(
-    detector: "Detector",
+    detector: Detector,
     imagen_path: Path,
     destino: Path,
     *,
@@ -125,7 +125,7 @@ def validar_pt(
     return conteo
 
 
-def entrada_catalogo(cfg: "AppConfig", model_id: str | None) -> "ModelEntry":
+def entrada_catalogo(cfg: AppConfig, model_id: str | None) -> ModelEntry:
     """Busca la entrada del catálogo por id, o usa la default de la config."""
     buscado = model_id or cfg.models.default_model_id
     for entrada in cfg.models.catalog:
@@ -135,8 +135,8 @@ def entrada_catalogo(cfg: "AppConfig", model_id: str | None) -> "ModelEntry":
 
 
 def construir_detector_catalogo(
-    cfg: "AppConfig", model_id: str | None = None
-) -> tuple["Detector", "ModelEntry"]:
+    cfg: AppConfig, model_id: str | None = None
+) -> tuple[Detector, ModelEntry]:
     """Construye el detector real de un modelo del catálogo."""
     from backend.inference.catalogo import construir_detector
 
@@ -155,15 +155,13 @@ def resolver_imagen(imagen: str | None, images_dir: str | None) -> Path:
         directorio = Path(images_dir).expanduser()
         imagenes = listar_imagenes(directorio)
         if not imagenes:
-            raise FileNotFoundError(
-                f"No se encontraron imágenes JPG/PNG en: {directorio}"
-            )
+            raise FileNotFoundError(f"No se encontraron imágenes JPG/PNG en: {directorio}")
         return imagenes[0]
     raise ValueError("Indicá --imagen o --images-dir con al menos una imagen.")
 
 
 def advertir_thresholds(
-    cfg: "AppConfig",
+    cfg: AppConfig,
     names_path: Path,
     nombres: Sequence[str],
     *,

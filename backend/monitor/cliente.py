@@ -28,9 +28,7 @@ class ClienteMetricas:
     def enviar(self, secret: str, metricas: MetricasSistema) -> None:
         """POST de las métricas. Lanza ErrorMetricas si el backend no acepta."""
         if not secret:
-            raise ErrorMetricas(
-                "No hay secret de dispositivo para autenticar el envío"
-            )
+            raise ErrorMetricas("No hay secret de dispositivo para autenticar el envío")
         try:
             self._http.peticion(
                 "POST",

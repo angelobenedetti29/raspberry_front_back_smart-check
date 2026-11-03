@@ -53,9 +53,7 @@ def _soltar_grupo(grupo: Any) -> None:
     if callable(soltar):
         soltar()
     else:
-        logger.debug(
-            "El network group no expone release(); su liberación depende del VDevice"
-        )
+        logger.debug("El network group no expone release(); su liberación depende del VDevice")
 
 
 class MontajeHailo:
@@ -104,7 +102,7 @@ class DispositivoHailo:
     """
 
     _lock = threading.RLock()
-    _instancia: "DispositivoHailo | None" = None
+    _instancia: DispositivoHailo | None = None
 
     def __init__(self, hailo: Any) -> None:
         self._hailo = hailo
@@ -112,7 +110,7 @@ class DispositivoHailo:
         self._vdevice = self._pila.enter_context(hailo.VDevice())
 
     @classmethod
-    def obtener(cls) -> "DispositivoHailo":
+    def obtener(cls) -> DispositivoHailo:
         """Devuelve el dispositivo del proceso, creándolo la primera vez."""
         with cls._lock:
             if cls._instancia is None:
@@ -120,7 +118,7 @@ class DispositivoHailo:
             return cls._instancia
 
     @classmethod
-    def _crear(cls) -> "DispositivoHailo":
+    def _crear(cls) -> DispositivoHailo:
         try:
             import hailo_platform
         except ImportError as exc:
@@ -268,9 +266,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         if montaje is not None:
             montaje.cerrar()
 
-    def _inferir_crudo(
-        self, frame: np.ndarray
-    ) -> tuple[Any, float, int, int]:
+    def _inferir_crudo(self, frame: np.ndarray) -> tuple[Any, float, int, int]:
         """Corre la NPU y devuelve el tensor crudo y los parámetros del letterbox."""
         montaje = self._montaje
         if montaje is None:

@@ -42,7 +42,7 @@ def _extraer_bearer(authorization_header: str | None) -> str | None:
     prefijo = "Bearer "
     if not authorization_header.startswith(prefijo):
         return None
-    return authorization_header[len(prefijo):]
+    return authorization_header[len(prefijo) :]
 
 
 def _comparar_token(recibido: str, esperado: str) -> bool:
@@ -51,12 +51,10 @@ def _comparar_token(recibido: str, esperado: str) -> bool:
     Se compara bytes porque los headers pueden traer latín-1 y
     `compare_digest` rechaza str con caracteres no ASCII.
     """
-    return hmac.compare_digest(
-        recibido.encode("utf-8"), esperado.encode("utf-8")
-    )
+    return hmac.compare_digest(recibido.encode("utf-8"), esperado.encode("utf-8"))
 
 
-def construir_router_renombre(device_service: "DeviceService") -> APIRouter:
+def construir_router_renombre(device_service: DeviceService) -> APIRouter:
     """Arma el router del renombre cerrando sobre el `DeviceService`."""
     router = APIRouter()
 

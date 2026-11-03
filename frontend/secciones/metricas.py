@@ -36,7 +36,7 @@ from frontend.nucleo.controlador_monitor import (
 )
 from frontend.nucleo.estado import NivelEstado
 from frontend.nucleo.iconos import icono
-from frontend.nucleo.tema import color
+from frontend.nucleo.tema import color, repolish
 
 _GLIFO_NIVEL: dict[NivelEstado, str] = {
     NivelEstado.ACTIVO: "●",
@@ -89,14 +89,6 @@ _FILAS_ENVIO: tuple[tuple[str, str, bool], ...] = (
     ("ok", "Enviados ok", False),
     ("error", "Con error", False),
 )
-
-
-def _repolish(widget: QWidget) -> None:
-    """Reaplica la hoja de estilos tras cambiar una propiedad que un selector usa."""
-    estilo = widget.style()
-    estilo.unpolish(widget)
-    estilo.polish(widget)
-    widget.update()
 
 
 def _prop_nivel(nivel: NivelEstado | str) -> str:
@@ -186,9 +178,7 @@ class _Fila(QFrame):
             self._valor.setProperty("rol", "valorMetrica")
         else:
             self._valor.setObjectName("detalleEstado")
-        self._valor.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._valor.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(etiqueta_lbl)
         layout.addWidget(self._valor, 1)
@@ -196,16 +186,14 @@ class _Fila(QFrame):
         if self._punto is not None:
             self._punto.setText(_glifo(NivelEstado.SIN_DATO))
 
-    def fijar(
-        self, valor: str, nivel: NivelEstado | str = NivelEstado.SIN_DATO
-    ) -> None:
+    def fijar(self, valor: str, nivel: NivelEstado | str = NivelEstado.SIN_DATO) -> None:
         """Actualiza el valor y, sólo si cambió, el semáforo de nivel."""
         if self._punto is not None:
             propiedad = _prop_nivel(nivel)
             # Repolish sólo cuando cambia el nivel: esto se refresca cada segundo.
             if self._punto.property("nivel") != propiedad:
                 self._punto.setProperty("nivel", propiedad)
-                _repolish(self._punto)
+                repolish(self._punto)
             self._punto.setText(_glifo(nivel))
         self._valor.fijar_texto(valor)
 
@@ -255,11 +243,11 @@ class _TileEnvio(QFrame):
 
         if self._punto.property("nivel") != nivel:
             self._punto.setProperty("nivel", nivel)
-            _repolish(self._punto)
+            repolish(self._punto)
         # El borde de la ficha también marca el fallo: la tira se lee de un vistazo.
         if self.property("nivel") != nivel:
             self.setProperty("nivel", nivel)
-            _repolish(self)
+            repolish(self)
 
         self._estado.setText("ok" if envio.ok else "error")
         self.setToolTip(self._detalle(envio))
@@ -412,9 +400,7 @@ class Metricas(SeccionBase):
         layout.setSpacing(6)
 
         glifo = QLabel()
-        glifo.setPixmap(
-            icono("metricas", color=color("texto_muted"), px=36).pixmap(36, 36)
-        )
+        glifo.setPixmap(icono("metricas", color=color("texto_muted"), px=36).pixmap(36, 36))
         glifo.setFixedSize(36, 36)
 
         self._vacio_titulo = QLabel()
@@ -611,12 +597,8 @@ class Metricas(SeccionBase):
         cpu = metricas.cpu_pct if metricas is not None else None
         ram_disp = metricas.mem_ram_disponible_mb if metricas is not None else None
         ram_total = metricas.mem_ram_total_mb if metricas is not None else None
-        disco_disp = (
-            metricas.almacenamiento_disponible_mb if metricas is not None else None
-        )
-        disco_total = (
-            metricas.almacenamiento_total_mb if metricas is not None else None
-        )
+        disco_disp = metricas.almacenamiento_disponible_mb if metricas is not None else None
+        disco_total = metricas.almacenamiento_total_mb if metricas is not None else None
         temp = metricas.temp_chip if metricas is not None else None
         ia = metricas.ai_processor_pct if metricas is not None else None
 

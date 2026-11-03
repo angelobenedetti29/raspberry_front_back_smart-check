@@ -74,10 +74,16 @@ def parsear_har(
     """Paso 1: `hailo parser onnx` -> HAR. En YOLO26 end-to-end no se recortan nodos."""
     asegurar_dir(har.parent)
     comando = [
-        "hailo", "parser", "onnx", str(onnx),
-        "--hw-arch", hw_arch,
-        "--net-name", net_name,
-        "--har-path", str(har),
+        "hailo",
+        "parser",
+        "onnx",
+        str(onnx),
+        "--hw-arch",
+        hw_arch,
+        "--net-name",
+        net_name,
+        "--har-path",
+        str(har),
         "-y",
     ]
     if end_nodes:
@@ -162,28 +168,26 @@ def compilar_hef(
     previos = {p: p.stat().st_mtime_ns for p in output_dir.glob("*.hef")}
     ejecutar(
         [
-            "hailo", "compiler",
-            "--hw-arch", hw_arch,
+            "hailo",
+            "compiler",
+            "--hw-arch",
+            hw_arch,
             str(quantized_har),
-            "--output-dir", str(output_dir),
-            "--model-script", str(alls),
+            "--output-dir",
+            str(output_dir),
+            "--model-script",
+            str(alls),
         ],
         aviso=aviso,
     )
-    nuevos = [
-        p
-        for p in output_dir.glob("*.hef")
-        if previos.get(p) != p.stat().st_mtime_ns
-    ]
+    nuevos = [p for p in output_dir.glob("*.hef") if previos.get(p) != p.stat().st_mtime_ns]
     exacto = output_dir / f"{net_name}.hef"
     if exacto.is_file() and exacto in nuevos:
         return exacto
     if len(nuevos) == 1:
         return nuevos[0]
     if not nuevos:
-        raise FileNotFoundError(
-            f"`hailo compiler` no generó ningún .hef nuevo en {output_dir}."
-        )
+        raise FileNotFoundError(f"`hailo compiler` no generó ningún .hef nuevo en {output_dir}.")
     raise FileNotFoundError(
         f"HEFs nuevos ambiguos en {output_dir}: {[p.name for p in nuevos]}; "
         f"se esperaba {net_name}.hef."
@@ -214,16 +218,16 @@ def compilar(
     _asegurar_hailo_en_path()
     aviso("[PASO 1] Parseando ONNX a HAR...")
     har = parsear_har(
-        onnx, work_dir / f"{nombre}.har",
-        net_name=net, end_nodes=end_nodes, hw_arch=hw_arch, aviso=aviso,
+        onnx,
+        work_dir / f"{nombre}.har",
+        net_name=net,
+        end_nodes=end_nodes,
+        hw_arch=hw_arch,
+        aviso=aviso,
     )
 
     aviso("[PASO 2] Optimizando/cuantizando a INT8...")
-    quant = cuantizar(
-        har, alls, calib, work_dir / f"{nombre}_quantized.har", aviso=aviso
-    )
+    quant = cuantizar(har, alls, calib, work_dir / f"{nombre}_quantized.har", aviso=aviso)
 
     aviso("[PASO 3] Compilando a HEF...")
-    return compilar_hef(
-        quant, alls, work_dir, net_name=net, hw_arch=hw_arch, aviso=aviso
-    )
+    return compilar_hef(quant, alls, work_dir, net_name=net, hw_arch=hw_arch, aviso=aviso)

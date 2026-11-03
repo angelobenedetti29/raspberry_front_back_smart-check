@@ -12,6 +12,7 @@ devolver: preferimos descartar antes que acumular backlog en memoria.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -150,7 +151,7 @@ class AlmacenSQLite:
                 self._conn.commit()
                 self._limpiar_error()
             except sqlite3.Error as exc:
-                self._anotar_error(f"No se pudo insertar: %s" % exc)
+                self._anotar_error(f"No se pudo insertar: {exc}")
                 logger.warning("Almacén SQLite: %s", exc)
 
     def detener(self) -> None:
@@ -220,10 +221,8 @@ class AlmacenSQLite:
         # hilo podría encolar contra la conexión ya cerrada y perder el evento.
         with self._lock:
             if self._conn is not None:
-                try:
+                with contextlib.suppress(sqlite3.Error):
                     self._conn.close()
-                except sqlite3.Error:
-                    pass
                 self._conn = None
             rotar_archivo(self._cfg.path, self._cfg.max_files)
             self._abrir_db()

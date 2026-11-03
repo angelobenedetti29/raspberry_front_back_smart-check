@@ -47,9 +47,7 @@ class DetectorYoloBase:
         if not nombres.is_file():
             # No se cae a nombres por defecto a propósito: rotular todas las
             # clases con nombres ajenos al modelo es peor que no arrancar.
-            raise ErrorCargaModelo(
-                f"No se encontró el archivo de nombres de clase: {nombres}"
-            )
+            raise ErrorCargaModelo(f"No se encontró el archivo de nombres de clase: {nombres}")
 
         etiquetas = leer_nombres(nombres)
         if not etiquetas:

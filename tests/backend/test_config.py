@@ -287,9 +287,7 @@ def test_guardar_config_concurrente_no_corrompe(repo_root: Path) -> None:
             data["device"]["hostname"] = hostname
             guardar_config(data, ruta)
 
-    hilos = [
-        threading.Thread(target=_guardar, args=(f"pi-{indice}",)) for indice in range(4)
-    ]
+    hilos = [threading.Thread(target=_guardar, args=(f"pi-{indice}",)) for indice in range(4)]
     for hilo in hilos:
         hilo.start()
     for hilo in hilos:

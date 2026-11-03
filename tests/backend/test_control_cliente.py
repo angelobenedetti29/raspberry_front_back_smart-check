@@ -33,7 +33,7 @@ class _RespuestaFalsa:
     def read(self) -> bytes:
         return self._cuerpo
 
-    def __enter__(self) -> "_RespuestaFalsa":
+    def __enter__(self) -> _RespuestaFalsa:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -53,20 +53,20 @@ def test_publicar_telemetria_exitoso_no_devuelve_nada() -> None:
     with _mock_urlopen(_RespuestaFalsa(b"", 200)):
         # No debe lanzar; el parsear=False hace que el cuerpo se ignore.
         cliente.publicar_telemetria(
-            "secret-x", "lote-1", "/api/v1/lotes/{id}/metricas-horno",
+            "secret-x",
+            "lote-1",
+            "/api/v1/lotes/{id}/metricas-horno",
             {"temp_horno_1": 180.0},
         )
 
 
 def test_publicar_telemetria_409_se_traduce_a_error_control() -> None:
     cliente = ClienteControl("http://backend", timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=http_error(409, b'{"error":"cerrado"}')
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=http_error(409, b'{"error":"cerrado"}')),
+        pytest.raises(ErrorControl) as info,
     ):
-        with pytest.raises(ErrorControl) as info:
-            cliente.publicar_telemetria(
-                "secret-x", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {}
-            )
+        cliente.publicar_telemetria("secret-x", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {})
     assert info.value.codigo == 409
     assert "cerrado" in info.value.args[0]
 
@@ -74,21 +74,19 @@ def test_publicar_telemetria_409_se_traduce_a_error_control() -> None:
 def test_publicar_telemetria_sin_secret_falla_en_cliente() -> None:
     cliente = ClienteControl("http://backend", timeout=1.0)
     with pytest.raises(ErrorControl, match="No hay secret"):
-        cliente.publicar_telemetria(
-            "", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {}
-        )
+        cliente.publicar_telemetria("", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {})
 
 
 def test_publicar_telemetria_timeout_se_traduce_a_error_control() -> None:
     cliente = ClienteControl("http://backend", timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen",
-        side_effect=TimeoutError("timeout"),
+    with (
+        mock.patch(
+            "urllib.request.urlopen",
+            side_effect=TimeoutError("timeout"),
+        ),
+        pytest.raises(ErrorControl, match="No se pudo publicar"),
     ):
-        with pytest.raises(ErrorControl, match="No se pudo publicar"):
-            cliente.publicar_telemetria(
-                "secret-x", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {}
-            )
+        cliente.publicar_telemetria("secret-x", "lote-1", "/api/v1/lotes/{id}/metricas-horno", {})
 
 
 # --- obtener_propuesta ---
@@ -315,11 +313,11 @@ def test_obtener_propuesta_payload_mal_formado_se_traduce_a_error() -> None:
     """Falta `temp1_objetivo` (clave obligatoria): no debe romper el lazo."""
     cliente = ClienteControl("http://backend", timeout=1.0)
     cuerpo = json.dumps({"success": True, "data": {"propuesta": {}}}).encode()
-    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
-        with pytest.raises(ErrorControl, match="Propuesta mal formada"):
-            cliente.obtener_propuesta(
-                "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta"
-            )
+    with (
+        _mock_urlopen(_RespuestaFalsa(cuerpo, 200)),
+        pytest.raises(ErrorControl, match="Propuesta mal formada"),
+    ):
+        cliente.obtener_propuesta("secret-x", "lote-1", "/api/v1/lotes/{id}/consigna-propuesta")
 
 
 # --- aprobar_consigna / ack_consigna ---
@@ -337,9 +335,7 @@ def test_aprobar_consigna_hace_post_sin_body_al_endpoint() -> None:
         return _RespuestaFalsa(b"", 200)
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
-        cliente.aprobar_consigna(
-            "secret-x", "lote-1", "/api/v1/lotes/{id}/aprobar-consigna"
-        )
+        cliente.aprobar_consigna("secret-x", "lote-1", "/api/v1/lotes/{id}/aprobar-consigna")
     assert capturado["metodo"] == "POST"
     assert capturado["url"].endswith("/api/v1/lotes/lote-1/aprobar-consigna")
     assert capturado["data"] is None
@@ -384,9 +380,7 @@ def test_ack_consigna_envia_decision_y_valores_aplicados() -> None:
         return _RespuestaFalsa(b"", 200)
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
-        cliente.ack_consigna(
-            "secret-x", "lote-1", "/api/v1/lotes/{id}/consigna/ack", body
-        )
+        cliente.ack_consigna("secret-x", "lote-1", "/api/v1/lotes/{id}/consigna/ack", body)
     assert capturado["url"].endswith("/api/v1/lotes/lote-1/consigna/ack")
     datos = capturado["data"]
     assert b"dec-9999" in datos
@@ -397,9 +391,7 @@ def test_ack_consigna_envia_decision_y_valores_aplicados() -> None:
 def test_cambiar_modo_500_se_traduce_a_error_control_con_codigo() -> None:
     """Un 5xx expone el código para que el servicio decida si reintentar."""
     cliente = ClienteControl("http://backend", timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=http_error(503, b'{"error":"down"}')
-    ):
+    with mock.patch("urllib.request.urlopen", side_effect=http_error(503, b'{"error":"down"}')):
         from backend.control.tipos import ModoControl
 
         with pytest.raises(ErrorControl) as info:

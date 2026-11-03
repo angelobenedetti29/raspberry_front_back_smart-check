@@ -20,16 +20,16 @@ Notas de diseño:
   constantes de módulo. Editar acá cuando llegue el PLC real; el resto del
   código no debería tener offsets mágicos.
 
-Para no acoplar el control al resto de la app, este cliente vive en su
-propio módulo y sólo se instancia cuando `cfg.driver != "stub"`. Con el
-default `stub` el módulo entero no se importa en runtime.
+Este módulo importa `pymodbus` a nivel de módulo y `sensores.py` lo importa
+siempre (para resolver la factory), así que `pymodbus` debe estar instalado
+incluso con `driver = "stub"`; con ese driver sólo se instancia el stub.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Sequence
+from collections.abc import Sequence
 
 from pymodbus.client import ModbusSerialClient, ModbusTcpClient
 from pymodbus.exceptions import ModbusException
@@ -216,11 +216,3 @@ class ClienteModbus:
         except (ModbusException, ValueError, TypeError) as exc:
             logger.warning("modbus: encode float32 falló: %s", exc)
             return []
-
-    def cerrar(self) -> None:
-        """Cierra el transporte subyacente. Idempotente."""
-        with self._lock:
-            try:
-                self._cliente.close()
-            except Exception:  # noqa: BLE001 - cierre defensivo
-                logger.exception("modbus: error al cerrar")

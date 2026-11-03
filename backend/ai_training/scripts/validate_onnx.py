@@ -1,6 +1,6 @@
 """CLI: valida un modelo del catálogo sobre una imagen (motor real del pipeline).
 
-    python -m backend.ai_training.scripts.validate_onnx --imagen /ruta/frame.jpg
+python -m backend.ai_training.scripts.validate_onnx --imagen /ruta/frame.jpg
 """
 
 from __future__ import annotations

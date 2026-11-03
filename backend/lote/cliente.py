@@ -103,21 +103,15 @@ class ClienteLotes:
             payload["iniciado_manualmente"] = True
         if estado_inicial is not None:
             payload["estado_inicial"] = estado_inicial
-        data = self._peticion(
-            "POST", f"{self._api.lotes_endpoint}/inicio", secret, payload
-        )
+        data = self._peticion("POST", f"{self._api.lotes_endpoint}/inicio", secret, payload)
         if not isinstance(data, dict) or not isinstance(data.get("lote"), dict):
             raise ErrorLotes(None, "abrir_lote: respuesta inesperada")
         return _lote(data["lote"]), bool(data.get("creado", False))
 
-    def reportar(
-        self, secret: str, lote_id: str, eventos: list[EventoDeteccion]
-    ) -> None:
+    def reportar(self, secret: str, lote_id: str, eventos: list[EventoDeteccion]) -> None:
         """Reporta un batch de eventos en vivo al lote."""
         payload = {"eventos": [evento_a_dict(evento) for evento in eventos]}
-        self._peticion(
-            "POST", f"{self._api.lotes_endpoint}/{lote_id}/eventos", secret, payload
-        )
+        self._peticion("POST", f"{self._api.lotes_endpoint}/{lote_id}/eventos", secret, payload)
 
     def cerrar(
         self,

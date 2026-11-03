@@ -90,9 +90,7 @@ def resolver_modelo(entrada: ModelEntry) -> ResolucionModelo:
     if motor is MotorInferencia.OPENCV_DNN and hailo_disponible():
         hermano = modelo_path.with_suffix(".hef")
         if hermano.is_file():
-            logger.info(
-                "Auto-redirect NPU: %s -> %s", modelo_path.name, hermano.name
-            )
+            logger.info("Auto-redirect NPU: %s -> %s", modelo_path.name, hermano.name)
             modelo_path = hermano
             motor = MotorInferencia.HAILO
 

@@ -16,8 +16,8 @@ import pytest
 from backend.config import ApiConfig
 from backend.lote.cliente import ClienteLotes, _producto
 from backend.lote.tipos import (
-    EstadoProducto,
     ErrorLotes,
+    EstadoProducto,
     EventoDeteccion,
     MotivoCierre,
 )
@@ -32,7 +32,7 @@ class _RespuestaFalsa:
     def read(self) -> bytes:
         return self._cuerpo
 
-    def __enter__(self) -> "_RespuestaFalsa":
+    def __enter__(self) -> _RespuestaFalsa:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -117,7 +117,9 @@ def test_abrir_lote_devuelve_creado_true_y_lote() -> None:
     }
     with _mock_urlopen(_RespuestaFalsa(_envelope(payload))):
         lote, creado = cliente.abrir_lote(
-            "secret", idempotency_key="k-1", producto_id="p-1",
+            "secret",
+            idempotency_key="k-1",
+            producto_id="p-1",
             momento="2026-10-04T12:00:00Z",
         )
     assert creado is True
@@ -135,7 +137,9 @@ def test_abrir_lote_payload_incluye_idempotency_key() -> None:
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
         cliente.abrir_lote(
-            "secret", idempotency_key="k-uuid", producto_id="p-1",
+            "secret",
+            idempotency_key="k-uuid",
+            producto_id="p-1",
             momento="2026-10-04T12:00:00Z",
         )
     assert b"k-uuid" in capturado["data"]
@@ -153,8 +157,11 @@ def test_abrir_lote_payload_incluye_modo_elegido() -> None:
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
         cliente.abrir_lote(
-            "secret", idempotency_key="k-1", producto_id="p-1",
-            momento="2026-10-04T12:00:00Z", modo="AUTOMATICO",
+            "secret",
+            idempotency_key="k-1",
+            producto_id="p-1",
+            momento="2026-10-04T12:00:00Z",
+            modo="AUTOMATICO",
         )
     assert b"modo" in capturado["data"]
     assert b"AUTOMATICO" in capturado["data"]
@@ -171,7 +178,9 @@ def test_abrir_lote_payload_incluye_estado_inicial_manual() -> None:
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
         cliente.abrir_lote(
-            "secret", idempotency_key="k-1", producto_id="p-1",
+            "secret",
+            idempotency_key="k-1",
+            producto_id="p-1",
             momento="2026-10-04T12:00:00Z",
             iniciado_manualmente=True,
             estado_inicial={"temp_horno_1": 180.0, "velocidad_cinta": 1.2},
@@ -252,7 +261,8 @@ def test_cerrar_incluye_motivo_y_conteos() -> None:
 
     with mock.patch("urllib.request.urlopen", side_effect=_captura):
         lote = cliente.cerrar(
-            "secret", "lote-1",
+            "secret",
+            "lote-1",
             idempotency_key="k-1",
             motivo=MotivoCierre.MANUAL,
             conteos=Conteos(ok=5, crudo=1, quemado=2, total=8),
@@ -315,11 +325,11 @@ def test_producto_sin_limites_los_deja_en_none() -> None:
 def test_5xx_se_traduce_a_error_lotes_reintentable() -> None:
     """Un 500 debe ser reintentable (codigo>=500)."""
     cliente = ClienteLotes(_api(), timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=http_error(500, b'{"error":"crash"}')
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=http_error(500, b'{"error":"crash"}')),
+        pytest.raises(ErrorLotes) as info,
     ):
-        with pytest.raises(ErrorLotes) as info:
-            cliente.reportar("secret", "lote-1", [_evento()])
+        cliente.reportar("secret", "lote-1", [_evento()])
     assert info.value.codigo == 500
     assert info.value.reintentable is True
 
@@ -327,14 +337,16 @@ def test_5xx_se_traduce_a_error_lotes_reintentable() -> None:
 def test_4xx_se_traduce_a_error_lotes_no_reintentable() -> None:
     """Un 400 no debe reintentarse: es bug del lado de la Pi."""
     cliente = ClienteLotes(_api(), timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=http_error(400, b'{"error":"bad"}')
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=http_error(400, b'{"error":"bad"}')),
+        pytest.raises(ErrorLotes) as info,
     ):
-        with pytest.raises(ErrorLotes) as info:
-            cliente.abrir_lote(
-                "secret", idempotency_key="k", producto_id="p-1",
-                momento="2026-10-04T12:00:00Z",
-            )
+        cliente.abrir_lote(
+            "secret",
+            idempotency_key="k",
+            producto_id="p-1",
+            momento="2026-10-04T12:00:00Z",
+        )
     assert info.value.codigo == 400
     assert info.value.reintentable is False
 
@@ -342,22 +354,22 @@ def test_4xx_se_traduce_a_error_lotes_no_reintentable() -> None:
 def test_401_es_no_reintentable_pero_indica_credencial_invalida() -> None:
     """El 401 no es reintentable pero el servicio debe invalidar la credencial."""
     cliente = ClienteLotes(_api(), timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=http_error(401, b'{"error":"unauth"}')
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=http_error(401, b'{"error":"unauth"}')),
+        pytest.raises(ErrorLotes) as info,
     ):
-        with pytest.raises(ErrorLotes) as info:
-            cliente.reportar("secret", "lote-1", [_evento()])
+        cliente.reportar("secret", "lote-1", [_evento()])
     assert info.value.codigo == 401
     assert info.value.reintentable is False
 
 
 def test_timeout_red_se_traduce_a_error_lotes_reintentable() -> None:
     cliente = ClienteLotes(_api(), timeout=1.0)
-    with mock.patch(
-        "urllib.request.urlopen", side_effect=TimeoutError("red caída")
+    with (
+        mock.patch("urllib.request.urlopen", side_effect=TimeoutError("red caída")),
+        pytest.raises(ErrorLotes) as info,
     ):
-        with pytest.raises(ErrorLotes) as info:
-            cliente.lote_abierto("secret")
+        cliente.lote_abierto("secret")
     assert info.value.codigo is None
     assert info.value.reintentable is True
 
@@ -365,9 +377,9 @@ def test_timeout_red_se_traduce_a_error_lotes_reintentable() -> None:
 def test_envelope_sin_success_se_traduce_a_error_formato() -> None:
     """El backend puede devolver {success: false, errors: [...]}."""
     cliente = ClienteLotes(_api(), timeout=1.0)
-    cuerpo = json.dumps(
-        {"success": False, "errors": ["lote no encontrado"]}
-    ).encode()
-    with _mock_urlopen(_RespuestaFalsa(cuerpo, 200)):
-        with pytest.raises(ErrorLotes, match="lote no encontrado"):
-            cliente.lote_abierto("secret")
+    cuerpo = json.dumps({"success": False, "errors": ["lote no encontrado"]}).encode()
+    with (
+        _mock_urlopen(_RespuestaFalsa(cuerpo, 200)),
+        pytest.raises(ErrorLotes, match="lote no encontrado"),
+    ):
+        cliente.lote_abierto("secret")

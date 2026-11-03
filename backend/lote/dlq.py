@@ -20,12 +20,12 @@ import logging
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from backend.lote.tipos import evento_a_dict
 from backend.rotacion import rotar_archivo
+from backend.tiempo import ahora_iso_local
 
 if TYPE_CHECKING:
     from backend.lote.tipos import EventoDeteccion
@@ -44,11 +44,6 @@ class _CfgDLQ:
     path: Path
     max_bytes: int
     max_files: int
-
-
-def _ahora_iso() -> str:
-    """Timestamp local con offset, informativo para el audit / DLQ."""
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 class ColaDLQ:
@@ -107,7 +102,7 @@ class ColaDLQ:
         if not eventos_list:
             return
         entrada = {
-            "ts": _ahora_iso(),
+            "ts": ahora_iso_local(),
             "lote_id": lote_id,
             "codigo_http": codigo_http,
             "detalle": detalle,
@@ -154,9 +149,7 @@ class ColaDLQ:
         """Rotados del más viejo al más nuevo y, al final, el principal."""
         ruta = self._cfg.path
         backups = max(0, self._cfg.max_files - 1)
-        rutas = [
-            ruta.with_name(f"{ruta.name}.{indice}") for indice in range(backups, 0, -1)
-        ]
+        rutas = [ruta.with_name(f"{ruta.name}.{indice}") for indice in range(backups, 0, -1)]
         rutas.append(ruta)
         return rutas
 

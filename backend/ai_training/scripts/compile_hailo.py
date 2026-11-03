@@ -92,14 +92,8 @@ def main(argv=None):
     nombre = args.nombre
     work_dir = Path(args.work_dir).expanduser()
     onnx = models_dir / f"{nombre}.onnx"
-    calib = (
-        Path(args.calib).expanduser() if args.calib else work_dir / "calib_dataset.npy"
-    )
-    hef_dest = (
-        Path(args.hef_dest).expanduser()
-        if args.hef_dest
-        else models_dir / f"{nombre}.hef"
-    )
+    calib = Path(args.calib).expanduser() if args.calib else work_dir / "calib_dataset.npy"
+    hef_dest = Path(args.hef_dest).expanduser() if args.hef_dest else models_dir / f"{nombre}.hef"
 
     print("=" * 60)
     print("      COMPILACIÓN DE MODELO A HEF PARA HAILO-8L")

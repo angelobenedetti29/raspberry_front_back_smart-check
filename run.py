@@ -119,9 +119,7 @@ def main() -> int:
         bind_host=bind_host,
         bind_port=bind_port,
     )
-    monitor = MonitorService(
-        config, on_credencial_invalida=dispositivo.invalidar_credencial
-    )
+    monitor = MonitorService(config, on_credencial_invalida=dispositivo.invalidar_credencial)
     controlador_monitor = AdaptadorMonitor(monitor)
 
     def _al_cambiar_tunel(nueva_url: str, nuevo_puerto: int) -> None:
@@ -136,9 +134,7 @@ def main() -> int:
         try:
             servidor_http.rebind(bind_host_nuevo, bind_port_nuevo)
         except Exception:
-            logger.exception(
-                "http: no se pudo re-bindear el servidor; URL no sincronizada"
-            )
+            logger.exception("http: no se pudo re-bindear el servidor; URL no sincronizada")
             return
         dispositivo.actualizar_tunel(nueva_url, nuevo_puerto)
 
@@ -153,8 +149,9 @@ def main() -> int:
         on_device_tunel_changed=_al_cambiar_tunel,
     )
     # Control automático (SCA-400): sólo aplica a Pi ENTRADA. El servicio se
-    # autodeshabilita si el tipo es SALIDA_HORNO. Hasta que exista driver
-    # real, se usan stubs (no leen ni escriben hardware). Se construye antes
+    # autodeshabilita si el tipo es SALIDA_HORNO. Los drivers salen de
+    # config.control.sensores/actuadores; `stub`/`simulado` no hacen I/O;
+    # `modbus_tcp`/`modbus_rtu` escriben el PLC real. Se construye antes
     # que LoteService para cablear los callbacks reactivos (on_lote_abierto,
     # on_lote_cerrado, actualizar_modo) — sin esto, control sólo descubría
     # lotes por su propio polling.
@@ -196,9 +193,7 @@ def main() -> int:
     )
     controlador_lotes = AdaptadorLotes(lotes)
 
-    services = _start_services(
-        [streaming, dispositivo, monitor, lotes, control, servidor_http]
-    )
+    services = _start_services([streaming, dispositivo, monitor, lotes, control, servidor_http])
     logger.info("Aplicación iniciada")
     try:
         return run_gui(

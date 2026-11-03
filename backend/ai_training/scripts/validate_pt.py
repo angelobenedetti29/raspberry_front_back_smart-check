@@ -1,6 +1,6 @@
 """CLI: valida un modelo PyTorch (.pt) con Ultralytics sobre una imagen.
 
-    python -m backend.ai_training.scripts.validate_pt --imagen /ruta/frame.jpg
+python -m backend.ai_training.scripts.validate_pt --imagen /ruta/frame.jpg
 """
 
 from __future__ import annotations

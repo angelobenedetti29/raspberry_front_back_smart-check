@@ -112,20 +112,6 @@ class SetpointPropuesto:
     # producto.
     manual_override: bool = False
 
-    def a_payload_aplicacion(self) -> dict:
-        """Body legacy del POST de aprobación de consigna.
-
-        El endpoint de aprobación actual ignora el body; se conserva por
-        compatibilidad con callers/tests viejos.
-        """
-        payload: dict = {
-            "temperatura_objetivo": self.temp_horno_1,
-            "velocidad_cinta_objetivo": self.velocidad_cinta,
-        }
-        if self.decision_id is not None:
-            payload["decision_id"] = self.decision_id
-        return payload
-
     def a_payload_ack(self) -> dict:
         """Body de POST /api/v1/lotes/{id}/consigna/ack (qué aplicó la Pi)."""
         payload: dict = {

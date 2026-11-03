@@ -112,9 +112,7 @@ class RegistroEstado:
         """
         desconocidos = set(campos) - _CAMPOS
         if desconocidos:
-            raise ValueError(
-                f"Campos de estado desconocidos: {', '.join(sorted(desconocidos))}"
-            )
+            raise ValueError(f"Campos de estado desconocidos: {', '.join(sorted(desconocidos))}")
         with self._lock:
             self._estado = replace(self._estado, **campos)
 
@@ -123,9 +121,7 @@ class RegistroEstado:
         if campo not in _CONTADORES:
             raise ValueError(f"'{campo}' no es un contador de estado")
         with self._lock:
-            self._estado = replace(
-                self._estado, **{campo: getattr(self._estado, campo) + delta}
-            )
+            self._estado = replace(self._estado, **{campo: getattr(self._estado, campo) + delta})
 
     def instantanea(self) -> EstadoStreaming:
         """Devuelve el estado actual. Es inmutable, así que no hace falta copiarlo."""

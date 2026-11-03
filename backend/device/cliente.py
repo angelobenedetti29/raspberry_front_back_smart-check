@@ -155,9 +155,7 @@ class ClienteDispositivo:
             )
         url = nueva_url.strip()
         if not url:
-            raise ErrorRegistro(
-                "No se puede sincronizar una rename_url vacía con el backend"
-            )
+            raise ErrorRegistro("No se puede sincronizar una rename_url vacía con el backend")
         try:
             self._http.peticion(
                 "PATCH",
@@ -181,9 +179,7 @@ def _campo_str_requerido(data: dict, clave: str) -> str:
     """Extrae un campo string obligatorio; su ausencia es error de protocolo."""
     valor = data.get(clave)
     if not isinstance(valor, str):
-        raise ErrorRegistro(
-            f"El backend no devolvió el campo '{clave}' como string"
-        )
+        raise ErrorRegistro(f"El backend no devolvió el campo '{clave}' como string")
     return valor
 
 

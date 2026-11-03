@@ -12,8 +12,7 @@ __pycache__/
 # Estado de enrolamiento del nodo (contiene el secret). No versionar.
 /device*.json
 
-# Lock y temporales de la escritura atómica de config.json (raíz)
-config.json.lock
+# Temporales de la escritura atómica de config.json (raíz)
 *.tmp
 .tmp-*
 
@@ -33,15 +32,17 @@ backend/ai_training/runs/
 backend/ai_training/*.alls
 backend/ai_training/*_nms.json
 
-# Streaming pipeline runtime data
-streaming/data/*
-!streaming/data/.gitkeep
-
 # Base SQLite de eventos y su rotación (runtime)
 data/*.db*
 
 # Audit log de control y su rotación (runtime)
 data/control_audit.jsonl*
+
+# Cola de eventos fallidos (runtime)
+data/dlq.jsonl*
+
+# Salidas de multimedia generadas (runtime)
+multimedia/output/
 
 # Video de prueba pesado: se usa local, no se versiona (supera el límite de GitHub)
 multimedia/videos/t3.mp4

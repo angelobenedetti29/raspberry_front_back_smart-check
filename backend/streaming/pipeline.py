@@ -100,13 +100,9 @@ class Pipeline:
         self._detector: Detector | None = None
         self._almacen: AlmacenSQLite | None = None
         self._linea_conteo_y = (
-            config.stream.counting.line_y
-            if config.stream.counting.enabled
-            else None
+            config.stream.counting.line_y if config.stream.counting.enabled else None
         )
-        self._estabilizador = EstabilizadorDetecciones(
-            linea_conteo_y=self._linea_conteo_y
-        )
+        self._estabilizador = EstabilizadorDetecciones(linea_conteo_y=self._linea_conteo_y)
         self._modelo_actual: str | None = None
         # Para el cierre de lote: segundos desde la última detección.
         self._inicio_monotonic = time.monotonic()
@@ -212,9 +208,7 @@ class Pipeline:
                 self._slot_inferencia = None
             # Sin esto la instantánea quedaba diciendo que seguía publicando
             # después de que el lazo terminó.
-            self._registro.actualizar(
-                publicando=False, capturando=False, fps=0.0, reintento_en=0.0
-            )
+            self._registro.actualizar(publicando=False, capturando=False, fps=0.0, reintento_en=0.0)
 
     def _activo(self) -> bool:
         """True si hay que capturar: mostrar o publicar con URL conocida."""
@@ -243,9 +237,7 @@ class Pipeline:
 
         # El original queda limpio para el lazo de inferencia: dibujar sobre él
         # le metería cajas al detector.
-        if modo is ModoPublicacion.INFERENCIA and (
-            detecciones or self._linea_conteo_y is not None
-        ):
+        if modo is ModoPublicacion.INFERENCIA and (detecciones or self._linea_conteo_y is not None):
             anotado = frame.copy()
             dibujar(anotado, detecciones, linea_conteo_y=self._linea_conteo_y)
         else:
@@ -260,9 +252,12 @@ class Pipeline:
                 self._slot_preview = anotado
         self._frame_nuevo.set()
 
-        if self._publicando_aplicado and self._publicador is not None:
-            if self._publicador.enviar(anotado):
-                self._registro.sumar("frames_publicados")
+        if (
+            self._publicando_aplicado
+            and self._publicador is not None
+            and self._publicador.enviar(anotado)
+        ):
+            self._registro.sumar("frames_publicados")
 
     def _reconciliar_publicacion(self) -> None:
         """Alinea el publicador con la intención de la UI y la URL vigente.
@@ -373,9 +368,7 @@ class Pipeline:
         else:
             self._reportar_error("captura", "")
 
-        self._reportar_error(
-            "publicacion", publicador.ultimo_error if publicador else ""
-        )
+        self._reportar_error("publicacion", publicador.ultimo_error if publicador else "")
         self._reportar_error("almacen", self._almacen.error if self._almacen else "")
 
     # --- lazo de inferencia ---
@@ -427,9 +420,7 @@ class Pipeline:
         eventos_reinicio = self._estabilizador.eventos()
         if eventos_reinicio:
             if self._almacen is not None:
-                self._almacen.registrar(
-                    self._numero_frame, eventos_reinicio, activas=0
-                )
+                self._almacen.registrar(self._numero_frame, eventos_reinicio, activas=0)
             self._difundir_eventos(eventos_reinicio, self._numero_frame)
         self._registro.actualizar(
             modelo_id=entrada.model_id,
@@ -513,9 +504,7 @@ class Pipeline:
         if self._almacen is not None:
             self._almacen.registrar(numero_frame, eventos, activas=len(detecciones))
 
-    def _difundir_eventos(
-        self, eventos: Sequence[EventoPista], numero_frame: int
-    ) -> None:
+    def _difundir_eventos(self, eventos: Sequence[EventoPista], numero_frame: int) -> None:
         """Ofrece los eventos a cada suscriptor. Nunca bloquea la inferencia."""
         if not eventos:
             return

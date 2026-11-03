@@ -17,11 +17,11 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from backend.rotacion import rotar_archivo
+from backend.tiempo import ahora_iso_local
 
 if TYPE_CHECKING:
     from backend.control.tipos import SetpointPropuesto
@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 # Resultados posibles del ciclo de decisión. El string viaja literal al
 # JSONL para que un parser externo (jq, log shipper) pueda filtrar.
 ResultadoDecision = Literal[
-    "aplicada",          # el setpoint se aplicó al PLC y el ack al backend fue OK
-    "descartada_dup",    # mismo decision_id dentro del TTL: no se aplica
+    "aplicada",  # el setpoint se aplicó al PLC y el ack al backend fue OK
+    "descartada_dup",  # mismo decision_id dentro del TTL: no se aplica
     "pendiente_aprobacion",  # SUPERVISION: espera aprobación del operario
-    "fallo_ack",         # se aplicó al PLC pero el ack al backend falló
+    "fallo_ack",  # se aplicó al PLC pero el ack al backend falló
 ]
 
 
@@ -44,10 +44,6 @@ class _CfgAudit:
     path: Path
     max_bytes: int
     max_files: int
-
-
-def _ahora_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 class AuditorConsignas:
@@ -72,13 +68,6 @@ class AuditorConsignas:
             raise ValueError("max_files debe ser > 0")
         self._cfg = _CfgAudit(path=path, max_bytes=max_bytes, max_files=max_files)
         self._lock = threading.Lock()
-        self._error = ""
-
-    @property
-    def error(self) -> str:
-        """Último fallo de apertura/escritura. Vacío si el auditor está sano."""
-        with self._lock:
-            return self._error
 
     # --- escritura ---
 
@@ -98,7 +87,7 @@ class AuditorConsignas:
         "ttl expirado" para un descartada_dup).
         """
         entrada = {
-            "ts": _ahora_iso(),
+            "ts": ahora_iso_local(),
             "lote_id": lote_id,
             "decision_id": propuesta.decision_id,
             "aplicado_por": propuesta.aplicado_por,
@@ -118,9 +107,7 @@ class AuditorConsignas:
                     self._rotar()
                 with self._cfg.path.open("a", encoding="utf-8") as fh:
                     fh.write(linea)
-                self._error = ""
             except OSError as exc:
-                self._error = f"No se pudo escribir en {self._cfg.path}: {exc}"
                 logger.warning("Audit: %s", exc)
 
     # --- rotación ---

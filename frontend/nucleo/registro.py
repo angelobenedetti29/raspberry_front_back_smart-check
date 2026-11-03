@@ -34,10 +34,10 @@ def secciones_visibles(
     """
     visibles: list[type[SeccionBase]] = []
     for clase in SECCIONES:
-        if clase.grupo is GrupoSeccion.COMUN:
-            visibles.append(clase)
-        elif clase.grupo is GrupoSeccion.ENTRADA and tipo is TipoDispositivoUI.ENTRADA_HORNO:
-            visibles.append(clase)
-        elif clase.grupo is GrupoSeccion.SALIDA and tipo is TipoDispositivoUI.SALIDA_HORNO:
+        if (
+            clase.grupo is GrupoSeccion.COMUN
+            or (clase.grupo is GrupoSeccion.ENTRADA and tipo is TipoDispositivoUI.ENTRADA_HORNO)
+            or (clase.grupo is GrupoSeccion.SALIDA and tipo is TipoDispositivoUI.SALIDA_HORNO)
+        ):
             visibles.append(clase)
     return tuple(visibles)

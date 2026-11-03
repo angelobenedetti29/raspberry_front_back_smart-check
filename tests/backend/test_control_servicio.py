@@ -7,6 +7,7 @@ PLC. Se usan fakes en memoria y un directorio temporal para el audit log.
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 from backend.config import load_config
@@ -18,6 +19,7 @@ from backend.control.tipos import (
     ModoControl,
     SetpointPropuesto,
 )
+from backend.device.tipos import TipoDispositivo
 from backend.lote.tipos import Conteos, EstadoLote, Lote, Producto
 
 _LIMITES = LimitesAplicacion(
@@ -107,6 +109,9 @@ class _ClienteLotesFalso:
     def productos(self, secret: str) -> list[Producto]:
         self.llamadas_productos += 1
         return list(self._productos)
+
+    def lote_abierto(self, secret: str) -> Lote | None:
+        return None
 
 
 def _servicio(tmp_path, cliente: _ClienteFalso) -> tuple[ControlService, _AplicadorFalso]:
@@ -345,9 +350,7 @@ def test_aprobacion_usa_los_limites_de_la_propuesta(tmp_path) -> None:
 
 def test_si_falla_la_aprobacion_la_propuesta_queda_pendiente(tmp_path) -> None:
     propuesta = _propuesta(autorizada=False)
-    cliente = _ClienteFalso(
-        propuesta, error_aprobar=ErrorControl("backend caído")
-    )
+    cliente = _ClienteFalso(propuesta, error_aprobar=ErrorControl("backend caído"))
     servicio, aplicador = _servicio(tmp_path, cliente)
     servicio._modo = ModoControl.SUPERVISION
     servicio._buscar_y_aplicar_propuesta("secret", "lote-1")
@@ -409,3 +412,16 @@ def test_estado_inicial_respeta_los_umbrales_configurados(tmp_path) -> None:
 
     servicio._lector = _LectorConLectura(_lectura(60.0, 0.0))
     assert servicio.estado_inicial_lote() is not None
+
+
+def test_lote_cerrado_limpia_el_dedup_de_decisiones(tmp_path) -> None:
+    """Al cerrarse el lote no deben quedar decision_id viejos cacheados."""
+    servicio, _ = _servicio(tmp_path, _ClienteFalso())
+    servicio._tipo_provider = lambda: TipoDispositivo.ENTRADA_HORNO
+    servicio._secret_provider = lambda: "secret"
+    servicio._cliente_lotes = _ClienteLotesFalso()
+    servicio._decision_vistas = {"dec-1": time.monotonic()}
+
+    servicio._detectar_lote()
+
+    assert servicio._decision_vistas == {}

@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from frontend.nucleo.controlador_dispositivo import TipoDispositivoUI
+from frontend.nucleo.controlador_dispositivo import TipoDispositivoUI, tipo_a_ui
 from frontend.nucleo.controlador_lotes import (
     ConteosUI,
-    EstadoLoteUI,
     EstadoLotesUI,
+    EstadoLoteUI,
     LoteUI,
     ProductoUI,
 )
@@ -20,22 +20,6 @@ from frontend.nucleo.controlador_lotes import (
 if TYPE_CHECKING:
     from backend.lote import LoteService
     from backend.lote.tipos import Conteos, DispositivoSector, Lote, Sector
-
-
-def _tipo_a_ui(valor: object) -> TipoDispositivoUI | None:
-    """Mapea el tipo del backend al enum de la interfaz, por valor.
-
-    Un valor desconocido o ausente se traduce a `None` para no romper la UI.
-    """
-    if valor is None:
-        return None
-    if isinstance(valor, TipoDispositivoUI):
-        return valor
-    crudo = getattr(valor, "value", valor)
-    try:
-        return TipoDispositivoUI(crudo)
-    except ValueError:
-        return None
 
 
 def _conteos(conteos: Conteos) -> ConteosUI:
@@ -49,12 +33,8 @@ def _conteos(conteos: Conteos) -> ConteosUI:
 
 def _descripcion(dispositivo: DispositivoSector) -> str:
     """Formatea un dispositivo como "hostname (rol)"."""
-    rol = _tipo_a_ui(dispositivo.tipo)
-    return (
-        f"{dispositivo.hostname} ({rol.etiqueta})"
-        if rol is not None
-        else dispositivo.hostname
-    )
+    rol = tipo_a_ui(dispositivo.tipo)
+    return f"{dispositivo.hostname} ({rol.etiqueta})" if rol is not None else dispositivo.hostname
 
 
 def _lote(lote: Lote | None) -> LoteUI | None:
@@ -64,9 +44,7 @@ def _lote(lote: Lote | None) -> LoteUI | None:
     degradado = False
     if lote.abierto_por is not None:
         abierto_por = _descripcion(lote.abierto_por)
-        degradado = (
-            _tipo_a_ui(lote.abierto_por.tipo) is not TipoDispositivoUI.ENTRADA_HORNO
-        )
+        degradado = tipo_a_ui(lote.abierto_por.tipo) is not TipoDispositivoUI.ENTRADA_HORNO
     return LoteUI(
         id=lote.id,
         estado=EstadoLoteUI(lote.estado.value),
@@ -93,7 +71,7 @@ class AdaptadorLotes:
         return EstadoLotesUI(
             habilitado=estado.habilitado,
             registrado=estado.registrado,
-            rol=_tipo_a_ui(estado.tipo),
+            rol=tipo_a_ui(estado.tipo),
             sector_nombre=sector.nombre if sector is not None else "",
             companeros=(
                 tuple(_descripcion(companero) for companero in sector.companeros)
@@ -113,9 +91,7 @@ class AdaptadorLotes:
             backend_ok=estado.backend_ok,
             mensaje=estado.mensaje,
             historial=tuple(
-                ui
-                for ui in (_lote(lote) for lote in estado.historial)
-                if ui is not None
+                ui for ui in (_lote(lote) for lote in estado.historial) if ui is not None
             ),
         )
 

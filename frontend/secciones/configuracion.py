@@ -54,6 +54,7 @@ _MAX_ENTERO = 2_000_000_000
 _MIN_DECIMAL = 0.0
 _MAX_DECIMAL = 1_000_000.0
 
+
 def _vaciar_layout(layout: QVBoxLayout) -> None:
     """Despega y destruye los widgets de un layout.
 
@@ -115,9 +116,7 @@ class Configuracion(SeccionBase):
         layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(10)
 
-        subtitulo = QLabel(
-            "Ajustes de captura, publicación, inferencia y backend del equipo."
-        )
+        subtitulo = QLabel("Ajustes de captura, publicación, inferencia y backend del equipo.")
         subtitulo.setProperty("rol", "subtitulo")
         layout.addWidget(subtitulo)
 
@@ -318,9 +317,7 @@ class Configuracion(SeccionBase):
             self._layout_campos.addWidget(self._tarjeta(grupo, del_grupo))
         self._aplicar_condiciones()
 
-    def _tarjeta(
-        self, grupo: str, campos: tuple[CampoConfigUI, ...]
-    ) -> QFrame:
+    def _tarjeta(self, grupo: str, campos: tuple[CampoConfigUI, ...]) -> QFrame:
         """Tarjeta de un grupo con sus campos en grilla de dos columnas."""
         tarjeta = QFrame()
         tarjeta.setObjectName("tarjetaEstado")

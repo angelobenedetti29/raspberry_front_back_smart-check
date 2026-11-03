@@ -11,15 +11,16 @@ un aviso visible, nunca se deja que rompa la sección.
 
 from __future__ import annotations
 
+import contextlib
 import math
-from typing import Callable
+from collections.abc import Callable
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QImage,
-    QPaintEvent,
     QPainter,
+    QPaintEvent,
     QResizeEvent,
     QStandardItem,
     QStandardItemModel,
@@ -47,7 +48,7 @@ from frontend.nucleo.controlador import (
 )
 from frontend.nucleo.estado import NivelEstado
 from frontend.nucleo.iconos import icono
-from frontend.nucleo.tema import color
+from frontend.nucleo.tema import color, repolish
 
 _GLIFO_NIVEL: dict[NivelEstado, str] = {
     NivelEstado.ACTIVO: "●",
@@ -82,14 +83,6 @@ _ANCHO_COLUMNA_ESTADO = 240
 _ALTO_MINIMO_PREVIEW = 170
 _INTERVALO_PANEL_MS = 1000
 _MENSAJE_SERVICIO_CAIDO = "El servicio de streaming no está disponible."
-
-
-def _repolish(widget: QWidget) -> None:
-    """Reaplica la hoja de estilos tras cambiar una propiedad que un selector usa."""
-    estilo = widget.style()
-    estilo.unpolish(widget)
-    estilo.polish(widget)
-    widget.update()
 
 
 class _EtiquetaElidida(QLabel):
@@ -144,9 +137,7 @@ class _FilaEstado(QFrame):
 
         self._detalle = _EtiquetaElidida()
         self._detalle.setObjectName("detalleEstado")
-        self._detalle.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._detalle.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(self._punto)
         layout.addWidget(etiqueta_lbl)
@@ -158,7 +149,7 @@ class _FilaEstado(QFrame):
         """Actualiza el punto (con repolish) y el detalle de la fila."""
         self._punto.setText(_GLIFO_NIVEL[nivel])
         self._punto.setProperty("nivel", nivel.value)
-        _repolish(self._punto)
+        repolish(self._punto)
         self._detalle.fijar_texto(detalle)
 
 
@@ -179,9 +170,7 @@ class _FilaDato(QFrame):
 
         self._valor = _EtiquetaElidida()
         self._valor.setObjectName("detalleEstado")
-        self._valor.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._valor.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(etiqueta_lbl)
         layout.addWidget(self._valor, 1)
@@ -200,9 +189,7 @@ class _VistaPreview(QWidget):
         super().__init__(parent)
         self._imagen: QImage | None = None
         self._mensaje = "Sin vista previa."
-        self._pixmap_vacio = icono(
-            "camara", color=color("texto_muted"), px=36
-        ).pixmap(36, 36)
+        self._pixmap_vacio = icono("camara", color=color("texto_muted"), px=36).pixmap(36, 36)
         self.setMinimumHeight(_ALTO_MINIMO_PREVIEW)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -280,9 +267,7 @@ class EnVivo(SeccionBase):
         self._banner_error = QLabel()
         self._banner_error.setObjectName("bannerError")
         self._banner_error.setWordWrap(True)
-        self._banner_error.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._banner_error.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._banner_error.setStyleSheet(
             "QLabel#bannerError {"
             f" background-color: {color('error')};"
@@ -324,9 +309,7 @@ class EnVivo(SeccionBase):
         rotulo_fuente = QLabel("Fuente")
         rotulo_fuente.setProperty("rol", "rotulo")
         self._combo_fuente = QComboBox()
-        self._combo_fuente.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._combo_fuente.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._combo_fuente.setToolTip("Cámara o archivo de video a procesar.")
         self._combo_fuente.currentIndexChanged.connect(self._al_cambiar_fuente)
 
@@ -336,9 +319,7 @@ class EnVivo(SeccionBase):
         # Modelo propio de ítems: hace falta para deshabilitar los no disponibles.
         self._modelo_modelos = QStandardItemModel(self._combo_modelo)
         self._combo_modelo.setModel(self._modelo_modelos)
-        self._combo_modelo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._combo_modelo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._combo_modelo.setToolTip(
             "Modelo de detección. Los que no están disponibles no se pueden elegir."
         )
@@ -564,10 +545,8 @@ class EnVivo(SeccionBase):
 
         publicando = estado.publicando
         self._boton_publicar.setText("Detener" if publicando else "Publicar")
-        self._boton_publicar.setProperty(
-            "publicando", "true" if publicando else "false"
-        )
-        _repolish(self._boton_publicar)
+        self._boton_publicar.setProperty("publicando", "true" if publicando else "false")
+        repolish(self._boton_publicar)
 
         if estado.fuente:
             self._seleccionar(self._combo_fuente, estado.fuente)
@@ -658,9 +637,7 @@ class EnVivo(SeccionBase):
         datos["rendimiento"].fijar(f"{fps} · {estado.frames} frames")
         ultima = estado.ultima_deteccion or "sin detecciones"
         datos["detecciones"].fijar(f"{estado.activas} en cinta · {ultima}")
-        datos["retraso"].fijar(
-            f"{estado.retraso_ms} ms" if estado.retraso_ms else "—"
-        )
+        datos["retraso"].fijar(f"{estado.retraso_ms} ms" if estado.retraso_ms else "—")
 
         modelo = estado.modelo_etiqueta or estado.modelo_id or "sin modelo"
         if estado.motor:
@@ -761,11 +738,9 @@ class EnVivo(SeccionBase):
         """Suelta el preview y detiene los timers: sin esto se gasta CPU al pedo."""
         self._timer_preview.stop()
         self._timer_panel.stop()
-        try:
-            self.ctx.controlador.solicitar_preview(False)
-        except RuntimeError:
+        with contextlib.suppress(RuntimeError):
             # Al salir el servicio puede estar caído: no hay a quién avisarle.
-            pass
+            self.ctx.controlador.solicitar_preview(False)
 
     def al_cerrar(self) -> None:
         self.al_salir()

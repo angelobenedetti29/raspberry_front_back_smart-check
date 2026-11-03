@@ -63,8 +63,10 @@ def test_registrar_inserta_una_fila_por_evento(tmp_path: Path) -> None:
 def test_registrar_sin_eventos_emite_latido_segun_cadencia(tmp_path: Path) -> None:
     cfg = _config(tmp_path)
     cfg = StorageConfig(
-        path=cfg.path, max_bytes=cfg.max_bytes,
-        max_files=cfg.max_files, persist_no_detection_every=2,
+        path=cfg.path,
+        max_bytes=cfg.max_bytes,
+        max_files=cfg.max_files,
+        persist_no_detection_every=2,
     )
     almacen = AlmacenSQLite(cfg, fuente="cam-0", modelo="tostadas-v2")
     almacen.iniciar()
@@ -76,9 +78,7 @@ def test_registrar_sin_eventos_emite_latido_segun_cadencia(tmp_path: Path) -> No
         almacen.detener()
     conn = sqlite3.connect(str(cfg.path))
     try:
-        filas = conn.execute(
-            "SELECT tipo, activas FROM eventos WHERE tipo='latido'"
-        ).fetchall()
+        filas = conn.execute("SELECT tipo, activas FROM eventos WHERE tipo='latido'").fetchall()
     finally:
         conn.close()
     assert len(filas) == 2

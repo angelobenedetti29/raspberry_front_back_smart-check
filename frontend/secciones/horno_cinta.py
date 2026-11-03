@@ -14,7 +14,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -32,12 +32,15 @@ from frontend.nucleo.controlador_control import (
     ModoControlUI,
     SetpointUI,
 )
+from frontend.nucleo.tema import color, repolish
 
-# --- constantes visuales / tolerancias --------------------------------------
+# --- constantes visuales / bandas ------------------------------------------
 
 _VALOR_SIN_DATO = "—"
-_TOLERANCIA_TEMP_C = 10.0  # matchea LimitesAplicacion.delta_temp_max_c
-_TOLERANCIA_VEL = 0.05  # matchea LimitesAplicacion.delta_vel_max
+# Bandas visuales del semáforo y del chart: no son el Δmáx de aplicación
+# (ese lo aplica el backend/ControlService al escribir el PLC).
+_BANDA_TEMP_C = 10.0
+_BANDA_VEL = 0.05
 _PASO_Y_TEMP = 25.0
 _PASO_Y_VEL = 0.10
 _VENTANA_MINUTOS = 600.0  # 10 min de historial para el mini-chart
@@ -49,6 +52,7 @@ _ALTURA_BOTON_MODO = 56
 @dataclass
 class _Muestra:
     """Una muestra cacheada para el mini-chart."""
+
     timestamp: float  # time.monotonic()
     valor: float
 
@@ -108,9 +112,7 @@ class _HornoMiniChart(QFrame):
             return
         # Filtrar muestras válidas y dentro de la ventana de 10 min.
         ahora = time.monotonic()
-        muestras = [
-            m for m in self._muestras if ahora - m.timestamp <= _VENTANA_MINUTOS
-        ]
+        muestras = [m for m in self._muestras if ahora - m.timestamp <= _VENTANA_MINUTOS]
         # Estado vacío: <2 muestras o todas None.
         if len(muestras) < 2:
             self._pintar_centrado(painter, rect, self._vacio_ms)
@@ -131,7 +133,8 @@ class _HornoMiniChart(QFrame):
             y_max = y_min + self._paso_y
         # Banda de tolerancia si hay objetivo.
         if self._objetivo is not None and self._tolerancia > 0:
-            banda_color = QColor_accent_alpha(0x4D)
+            banda_color = QColor(color("accent"))
+            banda_color.setAlpha(0x4D)
             painter.fillRect(
                 int(rect.x()),
                 int(self._y_a_px(self._objetivo + self._tolerancia, y_min, y_max, rect)),
@@ -143,7 +146,7 @@ class _HornoMiniChart(QFrame):
                 banda_color,
             )
         # Grid horizontal.
-        grid_color = QColor_from_named_colors("#2A323B")
+        grid_color = QColor(color("borde"))
         tick = y_min
         while tick <= y_max + 1e-9:
             y_px = self._y_a_px(tick, y_min, y_max, rect)
@@ -152,14 +155,13 @@ class _HornoMiniChart(QFrame):
             tick += self._paso_y
         # Línea de objetivo punteada.
         if self._objetivo is not None:
-            muted_color = QColor_from_named_colors("#94A1AE")
+            muted_color = QColor(color("texto_muted"))
             painter.setPen(QPen(muted_color, 1, Qt.PenStyle.DotLine))
             y_obj = self._y_a_px(self._objetivo, y_min, y_max, rect)
             painter.drawLine(int(rect.x()), int(y_obj), int(rect.right()), int(y_obj))
         # Serie accent.
-        accent_color = QColor_from_named_colors("#3DD6D0")
+        accent_color = QColor(color("accent"))
         painter.setPen(QPen(accent_color, 2))
-        x_step = rect.width() / max(1, _VENTANA_MINUTOS - 0)  # width por segundo
         # Mapear timestamps: t = ahora - (ahora - timestamp) → más reciente a la derecha
         puntos = [
             (
@@ -170,12 +172,14 @@ class _HornoMiniChart(QFrame):
         ]
         for i in range(len(puntos) - 1):
             painter.drawLine(
-                int(puntos[i][0]), int(puntos[i][1]),
-                int(puntos[i + 1][0]), int(puntos[i + 1][1]),
+                int(puntos[i][0]),
+                int(puntos[i][1]),
+                int(puntos[i + 1][0]),
+                int(puntos[i + 1][1]),
             )
 
     def _pintar_centrado(self, painter: QPainter, rect, texto: str) -> None:
-        color_texto = QColor_from_named_colors("#94A1AE")
+        color_texto = QColor(color("texto_muted"))
         painter.setPen(color_texto)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, texto)
 
@@ -185,23 +189,6 @@ class _HornoMiniChart(QFrame):
         frac = (valor - y_min) / (y_max - y_min)
         # y crece hacia abajo en Qt
         return rect.y() + (1 - frac) * rect.height()
-
-
-# --- helpers de color (importación tardía para no acoplar) -------------------
-
-
-def QColor_from_named_colors(nombre: str):
-    from PySide6.QtGui import QColor
-
-    return QColor(nombre)
-
-
-def QColor_accent_alpha(alpha: int):
-    from PySide6.QtGui import QColor
-
-    c = QColor("#3DD6D0")
-    c.setAlpha(alpha)
-    return c
 
 
 # --- la sección -------------------------------------------------------------
@@ -223,8 +210,6 @@ class HornoYCinta(SeccionBase):
         # Cola de últimos N aplicados con timestamp del tick del bus.
         self._historial: deque[tuple[float, SetpointUI]] = deque(maxlen=_HISTORIAL_APLICADOS_MAX)
         self._ultimo_decision_id: str | None = None
-        # Última vez que llegó estado_actualizado (para el countdown).
-        self._ultimo_refresh: float = time.monotonic()
         # ID del feedback timer para auto-ocultar.
         self._feedback_timer_ms: int = 0
         self._construir()
@@ -239,9 +224,7 @@ class HornoYCinta(SeccionBase):
         layout.setSpacing(10)
 
         # Banner de aviso cuando el driver es stub (sin hardware).
-        self._banner_aviso = QLabel(
-            "Driver en modo stub: no hay comunicación con sensores."
-        )
+        self._banner_aviso = QLabel("Driver en modo stub: no hay comunicación con sensores.")
         self._banner_aviso.setObjectName("hornoBannerAviso")
         self._banner_aviso.setVisible(False)
         layout.addWidget(self._banner_aviso)
@@ -436,7 +419,7 @@ class HornoYCinta(SeccionBase):
             self._lote_ventana.setText("")
             self._lote_countdown.setText("")
             self._lote_progreso.setValue(0)
-            self._repolish(self._lote_chip)
+            repolish(self._lote_chip)
             return
         if not snap.enganchado:
             self._lote_producto.setText("Esperando lote…")
@@ -445,7 +428,7 @@ class HornoYCinta(SeccionBase):
             self._lote_ventana.setText("")
             self._lote_countdown.setText("")
             self._lote_progreso.setValue(0)
-            self._repolish(self._lote_chip)
+            repolish(self._lote_chip)
             return
         # Enganchado: producto del lote (vía lotes), chip modo, ventana.
         lote = self.ctx.controlador_lotes.estado().lote_activo
@@ -458,16 +441,12 @@ class HornoYCinta(SeccionBase):
             if snap.ultimo_setpoint and snap.ultimo_setpoint.ventana
             else ""
         )
-        # Countdown al próximo poll.
+        # Countdown al próximo poll, medido desde el último poll real del backend.
         intervalo = max(0.1, self.ctx.config.control.poll_consigna_propuesta_segundos)
-        delta = ahora - self._ultimo_refresh
-        self._ultimo_refresh = ahora
-        restante = max(0.0, intervalo - delta)
+        restante = _segundos_restantes(ahora, snap.ultimo_poll, intervalo)
         self._lote_countdown.setText(f"Próxima consigna en {formato_mmss(restante)}")
-        self._lote_progreso.setValue(
-            int(restante / intervalo * self._lote_progreso.maximum())
-        )
-        self._repolish(self._lote_chip)
+        self._lote_progreso.setValue(int(restante / intervalo * self._lote_progreso.maximum()))
+        repolish(self._lote_chip)
 
     def _actualizar_temperatura(self, snap, ahora: float) -> None:
         lectura = snap.ultima_lectura
@@ -489,17 +468,15 @@ class HornoYCinta(SeccionBase):
             else:
                 d = t1 - obj_t1
                 delta_txt = f"Δ {d:+.1f}°C"
-                nivel = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
+                nivel = "activo" if abs(d) <= _BANDA_TEMP_C else "atencion"
         self._temp_delta.setText(delta_txt)
         self._temp_semaforo.setProperty("nivel", nivel)
-        self._repolish(self._temp_semaforo)
+        repolish(self._temp_semaforo)
         # Meta: objetivo + tolerancia.
         if obj_t1 is None:
             self._temp_meta.setText("Sin setpoint" if snap.enganchado else "")
         else:
-            self._temp_meta.setText(
-                f"Objetivo {obj_t1:.0f} °C  ±{_TOLERANCIA_TEMP_C:.0f}"
-            )
+            self._temp_meta.setText(f"Objetivo {obj_t1:.0f} °C  ±{_BANDA_TEMP_C:.0f}")
         # Mini-chart: agregar muestra y configurar objetivo.
         if t1 is not None:
             self._cache_temp.append(_Muestra(ahora, t1))
@@ -507,8 +484,7 @@ class HornoYCinta(SeccionBase):
             while self._cache_temp and self._cache_temp[0].timestamp < cutoff:
                 self._cache_temp.popleft()
         self._chart_temp.asignar_cache(self._cache_temp)
-        self._chart_temp.configurar(obj_t1, _TOLERANCIA_TEMP_C, _PASO_Y_TEMP,
-                                    "Acumulando muestras…")
+        self._chart_temp.configurar(obj_t1, _BANDA_TEMP_C, _PASO_Y_TEMP, "Acumulando muestras…")
 
     def _actualizar_cinta(self, snap, ahora: float) -> None:
         lectura = snap.ultima_lectura
@@ -529,24 +505,21 @@ class HornoYCinta(SeccionBase):
             else:
                 d = vel - obj_v
                 delta_txt = f"Δ {d:+.2f} m/s"
-                nivel = "activo" if abs(d) <= _TOLERANCIA_VEL else "atencion"
+                nivel = "activo" if abs(d) <= _BANDA_VEL else "atencion"
         self._cinta_delta.setText(delta_txt)
         self._cinta_semaforo.setProperty("nivel", nivel)
-        self._repolish(self._cinta_semaforo)
+        repolish(self._cinta_semaforo)
         if obj_v is None:
             self._cinta_meta.setText("Sin setpoint" if snap.enganchado else "")
         else:
-            self._cinta_meta.setText(
-                f"Objetivo {obj_v:.2f} m/s  ±{_TOLERANCIA_VEL:.2f}"
-            )
+            self._cinta_meta.setText(f"Objetivo {obj_v:.2f} m/s  ±{_BANDA_VEL:.2f}")
         if vel is not None:
             self._cache_vel.append(_Muestra(ahora, vel))
             cutoff = ahora - _VENTANA_MINUTOS
             while self._cache_vel and self._cache_vel[0].timestamp < cutoff:
                 self._cache_vel.popleft()
         self._chart_vel.asignar_cache(self._cache_vel)
-        self._chart_vel.configurar(obj_v, _TOLERANCIA_VEL, _PASO_Y_VEL,
-                                  "Acumulando muestras…")
+        self._chart_vel.configurar(obj_v, _BANDA_VEL, _PASO_Y_VEL, "Acumulando muestras…")
 
     def _actualizar_modo(self, snap) -> None:
         # Se puede preseleccionar el modo antes de que haya lote: el próximo
@@ -555,7 +528,7 @@ class HornoYCinta(SeccionBase):
         for modo, boton in self._botones_modo.items():
             boton.setEnabled(enabled)
             boton.setProperty("modoActivo", "true" if modo == snap.modo else "false")
-            self._repolish(boton)
+            repolish(boton)
 
     def _actualizar_aplicar_pendiente(self, snap) -> None:
         pendiente = snap.propuesta_pendiente
@@ -565,9 +538,7 @@ class HornoYCinta(SeccionBase):
         self._boton_aplicar.setVisible(True)
         t1_txt = f"{pendiente.temp_horno_1:.0f}"
         v_txt = f"{pendiente.velocidad_cinta:.2f}"
-        self._boton_aplicar.setText(
-            f"Aprobar propuesta (T={t1_txt} °C, V={v_txt} m/s)"
-        )
+        self._boton_aplicar.setText(f"Aprobar propuesta (T={t1_txt} °C, V={v_txt} m/s)")
         self._boton_aplicar.setEnabled(snap.habilitado and snap.enganchado)
 
     def _actualizar_historial(self, snap, ahora: float) -> None:
@@ -587,7 +558,7 @@ class HornoYCinta(SeccionBase):
         lectura_t1 = snap.ultima_lectura.temp_horno_1 if snap.ultima_lectura else None
         for idx, (ts, setpoint) in enumerate(self._historial):
             self._historial_contenedor.addWidget(
-                self._construir_fila_setpoint(idx == 0, ts, setpoint, lectura_t1)
+                self._construir_fila_setpoint(idx == 0, ts, setpoint, lectura_t1, ahora)
             )
 
     def _construir_fila_setpoint(
@@ -596,6 +567,7 @@ class HornoYCinta(SeccionBase):
         timestamp: float,
         setpoint: SetpointUI,
         lectura_t1_actual: float | None,
+        ahora: float,
     ) -> QFrame:
         marco = QFrame()
         marco.setObjectName("hornoFilaSetpoint")
@@ -604,8 +576,8 @@ class HornoYCinta(SeccionBase):
         layout = QHBoxLayout(marco)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(8)
-        hora = QLabel(formato_hhmmss(timestamp - self._ultimo_refresh))
-        # Reloj de UI: derivamos del tiempo relativo al último refresh.
+        hora = QLabel(formato_hhmmss(ahora - timestamp))
+        # Antigüedad: hace cuánto se vio este setpoint.
         hora.setProperty("rol", "meta")
         hora.setProperty("mono", "true")
         hora.setFixedWidth(72)
@@ -625,7 +597,7 @@ class HornoYCinta(SeccionBase):
         if lectura_t1_actual is not None:
             d = lectura_t1_actual - setpoint.temp_horno_1
             delta_actual = f"Δ {d:+.1f}"
-            color_delta = "activo" if abs(d) <= _TOLERANCIA_TEMP_C else "atencion"
+            color_delta = "activo" if abs(d) <= _BANDA_TEMP_C else "atencion"
         diff = QLabel(delta_actual)
         diff.setProperty("rol", "valorMetrica")
         if color_delta is not None:
@@ -648,32 +620,21 @@ class HornoYCinta(SeccionBase):
         ok = self.ctx.controlador_control.aplicar_pendiente()
         snap = self.ctx.controlador_control.estado()
         if ok:
-            self._mostrar_feedback(
-                "Propuesta aplicada", "ok"
-            )
+            self._mostrar_feedback("Propuesta aplicada", "ok")
         else:
-            self._mostrar_feedback(
-                snap.ultimo_error or "No se pudo aplicar la propuesta", "error"
-            )
+            self._mostrar_feedback(snap.ultimo_error or "No se pudo aplicar la propuesta", "error")
 
     def _mostrar_feedback(self, texto: str, nivel: str) -> None:
         self._feedback.setText(texto)
         self._feedback.setProperty("nivel", nivel)
         self._feedback.setVisible(True)
-        self._repolish(self._feedback)
+        repolish(self._feedback)
         # Auto-ocultar a los 2.5s (no usamos QTimer para evitar ciclo de vida).
         # El próximo _al_actualizar_estado no lo afecta; lo limpiamos nosotros.
         # Truco simple: marcar el timestamp y ocultar en el próximo refresh si pasó.
         self._feedback_timer_ms = int(time.monotonic() * 1000) + 2500
 
     # --- helpers ---
-
-    @staticmethod
-    def _repolish(widget) -> None:
-        estilo = widget.style()
-        estilo.unpolish(widget)
-        estilo.polish(widget)
-        widget.update()
 
     @staticmethod
     def _vaciar_layout(layout) -> None:
@@ -701,6 +662,12 @@ def _modo_color(modo: ModoControlUI) -> str:
     }[modo]
 
 
+def _segundos_restantes(ahora: float, ultimo_poll: float | None, intervalo: float) -> float:
+    """Segundos hasta el próximo poll, medidos desde el último poll real."""
+    delta = ahora - ultimo_poll if ultimo_poll is not None else intervalo
+    return max(0.0, intervalo - delta)
+
+
 def formato_mmss(segundos: float) -> str:
     """Formatea segundos como m:ss (1 sola tecla después de los dos puntos)."""
     if segundos < 0:
@@ -711,7 +678,7 @@ def formato_mmss(segundos: float) -> str:
 
 
 def formato_hhmmss(delta_segundos: float) -> str:
-    """Formatea un delta relativo como HH:MM:SS (estimado desde el último refresh)."""
+    """Formatea un delta relativo como HH:MM:SS (antigüedad del setpoint)."""
     # No tenemos wall-clock time de cuándo se aplicó: usamos un proxy.
     # Si el delta es 0 (justo aplicado), "00:00:00". Si es > 60s, mostramos
     # el delta en mm:ss. Útil para el operario: "hace cuánto se aplicó".

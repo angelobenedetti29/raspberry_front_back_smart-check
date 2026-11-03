@@ -17,7 +17,6 @@ from backend.control.tipos import (
     ModoControl,
     SetpointPropuesto,
 )
-
 from frontend.nucleo.controlador_control import (
     EstadoControlUI,
     LecturaHornoUI,
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
 class AdaptadorControl:
     """Implementa `ControladorControl` sobre un `ControlService` del backend."""
 
-    def __init__(self, servicio: "ControlService") -> None:
+    def __init__(self, servicio: ControlService) -> None:
         self._servicio = servicio
 
     # --- lectura ---------------------------------------------------------
@@ -49,9 +48,8 @@ class AdaptadorControl:
             ultimo_setpoint=_a_setpoint(snap["ultimo_setpoint"]),
             ultima_lectura=_a_lectura(snap["ultima_lectura"]),
             propuesta_pendiente=_a_setpoint(snap["propuesta_pendiente"]),
-            aplazar_siguiente=snap["aplazar_siguiente"],
             ultimo_error=snap["ultimo_error"],
-            backend_ok=snap["backend_ok"],
+            ultimo_poll=snap["ultimo_poll"],
         )
 
     # --- comandos --------------------------------------------------------
@@ -59,10 +57,6 @@ class AdaptadorControl:
     def cambiar_modo(self, modo: ModoControlUI) -> None:
         """Cambio de modo desde la UI: push al backend + local."""
         self._servicio.cambiar_modo(ModoControl(modo.value))
-
-    def aplazar_siguiente(self) -> None:
-        """Obsoleto: SUPERVISION siempre espera la aprobación del operario."""
-        self._servicio.aplazar_siguiente()
 
     def aplicar_pendiente(self) -> bool:
         """Aprueba y aplica la propuesta pendiente. True si salió bien."""
@@ -107,7 +101,6 @@ def _a_setpoint(payload: SetpointPropuesto | None) -> SetpointUI | None:
     return SetpointUI(
         temp_horno_1=payload.temp_horno_1,
         velocidad_cinta=payload.velocidad_cinta,
-        aplicado_por=payload.aplicado_por,
         ventana=payload.ventana,
         decision_id=payload.decision_id,
     )

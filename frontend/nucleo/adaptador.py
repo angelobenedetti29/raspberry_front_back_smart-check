@@ -56,9 +56,7 @@ class AdaptadorStreaming:
             detecciones=estado.detecciones,
             activas=estado.activas,
             ultima_deteccion=(
-                _texto_deteccion(estado.ultima_deteccion)
-                if estado.ultima_deteccion
-                else ""
+                _texto_deteccion(estado.ultima_deteccion) if estado.ultima_deteccion else ""
             ),
             retraso_ms=estado.retraso_inferencia_ms,
             modelo_id=estado.modelo_id,

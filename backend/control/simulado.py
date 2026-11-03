@@ -137,9 +137,7 @@ class PlantaSimulada:
         # Ambiente: reversión a la media (random walk acotado).
         self._humedad_horno = self._deambular(self._humedad_horno, HUMEDAD_HORNO_PCT, 0.05)
         self._temp_ambiente = self._deambular(self._temp_ambiente, TEMP_AMBIENTE_C, 0.05)
-        self._humedad_ambiente = self._deambular(
-            self._humedad_ambiente, HUMEDAD_AMBIENTE_PCT, 0.10
-        )
+        self._humedad_ambiente = self._deambular(self._humedad_ambiente, HUMEDAD_AMBIENTE_PCT, 0.10)
 
     def _converger(self, valor: float, objetivo: float, k: float, ruido: float) -> float:
         """Da un paso de primer orden hacia `objetivo` con ruido gaussiano."""

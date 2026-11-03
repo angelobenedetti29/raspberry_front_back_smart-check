@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QStyleFactory
+from PySide6.QtWidgets import QApplication, QStyleFactory, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,14 @@ def color(token: str) -> str:
         return TOKENS[token]
     except KeyError as exc:
         raise KeyError(f"Token de color desconocido: {token!r}") from exc
+
+
+def repolish(widget: QWidget) -> None:
+    """Reaplica la hoja de estilos tras cambiar una propiedad que un selector usa."""
+    estilo = widget.style()
+    estilo.unpolish(widget)
+    estilo.polish(widget)
+    widget.update()
 
 
 def cargar_tema(app: QApplication) -> None:

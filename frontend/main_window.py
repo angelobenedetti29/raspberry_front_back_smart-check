@@ -28,11 +28,10 @@ from frontend.nucleo.estado import NivelEstado, SnapshotSistema
 from frontend.nucleo.iconos import icono
 from frontend.nucleo.proveedor import ProveedorServicio
 from frontend.nucleo.registro import SECCIONES, secciones_visibles
-from frontend.nucleo.tema import color
+from frontend.nucleo.tema import color, repolish
 
 if TYPE_CHECKING:
     from backend.config import AppConfig
-
     from frontend.nucleo.controlador import ControladorStreaming
     from frontend.nucleo.controlador_config import ControladorConfig
     from frontend.nucleo.controlador_control import ControladorControl
@@ -352,10 +351,8 @@ class MainWindow(QMainWindow):
         nivel = self._nivel_global(snapshot)
         self._chip_estado.setText(f"● {snapshot.resumen}")
         self._chip_estado.setProperty("nivel", nivel.value)
-        self._repolish(self._chip_estado)
-        self._resumen_estado.setText(
-            f"{snapshot.resumen} · modelo {snapshot.modelo_activo}"
-        )
+        repolish(self._chip_estado)
+        self._resumen_estado.setText(f"{snapshot.resumen} · modelo {snapshot.modelo_activo}")
 
     def _emitir_estado(self) -> None:
         """Publica una instantánea fresca y revalida la visibilidad del rail."""
@@ -381,13 +378,6 @@ class MainWindow(QMainWindow):
         if NivelEstado.INACTIVO in niveles:
             return NivelEstado.INACTIVO
         return NivelEstado.SIN_DATO
-
-    @staticmethod
-    def _repolish(widget: QWidget) -> None:
-        estilo = widget.style()
-        estilo.unpolish(widget)
-        estilo.polish(widget)
-        widget.update()
 
     # --- cierre ---
 

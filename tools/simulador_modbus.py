@@ -149,9 +149,7 @@ def _validar_numero(valor: object, nombre: str) -> float:
     return numero
 
 
-def _validar_rango(
-    valor: object, nombre: str, minimo: float, maximo: float
-) -> float:
+def _validar_rango(valor: object, nombre: str, minimo: float, maximo: float) -> float:
     """Exige un número finito dentro de [minimo, maximo]."""
     numero = _validar_numero(valor, nombre)
     if not minimo <= numero <= maximo:
@@ -205,12 +203,8 @@ class PlantaHorno:
         comb1_factor: float = COMB1_FACTOR,
     ) -> None:
         # Validar antes de tocar estado: la CLI debe fallar temprano.
-        t1_inicial = _validar_rango(
-            t1_inicial, "t1_inicial", *RANGOS_PARAMETROS["t1_inicial"]
-        )
-        v_inicial = _validar_rango(
-            v_inicial, "v_inicial", *RANGOS_PARAMETROS["v_inicial"]
-        )
+        t1_inicial = _validar_rango(t1_inicial, "t1_inicial", *RANGOS_PARAMETROS["t1_inicial"])
+        v_inicial = _validar_rango(v_inicial, "v_inicial", *RANGOS_PARAMETROS["v_inicial"])
         tau_t = _validar_rango(tau_t, "tau_t", *RANGOS_PARAMETROS["tau_t"])
         tau_v = _validar_rango(tau_v, "tau_v", *RANGOS_PARAMETROS["tau_v"])
         ruido_t = _validar_rango(ruido_t, "ruido_t", *RANGOS_PARAMETROS["ruido_t"])
@@ -283,12 +277,8 @@ class PlantaHorno:
             self._comb1, self._t1 * self._comb1_factor, k_t, self._ruido_t
         )
         self._v = max(0.0, self._converger(self._v, obj_v, k_v, self._ruido_v))
-        self._humedad_horno = self._deambular(
-            self._humedad_horno, self._centro_humedad_horno, 0.05
-        )
-        self._temp_ambiente = self._deambular(
-            self._temp_ambiente, self._centro_temp_ambiente, 0.05
-        )
+        self._humedad_horno = self._deambular(self._humedad_horno, self._centro_humedad_horno, 0.05)
+        self._temp_ambiente = self._deambular(self._temp_ambiente, self._centro_temp_ambiente, 0.05)
         self._humedad_ambiente = self._deambular(
             self._humedad_ambiente, self._centro_humedad_ambiente, 0.10
         )
@@ -342,10 +332,7 @@ class PlantaHorno:
         """Aplica un subconjunto de parámetros mutables, validando todo antes."""
         if not isinstance(cambios, dict):
             raise ValueError("parámetros inválidos")
-        limpios = {
-            clave: _validar_parametro(clave, valor)
-            for clave, valor in cambios.items()
-        }
+        limpios = {clave: _validar_parametro(clave, valor) for clave, valor in cambios.items()}
         with self._lock:
             for clave, valor in limpios.items():
                 if clave == "semilla":
@@ -384,9 +371,7 @@ class PlantaHorno:
             if v_inicial is _SIN_VALOR
             else _validar_rango(v_inicial, "v_inicial", *RANGOS_PARAMETROS["v_inicial"])
         )
-        nueva_semilla = (
-            _SIN_VALOR if semilla is _SIN_VALOR else _validar_semilla(semilla)
-        )
+        nueva_semilla = _SIN_VALOR if semilla is _SIN_VALOR else _validar_semilla(semilla)
         with self._lock:
             if nuevo_t1 is not _SIN_VALOR:
                 self._t1_inicial = float(nuevo_t1)
@@ -457,12 +442,8 @@ class EstadoSimulador:
         with self._lock:
             if t1 is _SIN_VALOR and v is _SIN_VALOR:
                 raise ValueError("indicá al menos una consigna (t1 o v)")
-            nuevo_t1 = (
-                _SIN_VALOR if t1 is _SIN_VALOR else _validar_rango(t1, "t1", *RANGO_T1)
-            )
-            nuevo_v = (
-                _SIN_VALOR if v is _SIN_VALOR else _validar_rango(v, "v", *RANGO_V)
-            )
+            nuevo_t1 = _SIN_VALOR if t1 is _SIN_VALOR else _validar_rango(t1, "t1", *RANGO_T1)
+            nuevo_v = _SIN_VALOR if v is _SIN_VALOR else _validar_rango(v, "v", *RANGO_V)
             actuales = self._planta.consignas()
             t1_final = actuales["t1"] if nuevo_t1 is _SIN_VALOR else nuevo_t1
             v_final = actuales["v"] if nuevo_v is _SIN_VALOR else nuevo_v
@@ -492,9 +473,7 @@ class EstadoSimulador:
                 )
             return self._planta.consignas()
 
-    def actualizar_parametros(
-        self, cambios: dict[str, object]
-    ) -> dict[str, float | int | None]:
+    def actualizar_parametros(self, cambios: dict[str, object]) -> dict[str, float | int | None]:
         """Aplica parámetros en caliente y devuelve el snapshot."""
         with self._lock:
             self._planta.actualizar_parametros(cambios)
@@ -509,9 +488,7 @@ class EstadoSimulador:
     ) -> dict[str, object]:
         """Reinicia la planta y alinea las pendientes con los objetivos."""
         with self._lock:
-            self._planta.reiniciar(
-                t1_inicial=t1_inicial, v_inicial=v_inicial, semilla=semilla
-            )
+            self._planta.reiniciar(t1_inicial=t1_inicial, v_inicial=v_inicial, semilla=semilla)
             # Los regs 100/104 son la fuente de verdad: hay que dejarlos
             # alineados con el reset o el próximo request Modbus los volvería
             # a imponer sobre los objetivos recién reiniciados.
@@ -568,19 +545,11 @@ class EstadoSimulador:
             # 2. Los regs 100/104 siguen siendo la fuente de verdad.
             try:
                 self._planta.fijar_objetivos(
-                    decodificar_float32(
-                        current_registers[
-                            base + DIRECCION_TEMP1_OBJETIVO :
-                        ][:2]
-                    ),
-                    decodificar_float32(
-                        current_registers[base + DIRECCION_VEL_OBJETIVO :][:2]
-                    ),
+                    decodificar_float32(current_registers[base + DIRECCION_TEMP1_OBJETIVO :][:2]),
+                    decodificar_float32(current_registers[base + DIRECCION_VEL_OBJETIVO :][:2]),
                 )
             except ValueError:
-                logging.warning(
-                    "consigna inválida en los regs 100/104; se conserva la anterior"
-                )
+                logging.warning("consigna inválida en los regs 100/104; se conserva la anterior")
 
             # 3. Avanzar y refrescar los 16 regs de sensores.
             self._planta.avanzar()
@@ -630,9 +599,7 @@ def crear_accion(estado: EstadoSimulador) -> Accion:
         set_values: list[int] | None,
     ) -> object:
         base = DIRECCION_BASE_SENSORES - start_address  # offset del mapa en el bloque
-        rechazada = estado.procesar_request_modbus(
-            current_registers, base, address, set_values
-        )
+        rechazada = estado.procesar_request_modbus(current_registers, base, address, set_values)
         return ExcCodes.ILLEGAL_ADDRESS if rechazada else None
 
     return accion
@@ -641,9 +608,7 @@ def crear_accion(estado: EstadoSimulador) -> Accion:
 # --- armado del dispositivo Modbus -------------------------------------------
 
 
-def construir_dispositivo(
-    planta: PlantaHorno, estado: EstadoSimulador
-) -> SimDevice:
+def construir_dispositivo(planta: PlantaHorno, estado: EstadoSimulador) -> SimDevice:
     """SimDevice con el bloque de sensores y el de consignas.
 
     `DataType.REGISTERS` (regs crudos) en ambos: el encoding float32 lo
@@ -841,14 +806,20 @@ def _parsear_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="bind Modbus (default: 127.0.0.1)")
-    parser.add_argument("--puerto", type=int, default=5020, help="puerto Modbus TCP (default: 5020)")
+    parser.add_argument(
+        "--puerto", type=int, default=5020, help="puerto Modbus TCP (default: 5020)"
+    )
     parser.add_argument("--t1-inicial", type=float, default=150.0, help="°C (default: 150)")
     parser.add_argument("--v-inicial", type=float, default=0.15, help="m/s (default: 0.15)")
     parser.add_argument("--tau-t", type=float, default=60.0, help="τ de T en s (default: 60)")
     parser.add_argument("--tau-v", type=float, default=8.0, help="τ de V en s (default: 8)")
     parser.add_argument("--ruido-t", type=float, default=0.2, help="σ de T en °C (default: 0.2)")
-    parser.add_argument("--ruido-v", type=float, default=0.003, help="σ de V en m/s (default: 0.003)")
-    parser.add_argument("--semilla", type=int, default=None, help="semilla del ruido (reproducible)")
+    parser.add_argument(
+        "--ruido-v", type=float, default=0.003, help="σ de V en m/s (default: 0.003)"
+    )
+    parser.add_argument(
+        "--semilla", type=int, default=None, help="semilla del ruido (reproducible)"
+    )
     parser.add_argument(
         "--rechazar-setpoints",
         action="store_true",
@@ -862,9 +833,7 @@ def _parsear_args() -> argparse.Namespace:
     parser.add_argument(
         "--ui-puerto", type=int, default=8091, help="puerto del panel web (default: 8091)"
     )
-    parser.add_argument(
-        "--sin-ui", action="store_true", help="no arrancar el panel web de pruebas"
-    )
+    parser.add_argument("--sin-ui", action="store_true", help="no arrancar el panel web de pruebas")
     return parser.parse_args()
 
 
@@ -919,9 +888,7 @@ def main() -> None:
             ).start()
             logging.info("panel en http://%s:%d", args.ui_host, args.ui_puerto)
             if args.ui_host not in ("127.0.0.1", "localhost", "::1"):
-                logging.warning(
-                    "el panel no tiene autenticación y está expuesto en la red"
-                )
+                logging.warning("el panel no tiene autenticación y está expuesto en la red")
         StartTcpServer(context=dispositivo, address=(args.host, args.puerto))
     except KeyboardInterrupt:
         logging.info("simulador detenido")

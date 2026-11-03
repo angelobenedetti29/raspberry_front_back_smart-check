@@ -23,24 +23,26 @@ jobs:
           cache: pip
 
       - name: Instalar dependencias de la app
-        # La Pi trae cv2/hailo del sistema, pero en CI no las necesitamos:
-        # los tests mockean la capa HTTP y no importan el motor de inferencia.
+        # La Pi trae cv2/hailo del sistema, pero los tests importan
+        # backend.streaming/pipeline/capture, que importan cv2 a nivel de
+        # módulo; hailo_platform sigue siendo lazy. Instalamos cv2 sólo acá.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install opencv-python-headless
 
       - name: Lint (ruff)
         # Reglas conservadoras (E/F/I/B/UP/SIM); el repo legacy no activa
         # D (docstrings) ni N (naming).
         run: |
-          pip install ruff
+          pip install ruff==0.17.1
           ruff check . --line-length 100 --target-version py310 \
             --select E,F,I,B,UP,SIM \
             --exclude models,data,.venv,venv,build,dist,.pytest_cache,.ruff_cache
 
       - name: Formato (black)
         run: |
-          pip install black
+          pip install black==26.10.1
           black --check . --line-length 100 --target-version py310
 
       - name: Tests

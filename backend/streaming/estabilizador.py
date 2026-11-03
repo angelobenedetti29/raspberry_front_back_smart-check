@@ -112,9 +112,7 @@ class EstabilizadorDetecciones:
         self._siguiente_id = 1
         self._eventos: list[EventoPista] = []
 
-    def estabilizar(
-        self, detecciones: Sequence[ResultadoDeteccion]
-    ) -> list[ResultadoDeteccion]:
+    def estabilizar(self, detecciones: Sequence[ResultadoDeteccion]) -> list[ResultadoDeteccion]:
         """Asocia las detecciones con las pistas y devuelve las pistas visibles.
 
         Genera las candidatas (score, pista, detección), las resuelve con
@@ -183,9 +181,7 @@ class EstabilizadorDetecciones:
                 # pierde se descarta en silencio.
                 if pista.confirmada:
                     self._eventos.append(
-                        EventoPista(
-                            "baja", pista.id, pista.label, pista.confianza, pista.bbox
-                        )
+                        EventoPista("baja", pista.id, pista.label, pista.confianza, pista.bbox)
                     )
             else:
                 vivas.append(pista)
@@ -217,9 +213,7 @@ class EstabilizadorDetecciones:
         for pista in self._pistas:
             if pista.confirmada:
                 self._eventos.append(
-                    EventoPista(
-                        "baja", pista.id, pista.label, pista.confianza, pista.bbox
-                    )
+                    EventoPista("baja", pista.id, pista.label, pista.confianza, pista.bbox)
                 )
         self._pistas.clear()
         self._siguiente_id = 1
@@ -263,9 +257,7 @@ class EstabilizadorDetecciones:
             # Sólo las transiciones entre clases NO quemadas cuentan como cambio.
             if not _es_quemada(label_previo) and deteccion.label != label_previo:
                 self._eventos.append(
-                    EventoPista(
-                        "cambio", pista.id, pista.label, pista.confianza, pista.bbox
-                    )
+                    EventoPista("cambio", pista.id, pista.label, pista.confianza, pista.bbox)
                 )
             return
 
@@ -306,9 +298,7 @@ class EstabilizadorDetecciones:
             )
 
     @staticmethod
-    def _iou(
-        caja_a: tuple[int, int, int, int], caja_b: tuple[int, int, int, int]
-    ) -> float:
+    def _iou(caja_a: tuple[int, int, int, int], caja_b: tuple[int, int, int, int]) -> float:
         """Intersección sobre unión de dos cajas ``(left, top, width, height)``."""
         ax, ay, ancho_a, alto_a = caja_a
         bx, by, ancho_b, alto_b = caja_b
@@ -330,9 +320,7 @@ class EstabilizadorDetecciones:
         return interseccion / union
 
     @staticmethod
-    def _distancia(
-        caja_a: tuple[int, int, int, int], caja_b: tuple[int, int, int, int]
-    ) -> float:
+    def _distancia(caja_a: tuple[int, int, int, int], caja_b: tuple[int, int, int, int]) -> float:
         """Distancia euclidiana entre los centros de dos cajas."""
         centro_a_x = caja_a[0] + caja_a[2] / 2
         centro_a_y = caja_a[1] + caja_a[3] / 2

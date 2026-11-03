@@ -22,9 +22,7 @@ _EXTENSIONES = (".jpg", ".jpeg", ".png")
 def listar_imagenes(images_dir: Path) -> list[Path]:
     """Devuelve las imágenes soportadas del directorio, ordenadas."""
     return sorted(
-        p
-        for p in images_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in _EXTENSIONES
+        p for p in images_dir.iterdir() if p.is_file() and p.suffix.lower() in _EXTENSIONES
     )
 
 
@@ -48,17 +46,12 @@ def preparar_calibracion(
 
     rutas_imagenes = listar_imagenes(images_dir)
     if not rutas_imagenes:
-        raise FileNotFoundError(
-            f"No se encontraron imágenes JPG/PNG en: {images_dir}"
-        )
+        raise FileNotFoundError(f"No se encontraron imágenes JPG/PNG en: {images_dir}")
 
     seleccion = rutas_imagenes[: max(1, max_imagenes)]
-    aviso(
-        f"[INFO] {len(rutas_imagenes)} imágenes en {images_dir}; "
-        f"usando {len(seleccion)}"
-    )
+    aviso(f"[INFO] {len(rutas_imagenes)} imágenes en {images_dir}; " f"usando {len(seleccion)}")
 
-    imagenes: list["np.ndarray"] = []
+    imagenes: list[np.ndarray] = []
     for i, ruta in enumerate(seleccion, start=1):
         imagen = cv2.imread(str(ruta))
         if imagen is None:

@@ -11,6 +11,7 @@ que matar el proceso y relanzarlo. Eso es exactamente lo que hace el supervisor.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import subprocess
@@ -236,11 +237,7 @@ class PublicadorFFmpeg:
 
             with self._lock:
                 proceso = self._proceso
-                stdin = (
-                    proceso.stdin
-                    if proceso is not None and proceso.poll() is None
-                    else None
-                )
+                stdin = proceso.stdin if proceso is not None and proceso.poll() is None else None
 
             if stdin is None:
                 # El proceso ya no está: se descarta el frame y se sigue drenando.
@@ -299,8 +296,10 @@ class PublicadorFFmpeg:
                 vivo = proceso is not None and proceso.poll() is None
                 # Sólo hay cuelgue si hay algo pendiente que no se escribió: un
                 # stream al día no debe matarse solo.
-                colgado = vivo and self._pendientes > 0 and (
-                    time.monotonic() - self._ultima_escritura > self._pub.write_timeout
+                colgado = (
+                    vivo
+                    and self._pendientes > 0
+                    and (time.monotonic() - self._ultima_escritura > self._pub.write_timeout)
                 )
                 estable = vivo and (
                     time.monotonic() - self._arrancado_en >= self._pub.stable_seconds
@@ -356,9 +355,7 @@ class PublicadorFFmpeg:
             )
         except (OSError, ValueError) as exc:
             with self._lock:
-                self._error = (
-                    f"No se pudo ejecutar {self._pub.ffmpeg_executable!r}: {exc}"
-                )
+                self._error = f"No se pudo ejecutar {self._pub.ffmpeg_executable!r}: {exc}"
                 self._arrancado_en = time.monotonic()
             logger.error("Publisher: %s", self._error)
             return
@@ -419,10 +416,8 @@ class PublicadorFFmpeg:
             self._escritor = None
 
         if proceso is not None and proceso.stdin is not None:
-            try:
+            with contextlib.suppress(OSError):
                 proceso.stdin.close()
-            except OSError:
-                pass
 
         if self._lector_stderr is not None:
             self._lector_stderr.join(timeout=_GRACIA_TERMINACION)
@@ -433,14 +428,10 @@ class PublicadorFFmpeg:
         try:
             self._cola.put_nowait(_CENTINELA)
         except queue.Full:
-            try:
+            with contextlib.suppress(queue.Empty):
                 self._cola.get_nowait()
-            except queue.Empty:
-                pass
-            try:
+            with contextlib.suppress(queue.Full):
                 self._cola.put_nowait(_CENTINELA)
-            except queue.Full:
-                pass
 
     def _vaciar_cola(self) -> None:
         """Vacía la cola: tras un reinicio, los frames viejos ya no sirven."""

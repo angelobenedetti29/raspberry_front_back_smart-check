@@ -20,12 +20,12 @@ from typing import Protocol
 
 from backend.config import ModbusDriverConfig
 from backend.control.modbus import (
+    _OFFSET_SENSORES,
     CANTIDAD_REGS_SENSORES,
-    ClienteModbus,
     DIRECCION_BASE_SENSORES,
     DIRECCION_TEMP1_OBJETIVO,
     DIRECCION_VEL_OBJETIVO,
-    _OFFSET_SENSORES,
+    ClienteModbus,
 )
 from backend.control.simulado import (
     AplicadorConsignaSimulado,
@@ -40,8 +40,8 @@ class LectorSensores(Protocol):
     """Contrato mínimo para leer el estado actual del horno.
 
     La implementación real lee termocuplas/encoders/variador y devuelve una
-    LecturaHorno. El stub devuelve todo None: la Pi publica un heartbeat
-    con los campos en null y el backend igual lo acepta.
+    LecturaHorno. El stub devuelve todo None: el ControlService filtra la
+    lectura vacía (`_lectura_tiene_datos`) y no publica telemetría.
     """
 
     def leer(self) -> LecturaHorno: ...
@@ -63,7 +63,7 @@ class AplicadorConsigna(Protocol):
 
 
 class LectorSensoresStub:
-    """Lector vacío: la Pi sólo publica heartbeats con los campos en null."""
+    """Lector vacío: sus lecturas no tienen datos y no se publican."""
 
     def leer(self) -> LecturaHorno:
         return LecturaHorno(
@@ -109,10 +109,10 @@ def crear_lector(
 ) -> LectorSensores:
     """Devuelve la implementación adecuada según `cfg.driver`.
 
-    Con `driver == "stub"` no se instancia nada de Modbus, así que este
-    factory es seguro de llamar aunque `pymodbus` no esté instalado. Con
-    `"simulado"` lee la planta en memoria de `simulado.py` (sin hardware
-    ni Modbus). Con `"modbus_rtu"`/`"modbus_tcp"` usa el driver real.
+    Con `driver == "stub"` no se instancia nada de Modbus (aunque `pymodbus`
+    ya se importó con este módulo). Con `"simulado"` lee la planta en memoria
+    de `simulado.py` (sin hardware ni Modbus). Con
+    `"modbus_rtu"`/`"modbus_tcp"` usa el driver real.
     `consigna_reg_temp1`/`consigna_reg_vel` son las direcciones configuradas
     de los setpoints aplicados (`config.control`).
     """
@@ -120,9 +120,7 @@ def crear_lector(
         return LectorSensoresStub()
     if cfg.driver == "simulado":
         return LectorSensoresSimulado()
-    return LectorSensoresModbus(
-        ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel
-    )
+    return LectorSensoresModbus(ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel)
 
 
 def crear_aplicador(
@@ -139,9 +137,7 @@ def crear_aplicador(
         return AplicadorConsignaStub()
     if cfg.driver == "simulado":
         return AplicadorConsignaSimulado()
-    return AplicadorConsignaModbus(
-        ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel
-    )
+    return AplicadorConsignaModbus(ClienteModbus(cfg), consigna_reg_temp1, consigna_reg_vel)
 
 
 # --- Implementaciones Modbus -------------------------------------------------
@@ -176,9 +172,7 @@ class LectorSensoresModbus:
         return self._cliente.convertir_float32(regs)
 
     def leer(self) -> LecturaHorno:
-        regs = self._cliente.leer_bloque(
-            DIRECCION_BASE_SENSORES, CANTIDAD_REGS_SENSORES
-        )
+        regs = self._cliente.leer_bloque(DIRECCION_BASE_SENSORES, CANTIDAD_REGS_SENSORES)
         if regs is None:
             return LecturaHorno(
                 temp_horno_1=None,
@@ -237,16 +231,12 @@ class AplicadorConsignaModbus:
     ) -> tuple[float | None, float | None]:
         # T1 — siempre presente.
         regs_t1 = self._cliente.codificar_float32(temp_objetivo)
-        t1_ok = self._cliente.escribir_verificado(
-            self._consigna_reg_temp1, regs_t1
-        )
+        t1_ok = self._cliente.escribir_verificado(self._consigna_reg_temp1, regs_t1)
         t1_efectivo = temp_objetivo if t1_ok else None
 
         # Velocidad de cinta.
         regs_v = self._cliente.codificar_float32(velocidad_objetivo)
-        v_ok = self._cliente.escribir_verificado(
-            self._consigna_reg_vel, regs_v
-        )
+        v_ok = self._cliente.escribir_verificado(self._consigna_reg_vel, regs_v)
         v_efectivo = velocidad_objetivo if v_ok else None
 
         logger.info(

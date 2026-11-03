@@ -13,28 +13,11 @@ from frontend.nucleo.controlador_dispositivo import (
     EstadoRegistroDispositivoUI,
     EstadoRegistroUI,
     TipoDispositivoUI,
+    tipo_a_ui,
 )
 
 if TYPE_CHECKING:
     from backend.device import DeviceService
-
-
-def _tipo_a_ui(valor: object) -> TipoDispositivoUI | None:
-    """Mapea el tipo del backend al enum de la interfaz, por valor.
-
-    El backend lo expone como `TipoDispositivo` (o string crudo). Un valor
-    desconocido o ausente se traduce a `None`: la navegación cae a mostrar
-    sólo las secciones comunes en vez de romperse.
-    """
-    if valor is None:
-        return None
-    if isinstance(valor, TipoDispositivoUI):
-        return valor
-    crudo = getattr(valor, "value", valor)
-    try:
-        return TipoDispositivoUI(crudo)
-    except ValueError:
-        return None
 
 
 class AdaptadorDispositivo:
@@ -56,7 +39,7 @@ class AdaptadorDispositivo:
             request_id=estado.request_id or "",
             device_id=estado.device_id or "",
             mensaje=estado.mensaje or "",
-            tipo=_tipo_a_ui(getattr(estado, "tipo", None)),
+            tipo=tipo_a_ui(getattr(estado, "tipo", None)),
         )
 
     def solicitar_registro(self, tipo: TipoDispositivoUI) -> None:

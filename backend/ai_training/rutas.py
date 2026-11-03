@@ -31,7 +31,7 @@ DIR_TRABAJO = ROOT / "backend" / "ai_training"
 DIR_RUNS = DIR_TRABAJO / "runs"
 
 
-def cargar_config() -> "AppConfig":
+def cargar_config() -> AppConfig:
     """Carga la config validada del proyecto (rutas absolutas ancladas al ROOT)."""
     # Import perezoso: mantiene liviano el arranque y el `--help`.
     from backend.config import load_config

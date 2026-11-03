@@ -56,6 +56,22 @@ class TipoDispositivoUI(str, Enum):
         }[self]
 
 
+def tipo_a_ui(valor: object) -> TipoDispositivoUI | None:
+    """Mapea el tipo del backend al enum de la interfaz, por valor.
+
+    Un valor desconocido o ausente se traduce a `None` para no romper la UI.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, TipoDispositivoUI):
+        return valor
+    crudo = getattr(valor, "value", valor)
+    try:
+        return TipoDispositivoUI(crudo)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class EstadoRegistroDispositivoUI:
     """Estado del registro de dispositivo, sin tipos del backend."""

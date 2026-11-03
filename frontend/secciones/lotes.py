@@ -31,7 +31,7 @@ from frontend.nucleo.contrato import ContextoApp, SeccionBase
 from frontend.nucleo.controlador_dispositivo import TipoDispositivoUI
 from frontend.nucleo.controlador_lotes import EstadoLotesUI, LoteUI
 from frontend.nucleo.iconos import icono
-from frontend.nucleo.tema import color
+from frontend.nucleo.tema import color, repolish
 
 _VALOR_SIN_DATO = "—"
 
@@ -62,14 +62,6 @@ _CONTEOS: tuple[tuple[str, str, str | None], ...] = (
     ("quemado", "Quemado", "error"),
     ("total", "Total", None),
 )
-
-
-def _repolish(widget: QWidget) -> None:
-    """Reaplica la hoja de estilos tras cambiar una propiedad que un selector usa."""
-    estilo = widget.style()
-    estilo.unpolish(widget)
-    estilo.polish(widget)
-    widget.update()
 
 
 def _vaciar_layout(layout: QVBoxLayout) -> None:
@@ -147,9 +139,7 @@ class _FilaDato(QFrame):
 
         self._valor = _EtiquetaElidida()
         self._valor.setObjectName("detalleEstado")
-        self._valor.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._valor.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(etiqueta_lbl)
         layout.addWidget(self._valor, 1)
@@ -166,9 +156,7 @@ class _Conteo(QFrame):
     fija una sola vez al construir y no hace falta repolish en cada refresco.
     """
 
-    def __init__(
-        self, rotulo: str, tono: str | None = None, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, rotulo: str, tono: str | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("conteoTile")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -224,16 +212,12 @@ class _FilaHistorial(QFrame):
         total = QLabel(str(lote.conteos.total))
         total.setProperty("rol", "valorMetrica")
         total.setFixedWidth(_ANCHO_HIST_TOTAL)
-        total.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         quemadas = QLabel(_texto_numero(lote.conteos.quemado))
         quemadas.setProperty("rol", "valorMetrica")
         quemadas.setFixedWidth(_ANCHO_HIST_QUEMADAS)
-        quemadas.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        quemadas.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(identificador)
         layout.addWidget(cierre)
@@ -286,9 +270,7 @@ class Lotes(SeccionBase):
         layout.setSpacing(6)
 
         glifo = QLabel()
-        glifo.setPixmap(
-            icono("carpeta", color=color("texto_muted"), px=36).pixmap(36, 36)
-        )
+        glifo.setPixmap(icono("carpeta", color=color("texto_muted"), px=36).pixmap(36, 36))
         glifo.setFixedSize(36, 36)
 
         self._vacio_titulo = QLabel()
@@ -320,9 +302,7 @@ class Lotes(SeccionBase):
         self._banner_alerta = QLabel()
         self._banner_alerta.setObjectName("avisoAlerta")
         self._banner_alerta.setWordWrap(True)
-        self._banner_alerta.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self._banner_alerta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._banner_alerta.hide()
         layout.addWidget(self._banner_alerta)
 
@@ -362,9 +342,7 @@ class Lotes(SeccionBase):
         self._chip_backend.setObjectName("chipEstado")
 
         fila.addLayout(textos, 1)
-        fila.addWidget(
-            self._chip_backend, 0, Qt.AlignmentFlag.AlignTop
-        )
+        fila.addWidget(self._chip_backend, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(fila)
 
         # El mensaje del backend caído se muestra sólo cuando hay algo que decir.
@@ -623,9 +601,7 @@ class Lotes(SeccionBase):
 
         rol = estado.rol.etiqueta if estado.rol is not None else "Rol sin definir"
         companeros = (
-            ", ".join(estado.companeros)
-            if estado.companeros
-            else "sin compañeros en el sector"
+            ", ".join(estado.companeros) if estado.companeros else "sin compañeros en el sector"
         )
         self._sector_meta.setText(f"{rol} · Compañeros: {companeros}")
 
@@ -634,7 +610,7 @@ class Lotes(SeccionBase):
         nivel = "activo" if ok else "atencion"
         if self._chip_backend.property("nivel") != nivel:
             self._chip_backend.setProperty("nivel", nivel)
-            _repolish(self._chip_backend)
+            repolish(self._chip_backend)
 
         mensaje = estado.mensaje.strip() if not ok else ""
         if not ok and not mensaje:
@@ -668,15 +644,11 @@ class Lotes(SeccionBase):
         """Junta en un solo aviso las advertencias que apliquen al lote abierto."""
         avisos: list[str] = []
         if lote.degradado:
-            avisos.append(
-                "Este lote lo abrió la salida: no hay entrada registrada."
-            )
+            avisos.append("Este lote lo abrió la salida: no hay entrada registrada.")
         if estado.rol is TipoDispositivoUI.ENTRADA_HORNO and not self._hay_salida(
             estado.companeros
         ):
-            avisos.append(
-                "No hay una salida registrada en el sector: el lote no se cerrará solo."
-            )
+            avisos.append("No hay una salida registrada en el sector: el lote no se cerrará solo.")
 
         self._aviso_lote.setText("\n".join(avisos))
         self._aviso_lote.setVisible(bool(avisos))
@@ -695,9 +667,7 @@ class Lotes(SeccionBase):
         """Ajusta el texto de cierre y la acción según el rol del dispositivo."""
         es_salida = estado.rol is TipoDispositivoUI.SALIDA_HORNO
 
-        self._boton_finalizar.setText(
-            "Finalizar ahora" if es_salida else "Finalizar lote"
-        )
+        self._boton_finalizar.setText("Finalizar ahora" if es_salida else "Finalizar lote")
         # Sólo la salida cierra el lote: en la entrada el botón no aplica.
         self._boton_finalizar.setVisible(es_salida)
 
@@ -718,9 +688,7 @@ class Lotes(SeccionBase):
         self._fila_descartados.setVisible(estado.descartados > 0)
         self._fila_rechazados.setVisible(estado.rechazados > 0)
         self._reporte_limpio.setVisible(
-            estado.pendientes <= 0
-            and estado.descartados <= 0
-            and estado.rechazados <= 0
+            estado.pendientes <= 0 and estado.descartados <= 0 and estado.rechazados <= 0
         )
 
         self._fila_pendientes.fijar(str(estado.pendientes))
@@ -792,13 +760,9 @@ class Lotes(SeccionBase):
 
         motivo = rotulo("Motivo")
         total = rotulo("Total", _ANCHO_HIST_TOTAL)
-        total.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        total.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         quemadas = rotulo("Quemadas", _ANCHO_HIST_QUEMADAS)
-        quemadas.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        quemadas.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(rotulo("Lote", _ANCHO_HIST_LOTE))
         layout.addWidget(rotulo("Cierre", _ANCHO_HIST_CIERRE))
@@ -827,8 +791,7 @@ class Lotes(SeccionBase):
         caja.setIcon(QMessageBox.Icon.Question)
         caja.setWindowTitle("Finalizar lote")
         caja.setText(
-            "¿Cerrar el lote en curso?\n"
-            "El conteo queda cerrado con lo detectado hasta ahora."
+            "¿Cerrar el lote en curso?\n" "El conteo queda cerrado con lo detectado hasta ahora."
         )
         aceptar = caja.addButton("Finalizar", QMessageBox.ButtonRole.AcceptRole)
         caja.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)

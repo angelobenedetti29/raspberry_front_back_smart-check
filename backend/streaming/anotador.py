@@ -79,9 +79,7 @@ def _metricas(alto: int) -> tuple[int, float, int]:
     return grosor, escala, margen
 
 
-def _recortar(
-    bbox: tuple[int, int, int, int], ancho: int, alto: int
-) -> tuple[int, int, int, int]:
+def _recortar(bbox: tuple[int, int, int, int], ancho: int, alto: int) -> tuple[int, int, int, int]:
     """Recorta la caja al rectángulo del frame."""
     left, top, caja_ancho, caja_alto = bbox
     left = max(0, min(left, ancho - 1))
@@ -135,9 +133,7 @@ def _rotular_linea(
     margen: int,
 ) -> None:
     """Escribe la etiqueta de la línea de conteo sobre el margen derecho."""
-    (ancho_texto, alto_texto), _ = cv2.getTextSize(
-        texto, _FUENTE, escala * 0.8, max(1, grosor - 1)
-    )
+    (ancho_texto, alto_texto), _ = cv2.getTextSize(texto, _FUENTE, escala * 0.8, max(1, grosor - 1))
     izquierda = max(10, frame_bgr.shape[1] - ancho_texto - 20)
     linea_base = max(alto_texto + 4, linea_y - margen)
     cv2.putText(
@@ -192,9 +188,7 @@ def dibujar(
             continue
 
         color = _color(deteccion.label)
-        cv2.rectangle(
-            frame_bgr, (left, top), (left + caja_ancho, top + caja_alto), color, grosor
-        )
+        cv2.rectangle(frame_bgr, (left, top), (left + caja_ancho, top + caja_alto), color, grosor)
         _rotular(
             frame_bgr,
             deteccion.etiqueta,

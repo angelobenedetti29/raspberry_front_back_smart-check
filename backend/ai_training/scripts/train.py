@@ -95,12 +95,8 @@ def main(argv=None):
     except ConfigError as exc:
         print(f"[ERROR] {exc}")
         sys.exit(1)
-    models_dir = (
-        Path(args.models_dir).expanduser() if args.models_dir else cfg.paths.models_dir
-    )
-    image_size = (
-        args.imgsz if args.imgsz is not None else cfg.stream.inference.image_size
-    )
+    models_dir = Path(args.models_dir).expanduser() if args.models_dir else cfg.paths.models_dir
+    image_size = args.imgsz if args.imgsz is not None else cfg.stream.inference.image_size
 
     try:
         if args.weights:

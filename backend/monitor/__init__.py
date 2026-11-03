@@ -71,9 +71,7 @@ class MonitorService:
         on_credencial_invalida: Callable[[], None] | None = None,
     ) -> None:
         self._intervalo = config.device.ping_interval_seconds
-        self._cliente = ClienteMetricas(
-            config.api.base_url, config.api.dispositivos_ping_endpoint
-        )
+        self._cliente = ClienteMetricas(config.api.base_url, config.api.dispositivos_ping_endpoint)
         self._on_credencial_invalida = on_credencial_invalida
         self._fuente_ia: FuenteAceleradorIA | None = detectar_acelerador()
         self._recolector = RecolectorSistema(
@@ -118,9 +116,7 @@ class MonitorService:
             return EstadoMonitor(
                 registrado=self._registrado,
                 intervalo_segundos=self._intervalo,
-                acelerador=(
-                    self._fuente_ia.nombre if self._fuente_ia is not None else None
-                ),
+                acelerador=(self._fuente_ia.nombre if self._fuente_ia is not None else None),
                 recolectadas=self._recolectadas,
                 ultimo_envio=self._ultimo_envio,
                 envios_ok=self._envios_ok,
@@ -159,10 +155,7 @@ class MonitorService:
                 # fue revocada (ver _UMBRAL_AUTH): así un 401 transitorio de
                 # infraestructura no borra device.json ni re-registra de más.
                 self._fallos_auth += 1
-                if (
-                    self._fallos_auth >= _UMBRAL_AUTH
-                    and self._on_credencial_invalida is not None
-                ):
+                if self._fallos_auth >= _UMBRAL_AUTH and self._on_credencial_invalida is not None:
                     self._on_credencial_invalida()
                     self._fallos_auth = 0
             else:
@@ -173,12 +166,8 @@ class MonitorService:
         logger.info("monitor: métricas enviadas (%s)", metricas)
         self._registrar_envio(metricas, ok=True, error=None)
 
-    def _registrar_envio(
-        self, metricas: MetricasSistema, *, ok: bool, error: str | None
-    ) -> None:
-        envio = EnvioMonitor(
-            momento=datetime.now(), ok=ok, error=error, metricas=metricas
-        )
+    def _registrar_envio(self, metricas: MetricasSistema, *, ok: bool, error: str | None) -> None:
+        envio = EnvioMonitor(momento=datetime.now(), ok=ok, error=error, metricas=metricas)
         with self._lock:
             self._ultimo_envio = envio
             self._recientes.append(envio)

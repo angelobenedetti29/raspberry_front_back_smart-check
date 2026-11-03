@@ -4,10 +4,11 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,11 @@ class CountingConfig:
 
     enabled: bool
     line_y: int
+
+
+# Drivers válidos de `control.sensores`/`control.actuadores`. La UI arma sus
+# combos desde acá para no repetir la lista.
+DRIVERS_CONTROL = ("stub", "simulado", "modbus_rtu", "modbus_tcp")
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,9 +231,9 @@ class LoteConfig:
 class ControlConfig:
     """Subsección `control` (SCA-400).
 
-    Si la sección no existe en el config, AppConfig.control queda en None y el
-    ControlService se deshabilita (la Pi sólo detecta, no publica telemetría
-    ni aplica consignas). Mantener compat con configs viejos.
+    Si la sección no existe en el config, el loader devuelve un ControlConfig
+    deshabilitado (la Pi sólo detecta, no publica telemetría ni aplica
+    consignas). Mantener compat con configs viejos.
     """
 
     habilitado: bool
@@ -237,8 +243,8 @@ class ControlConfig:
     consigna_propuesta_endpoint: str
     aplicar_consigna_endpoint: str
     consigna_ack_endpoint: str = "/api/v1/lotes/{id}/consigna/ack"
-    # Drivers de periféricos. `stub` deja todo cableado a stubs; `modbus_rtu`
-    # y `modbus_tcp` se materializan en Bloque B de Fase 1.
+    # Drivers de periféricos. `stub` deja todo cableado a stubs; `simulado`
+    # usa la planta en memoria y `modbus_rtu`/`modbus_tcp` el driver real.
     sensores: ModbusDriverConfig = ModbusDriverConfig()
     actuadores: ModbusDriverConfig = ModbusDriverConfig()
     # Plantilla con {id}: la Pi hace PUT para sincronizar el modo del lote
@@ -249,9 +255,9 @@ class ControlConfig:
     audit_path: str = "control_audit.jsonl"
     audit_max_bytes: int = 5_242_880  # 5 MiB
     audit_max_files: int = 5
-    # Direcciones Modbus (base-0) de los setpoints aplicados. Deben coincidir
-    # con OVEN_MODBUS_REG_TEMP1/OVEN_MODBUS_REG_VEL del backend Go (default
-    # 100/104); si no, cada extremo escribe en un registro distinto.
+    # Direcciones Modbus (base-0) del mapa del PLC. Deben coincidir con
+    # `backend/control/modbus.py` y `tools/simulador_modbus.py`; la Pi ENTRADA
+    # es la única que escribe.
     consigna_reg_temp1: int = 100
     consigna_reg_vel: int = 104
     # Umbrales de "horno en marcha" para `estado_inicial_lote`.
@@ -304,9 +310,7 @@ def _read_json(path: Path) -> dict:
         raise ConfigError(f"JSON inválido en {path}: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ConfigError(
-            f"La raíz del config debe ser un objeto JSON, no {type(data).__name__}"
-        )
+        raise ConfigError(f"La raíz del config debe ser un objeto JSON, no {type(data).__name__}")
 
     return data
 
@@ -327,25 +331,19 @@ def _int_opcional(raw: dict[str, Any], key: str, default: int, where: str) -> in
     if valor is None:
         return default
     if isinstance(valor, bool) or not isinstance(valor, int):
-        raise ConfigError(
-            f"'{where}.{key}' debe ser un entero, no {type(valor).__name__}"
-        )
+        raise ConfigError(f"'{where}.{key}' debe ser un entero, no {type(valor).__name__}")
     if valor <= 0:
         raise ConfigError(f"'{where}.{key}' debe ser > 0")
     return valor
 
 
-def _float_opcional(
-    raw: dict[str, Any], key: str, default: float, where: str
-) -> float:
+def _float_opcional(raw: dict[str, Any], key: str, default: float, where: str) -> float:
     """Lee un float opcional de `where.*` con default tolerante (acepta >= 0)."""
     valor = raw.get(key)
     if valor is None:
         return default
     if isinstance(valor, bool) or not isinstance(valor, (int, float)):
-        raise ConfigError(
-            f"'{where}.{key}' debe ser numérico, no {type(valor).__name__}"
-        )
+        raise ConfigError(f"'{where}.{key}' debe ser numérico, no {type(valor).__name__}")
     if valor < 0:
         raise ConfigError(f"'{where}.{key}' no puede ser negativo")
     return float(valor)
@@ -368,8 +366,7 @@ def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
 
     if not isinstance(value, expected):
         raise ConfigError(
-            f"El campo '{where}.{key}' debe ser {expected.__name__}, "
-            f"no {type(value).__name__}"
+            f"El campo '{where}.{key}' debe ser {expected.__name__}, " f"no {type(value).__name__}"
         )
 
     return value
@@ -378,12 +375,7 @@ def _get(section: dict[str, Any], key: str, expected: type, where: str) -> Any:
 def _parse_modbus_config(raw: dict[str, Any], where: str) -> ModbusDriverConfig:
     """Parsea y valida un bloque `control.sensores` o `control.actuadores`."""
     driver = raw.get("driver", "stub")
-    if not isinstance(driver, str) or driver not in {
-        "stub",
-        "simulado",
-        "modbus_rtu",
-        "modbus_tcp",
-    }:
+    if not isinstance(driver, str) or driver not in DRIVERS_CONTROL:
         raise ConfigError(
             f"'{where}.driver' debe ser 'stub', 'simulado', 'modbus_rtu' o "
             f"'modbus_tcp', no {driver!r}"
@@ -396,18 +388,12 @@ def _parse_modbus_config(raw: dict[str, Any], where: str) -> ModbusDriverConfig:
     if driver == "modbus_rtu" and not (
         isinstance(serial_port_raw, str) and serial_port_raw.strip()
     ):
-        raise ConfigError(
-            f"'{where}.serial_port' es obligatorio si driver='modbus_rtu'"
-        )
+        raise ConfigError(f"'{where}.serial_port' es obligatorio si driver='modbus_rtu'")
     if driver == "modbus_tcp":
         if not (isinstance(host_raw, str) and host_raw.strip()):
-            raise ConfigError(
-                f"'{where}.host' es obligatorio si driver='modbus_tcp'"
-            )
+            raise ConfigError(f"'{where}.host' es obligatorio si driver='modbus_tcp'")
         if not isinstance(port, int) or not (1 <= port <= 65535):
-            raise ConfigError(
-                f"'{where}.port' debe ser un entero entre 1 y 65535"
-            )
+            raise ConfigError(f"'{where}.port' debe ser un entero entre 1 y 65535")
     if not isinstance(baudrate, int) or baudrate <= 0:
         raise ConfigError(f"'{where}.baudrate' debe ser un entero > 0")
     if not isinstance(unit_id, int) or not (1 <= unit_id <= 247):
@@ -537,7 +523,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         path=paths.data_dir / "eventos.db",
         max_bytes=_get(storage_raw, "max_bytes", int, "stream.storage"),
         max_files=_get(storage_raw, "max_files", int, "stream.storage"),
-        persist_no_detection_every=_get(storage_raw, "persist_no_detection_every", int, "stream.storage"),
+        persist_no_detection_every=_get(
+            storage_raw, "persist_no_detection_every", int, "stream.storage"
+        ),
     )
 
     # --- stream.reconnect ---
@@ -565,7 +553,8 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         counting = CountingConfig(enabled=True, line_y=round(capture.height * 0.75))
     if counting.line_y <= 0 or counting.line_y >= capture.height:
         raise ConfigError(
-            f"'stream.counting.line_y' ({counting.line_y}) debe estar dentro de la altura del frame (0, {capture.height})"
+            f"'stream.counting.line_y' ({counting.line_y}) debe estar dentro de la altura "
+            f"del frame (0, {capture.height})"
         )
 
     stream = StreamConfig(
@@ -603,13 +592,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             if not isinstance(clase, str) or not clase.strip():
                 raise ConfigError(f"'{where}.class_thresholds' tiene una clase vacía")
             if isinstance(valor, bool) or not isinstance(valor, (int, float)):
-                raise ConfigError(
-                    f"'{where}.class_thresholds[\"{clase}\"]' debe ser numérico"
-                )
+                raise ConfigError(f"'{where}.class_thresholds[\"{clase}\"]' debe ser numérico")
             if not 0.0 <= float(valor) <= 1.0:
-                raise ConfigError(
-                    f"'{where}.class_thresholds[\"{clase}\"]' debe estar entre 0 y 1"
-                )
+                raise ConfigError(f"'{where}.class_thresholds[\"{clase}\"]' debe estar entre 0 y 1")
             thresholds[clase.strip().lower()] = float(valor)
 
         entries.append(
@@ -617,7 +602,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
                 model_id=entry_id,
                 label=_get(entry_raw, "label", str, where),
                 model_path=resolve_path(_get(entry_raw, "file", str, where), paths.models_dir),
-                names_path=resolve_path(_get(entry_raw, "names_file", str, where), paths.models_dir),
+                names_path=resolve_path(
+                    _get(entry_raw, "names_file", str, where), paths.models_dir
+                ),
                 class_thresholds=MappingProxyType(thresholds),
             )
         )
@@ -638,27 +625,16 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     # --- api (base_url sin path; los endpoints son rutas nombradas) ---
     api_raw = _get(data, "api", dict, "config")
     base_url = _get(api_raw, "base_url", str, "api")
-    registration_requests_endpoint = _get(
-        api_raw, "registration_requests_endpoint", str, "api"
-    )
-    dispositivos_ping_endpoint = _get(
-        api_raw, "dispositivos_ping_endpoint", str, "api"
-    )
-    dispositivos_nombre_endpoint = _get(
-        api_raw, "dispositivos_nombre_endpoint", str, "api"
-    )
-    dispositivos_rename_url_endpoint = _get(
-        api_raw, "dispositivos_rename_url_endpoint", str, "api"
-    )
+    registration_requests_endpoint = _get(api_raw, "registration_requests_endpoint", str, "api")
+    dispositivos_ping_endpoint = _get(api_raw, "dispositivos_ping_endpoint", str, "api")
+    dispositivos_nombre_endpoint = _get(api_raw, "dispositivos_nombre_endpoint", str, "api")
+    dispositivos_rename_url_endpoint = _get(api_raw, "dispositivos_rename_url_endpoint", str, "api")
     productos_endpoint = _get(api_raw, "productos_endpoint", str, "api")
-    dispositivos_sector_endpoint = _get(
-        api_raw, "dispositivos_sector_endpoint", str, "api"
-    )
+    dispositivos_sector_endpoint = _get(api_raw, "dispositivos_sector_endpoint", str, "api")
     lotes_endpoint = _get(api_raw, "lotes_endpoint", str, "api")
     if not base_url.startswith(("http://", "https://")):
         raise ConfigError(
-            "'api.base_url' debe empezar con 'http://' o 'https://', "
-            f"no {base_url!r}"
+            "'api.base_url' debe empezar con 'http://' o 'https://', " f"no {base_url!r}"
         )
     if base_url.endswith("/"):
         raise ConfigError("'api.base_url' no debe terminar en '/'")
@@ -695,9 +671,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     if ping_interval_seconds <= 0:
         raise ConfigError("'device.ping_interval_seconds' debe ser > 0")
     if registration_poll_interval_seconds <= 0:
-        raise ConfigError(
-            "'device.registration_poll_interval_seconds' debe ser > 0"
-        )
+        raise ConfigError("'device.registration_poll_interval_seconds' debe ser > 0")
     if not listen_address.strip():
         raise ConfigError("'device.listen_address' no puede estar vacío")
     if not 1 <= local_port <= 65535:
@@ -719,20 +693,12 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             lote_raw, "cierre_sin_detecciones_segundos", float, "lote"
         ),
         flush_segundos=_get(lote_raw, "flush_segundos", float, "lote"),
-        max_eventos_por_envio=_get(
-            lote_raw, "max_eventos_por_envio", int, "lote"
-        ),
+        max_eventos_por_envio=_get(lote_raw, "max_eventos_por_envio", int, "lote"),
         cola_eventos=_get(lote_raw, "cola_eventos", int, "lote"),
         max_pendientes=_get(lote_raw, "max_pendientes", int, "lote"),
-        refresco_catalogo_segundos=_get(
-            lote_raw, "refresco_catalogo_segundos", float, "lote"
-        ),
-        reintento_inicial_segundos=_get(
-            lote_raw, "reintento_inicial_segundos", float, "lote"
-        ),
-        reintento_maximo_segundos=_get(
-            lote_raw, "reintento_maximo_segundos", float, "lote"
-        ),
+        refresco_catalogo_segundos=_get(lote_raw, "refresco_catalogo_segundos", float, "lote"),
+        reintento_inicial_segundos=_get(lote_raw, "reintento_inicial_segundos", float, "lote"),
+        reintento_maximo_segundos=_get(lote_raw, "reintento_maximo_segundos", float, "lote"),
         # F-R6: defaults tolerantes a configs viejos. Si falta el bloque,
         # el DLQ queda en `data/dlq.jsonl` con la misma rotación que el log
         # de eventos.
@@ -746,32 +712,28 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         raise ConfigError("'lote.flush_segundos' debe ser > 0")
     if lote.flush_segundos >= lote.cierre_sin_detecciones_segundos:
         raise ConfigError(
-            "'lote.flush_segundos' debe ser menor que "
-            "'lote.cierre_sin_detecciones_segundos'"
+            "'lote.flush_segundos' debe ser menor que " "'lote.cierre_sin_detecciones_segundos'"
         )
     if not 1 <= lote.max_eventos_por_envio <= 100:
         raise ConfigError("'lote.max_eventos_por_envio' debe estar entre 1 y 100")
     if lote.cola_eventos < 1:
         raise ConfigError("'lote.cola_eventos' debe ser >= 1")
     if lote.max_pendientes < lote.max_eventos_por_envio:
-        raise ConfigError(
-            "'lote.max_pendientes' debe ser >= 'lote.max_eventos_por_envio'"
-        )
+        raise ConfigError("'lote.max_pendientes' debe ser >= 'lote.max_eventos_por_envio'")
     if lote.refresco_catalogo_segundos <= 0:
         raise ConfigError("'lote.refresco_catalogo_segundos' debe ser > 0")
     if lote.reintento_inicial_segundos <= 0:
         raise ConfigError("'lote.reintento_inicial_segundos' debe ser > 0")
     if lote.reintento_maximo_segundos < lote.reintento_inicial_segundos:
         raise ConfigError(
-            "'lote.reintento_maximo_segundos' debe ser >= "
-            "'lote.reintento_inicial_segundos'"
+            "'lote.reintento_maximo_segundos' debe ser >= 'lote.reintento_inicial_segundos'"
         )
 
     # --- control (SCA-400) ---
     # Si la sección falta, devolvemos un ControlConfig deshabilitado con
     # defaults seguros. Así el resto de la app puede consultar cfg.sensores
     # / cfg.actuadores / cfg.lotes_modo_endpoint sin guard contra None.
-    # Los defaults matchean el fallback de ControlService._cargar_config.
+    # Los defaults matchean los de `ControlService._cargar_config`.
     control = ControlConfig(
         habilitado=False,
         publicar_telemetria_segundos=5.0,
@@ -803,9 +765,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             poll_consigna_propuesta_segundos=_get(
                 control_raw, "poll_consigna_propuesta_segundos", float, "control"
             ),
-            metricas_horno_endpoint=_get(
-                control_raw, "metricas_horno_endpoint", str, "control"
-            ),
+            metricas_horno_endpoint=_get(control_raw, "metricas_horno_endpoint", str, "control"),
             consigna_propuesta_endpoint=_get(
                 control_raw, "consigna_propuesta_endpoint", str, "control"
             ),
@@ -820,20 +780,14 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             ),
             sensores=sensores,
             actuadores=actuadores,
-            lotes_modo_endpoint=_get(
-                control_raw, "lotes_modo_endpoint", str, "control"
-            ),
+            lotes_modo_endpoint=_get(control_raw, "lotes_modo_endpoint", str, "control"),
             # F-R10: defaults tolerantes a configs viejos. El audit log queda
             # en `data/control_audit.jsonl` con la misma rotación.
             audit_path=_str_opcional(control_raw, "audit_path", "control_audit.jsonl", "control"),
             audit_max_bytes=_int_opcional(control_raw, "audit_max_bytes", 5_242_880, "control"),
             audit_max_files=_int_opcional(control_raw, "audit_max_files", 5, "control"),
-            consigna_reg_temp1=_int_opcional(
-                control_raw, "consigna_reg_temp1", 100, "control"
-            ),
-            consigna_reg_vel=_int_opcional(
-                control_raw, "consigna_reg_vel", 104, "control"
-            ),
+            consigna_reg_temp1=_int_opcional(control_raw, "consigna_reg_temp1", 100, "control"),
+            consigna_reg_vel=_int_opcional(control_raw, "consigna_reg_vel", 104, "control"),
             umbral_marcha_temp_c=_float_opcional(
                 control_raw, "umbral_marcha_temp_c", 50.0, "control"
             ),
@@ -842,13 +796,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             ),
         )
         if control.publicar_telemetria_segundos <= 0:
-            raise ConfigError(
-                "'control.publicar_telemetria_segundos' debe ser > 0"
-            )
+            raise ConfigError("'control.publicar_telemetria_segundos' debe ser > 0")
         if control.poll_consigna_propuesta_segundos <= 0:
-            raise ConfigError(
-                "'control.poll_consigna_propuesta_segundos' debe ser > 0"
-            )
+            raise ConfigError("'control.poll_consigna_propuesta_segundos' debe ser > 0")
         for campo in (
             "metricas_horno_endpoint",
             "consigna_propuesta_endpoint",
@@ -857,13 +807,9 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             "lotes_modo_endpoint",
         ):
             if not getattr(control, campo).startswith("/"):
-                raise ConfigError(
-                    f"'control.{campo}' debe empezar con '/'"
-                )
+                raise ConfigError(f"'control.{campo}' debe empezar con '/'")
             if "{id}" not in getattr(control, campo):
-                raise ConfigError(
-                    f"'control.{campo}' debe contener el placeholder '{{id}}'"
-                )
+                raise ConfigError(f"'control.{campo}' debe contener el placeholder '{{id}}'")
 
     return AppConfig(
         paths=paths,

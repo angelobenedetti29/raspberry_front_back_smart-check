@@ -36,43 +36,31 @@ class TestEstabilizadorConteo(unittest.TestCase):
     def test_cruce_normal(self) -> None:
         """Una tostada que avanza y cruza la línea genera exactamente un cruce."""
         # Frame 1 (centro 430 < 540): nace tentativa, todavía sin alta.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 400, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 400, 100, 60))])
         self.assertEqual(self._conteo("alta"), 0)
 
         # Frame 2 (centro 490): segundo frame visto consecutivo → alta.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 460, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 460, 100, 60))])
         self.assertEqual(self._conteo("alta"), 1)
 
         # Frame 3 (centro 530): todavía arriba de la línea, sin cruce.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 500, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 500, 100, 60))])
         self.assertEqual(self._conteo("cruce"), 0)
 
         # Frame 4 (centro 560 >= 540): cruce, exactamente una vez.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 530, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 530, 100, 60))])
         cruces = [e for e in self.estabilizador.eventos() if e.tipo == "cruce"]
         self.assertEqual(len(cruces), 1)
         self.assertEqual(cruces[0].label, "TCOK")
 
         # Frame 5 (centro 620): sigue avanzando, sin nuevo cruce.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 590, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 590, 100, 60))])
         self.assertEqual(self._conteo("cruce"), 0)
 
     def test_tentativa_perdida_antes_de_la_linea_no_cuenta(self) -> None:
         """Una tentativa que se pierde antes de la línea se descarta en silencio."""
         # Nace en Y=350 (centro 380) y sólo se ve un frame: queda tentativa.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.85, (100, 350, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.85, (100, 350, 100, 60))])
         self.estabilizador.eventos()
 
         # Se pierde más que _FRAMES_MAX_PERDIDA (25): descarte en silencio,
@@ -86,37 +74,25 @@ class TestEstabilizadorConteo(unittest.TestCase):
     def test_reaparicion_antes_de_la_linea_no_duplica(self) -> None:
         """Una pista nueva que cruza la línea suma su cruce, y sólo uno."""
         # Pista confirmada arriba de la línea (2 frames consecutivos).
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.85, (100, 450, 100, 60))]
-        )
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.85, (100, 480, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.85, (100, 450, 100, 60))])
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.85, (100, 480, 100, 60))])
         self.estabilizador.eventos()
 
         # Cruza la línea (centro 560 >= 540): exactamente un cruce.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.85, (100, 530, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.85, (100, 530, 100, 60))])
         self.assertEqual(self._conteo("cruce"), 1)
 
     def test_nacida_despues_de_la_linea_no_cuenta(self) -> None:
         """Una pista que reaparece ya debajo de la línea nace cruzada: no cruza."""
         # 3 frames arriba de la línea (confirmada al 2º).
         for y in (420, 460, 500):
-            self.estabilizador.estabilizar(
-                [ResultadoDeteccion("TCOK", 0.9, (100, y, 100, 60))]
-            )
+            self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, y, 100, 60))])
         # Cruza (centro 560): un cruce.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 530, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 530, 100, 60))])
         self.assertEqual(self._conteo("cruce"), 1)
 
         # Avanza, se pierde por 30 frames (> _FRAMES_MAX_PERDIDA) → baja.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 590, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 590, 100, 60))])
         self.estabilizador.eventos()
         for _ in range(30):
             self.estabilizador.estabilizar([])
@@ -124,21 +100,15 @@ class TestEstabilizadorConteo(unittest.TestCase):
 
         # Reaparece ya debajo de la línea (centro 650 > 540): nace cruzada,
         # ningún cruce nuevo aunque siga viva.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 620, 100, 60))]
-        )
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.9, (100, 650, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 620, 100, 60))])
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.9, (100, 650, 100, 60))])
         self.assertEqual(self._conteo("cruce"), 0)
 
     def test_esporadica_no_genera_cruce(self) -> None:
         """Una detección espuria de un frame sobre la línea no genera cruce."""
         # Nace con el centro ya en 570 >= 540: tentativa de un solo frame que
         # además nace cruzada → sin alta y sin cruce.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCOK", 0.7, (100, 540, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCOK", 0.7, (100, 540, 100, 60))])
         eventos = self.estabilizador.eventos()
         self.assertEqual(len([e for e in eventos if e.tipo == "cruce"]), 0)
         self.assertEqual(len([e for e in eventos if e.tipo == "alta"]), 0)
@@ -147,15 +117,11 @@ class TestEstabilizadorConteo(unittest.TestCase):
         """Una pista con quemada confirmada emite su cruce con el label latcheado."""
         # 3 frames acumulando quemada (racha acumulativa): latch a TCQ al 3º.
         for y in (420, 460, 500):
-            self.estabilizador.estabilizar(
-                [ResultadoDeteccion("TCQ", 0.95, (100, y, 100, 60))]
-            )
+            self.estabilizador.estabilizar([ResultadoDeteccion("TCQ", 0.95, (100, y, 100, 60))])
         self.estabilizador.eventos()
 
         # Cruza la línea (centro 560): cruce con el label latcheado TCQ.
-        self.estabilizador.estabilizar(
-            [ResultadoDeteccion("TCQ", 0.95, (100, 530, 100, 60))]
-        )
+        self.estabilizador.estabilizar([ResultadoDeteccion("TCQ", 0.95, (100, 530, 100, 60))])
         cruces = [e for e in self.estabilizador.eventos() if e.tipo == "cruce"]
         self.assertEqual(len(cruces), 1)
         self.assertEqual(cruces[0].label, "TCQ")

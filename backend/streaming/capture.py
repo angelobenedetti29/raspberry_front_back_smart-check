@@ -48,9 +48,7 @@ def resolver_fuente(source: str, videos_dir: Path) -> Fuente:
     """
     valor = source.strip()
     if valor.isdigit():
-        return Fuente(
-            camara=True, indice=int(valor), archivo=None, descripcion=f"Cámara {valor}"
-        )
+        return Fuente(camara=True, indice=int(valor), archivo=None, descripcion=f"Cámara {valor}")
 
     carpeta = videos_dir.resolve()
     archivo = (carpeta / valor).resolve()
@@ -184,11 +182,7 @@ class CapturaOpenCV:
         devolver None obligaría a esperar la llamada siguiente y costaría un frame
         perdido en cada vuelta del video. Cualquier otro fallo es fuente perdida.
         """
-        if (
-            self._fuente.archivo is not None
-            and self._captura.loop_video
-            and self._cap is not None
-        ):
+        if self._fuente.archivo is not None and self._captura.loop_video and self._cap is not None:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ok, frame = self._cap.read()
             if ok:

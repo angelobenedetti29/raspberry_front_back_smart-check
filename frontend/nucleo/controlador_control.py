@@ -63,7 +63,6 @@ class SetpointUI:
 
     temp_horno_1: float
     velocidad_cinta: float
-    aplicado_por: str
     ventana: str | None
     decision_id: str | None
 
@@ -78,9 +77,8 @@ class EstadoControlUI:
     ultimo_setpoint: SetpointUI | None
     ultima_lectura: LecturaHornoUI | None
     propuesta_pendiente: SetpointUI | None
-    aplazar_siguiente: bool
     ultimo_error: str
-    backend_ok: bool
+    ultimo_poll: float | None = None
 
 
 @runtime_checkable
@@ -95,7 +93,5 @@ class ControladorControl(Protocol):
     def estado(self) -> EstadoControlUI: ...
 
     def cambiar_modo(self, modo: ModoControlUI) -> None: ...
-
-    def aplazar_siguiente(self) -> None: ...
 
     def aplicar_pendiente(self) -> bool: ...

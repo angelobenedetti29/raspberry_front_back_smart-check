@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Mapping
+from typing import TYPE_CHECKING
 
-from backend.config import LOCK_CONFIG, ConfigError, guardar_config, leer_config_cruda
+from backend.config import (
+    DRIVERS_CONTROL,
+    LOCK_CONFIG,
+    ConfigError,
+    guardar_config,
+    leer_config_cruda,
+)
 from frontend.nucleo.controlador_config import (
     CampoConfigUI,
     ResultadoGuardadoUI,
@@ -28,15 +35,18 @@ if TYPE_CHECKING:
 # Valor centinela para distinguir "la clave no está en el JSON" de un None real.
 _FALTA = object()
 
-# Cotas por defecto de los editores numéricos cuando el esquema no fija una.
-_MAX_ENTERO = 2_000_000_000
-_MAX_DECIMAL = 1_000_000.0
-
 _CLAVE_RTSP = "stream.publisher.rtsp_transport"
 _CLAVE_MODELO = "models.default_model_id"
 _CLAVE_DRIVER_SENSORES = "control.sensores.driver"
 _CLAVE_DRIVER_ACTUADORES = "control.actuadores.driver"
 _CLAVE_LOTES_MODO_ENDPOINT = "control.lotes_modo_endpoint"
+
+_ETIQUETAS_DRIVER: dict[str, str] = {
+    "stub": "Stub (sin hardware)",
+    "simulado": "Simulado (planta en memoria)",
+    "modbus_rtu": "Modbus RTU (RS-485)",
+    "modbus_tcp": "Modbus TCP (Ethernet)",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +375,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "URL pública del túnel",
         TipoCampo.TEXTO,
         "URL completa con la que el backend alcanza esta Pi (ej.: "
-        "http://localhost:8090 en pruebas locales o "
+        "http://localhost:9000 en pruebas locales o "
         "https://mi-tunel.trycloudflare.com con un túnel). Vacía = la Pi "
         "escucha directo en listen_address:local_port sin túnel.",
     ),
@@ -413,8 +423,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Lotes",
         "Cierre sin detecciones (s)",
         TipoCampo.DECIMAL,
-        "Segundos sin detecciones para cerrar el lote; debe superar el "
-        "tránsito por el horno.",
+        "Segundos sin detecciones para cerrar el lote; debe superar el " "tránsito por el horno.",
         minimo=0,
         decimales=1,
         paso=1.0,
@@ -517,8 +526,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Control",
         "Host Modbus TCP (sensores)",
         TipoCampo.TEXTO,
-        "Host del PLC de sensores (ej. 127.0.0.1). Sólo se usa con driver "
-        "modbus_tcp.",
+        "Host del PLC de sensores (ej. 127.0.0.1). Sólo se usa con driver " "modbus_tcp.",
         defecto="127.0.0.1",
         visible_si=(_CLAVE_DRIVER_SENSORES, "modbus_tcp"),
     ),
@@ -527,8 +535,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Control",
         "Puerto Modbus TCP (sensores)",
         TipoCampo.ENTERO,
-        "Puerto TCP del PLC de sensores (default 5020). Sólo se usa con "
-        "driver modbus_tcp.",
+        "Puerto TCP del PLC de sensores (default 5020). Sólo se usa con " "driver modbus_tcp.",
         minimo=1,
         maximo=65535,
         defecto=5020,
@@ -539,8 +546,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Control",
         "Host Modbus TCP (actuadores)",
         TipoCampo.TEXTO,
-        "Host del PLC de actuadores (ej. 127.0.0.1). Sólo se usa con driver "
-        "modbus_tcp.",
+        "Host del PLC de actuadores (ej. 127.0.0.1). Sólo se usa con driver " "modbus_tcp.",
         defecto="127.0.0.1",
         visible_si=(_CLAVE_DRIVER_ACTUADORES, "modbus_tcp"),
     ),
@@ -549,8 +555,7 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Control",
         "Puerto Modbus TCP (actuadores)",
         TipoCampo.ENTERO,
-        "Puerto TCP del PLC de actuadores (default 5020). Sólo se usa con "
-        "driver modbus_tcp.",
+        "Puerto TCP del PLC de actuadores (default 5020). Sólo se usa con " "driver modbus_tcp.",
         minimo=1,
         maximo=65535,
         defecto=5020,
@@ -654,9 +659,7 @@ class AdaptadorConfig:
             try:
                 self._on_device_tunel_changed(url_post, puerto_post)
             except Exception as exc:  # noqa: BLE001 - side-effect debe no romper
-                logger.warning(
-                    "config: no se pudo notificar el cambio de túnel: %s", exc
-                )
+                logger.warning("config: no se pudo notificar el cambio de túnel: %s", exc)
 
         return ResultadoGuardadoUI(
             ok=True,
@@ -693,21 +696,14 @@ class AdaptadorConfig:
         )
 
     @staticmethod
-    def _opciones(
-        clave: str, cruda: dict
-    ) -> tuple[tuple[str, object], ...]:
+    def _opciones(clave: str, cruda: dict) -> tuple[tuple[str, object], ...]:
         """Opciones de los combos: transporte RTSP, drivers Modbus y modelos."""
         if clave == _CLAVE_RTSP:
             return (("TCP", "tcp"), ("UDP", "udp"))
         if clave == _CLAVE_MODELO:
             return _opciones_modelos(cruda)
         if clave in (_CLAVE_DRIVER_SENSORES, _CLAVE_DRIVER_ACTUADORES):
-            return (
-                ("Stub (sin hardware)", "stub"),
-                ("Simulado (planta en memoria)", "simulado"),
-                ("Modbus RTU (RS-485)", "modbus_rtu"),
-                ("Modbus TCP (Ethernet)", "modbus_tcp"),
-            )
+            return tuple((_ETIQUETAS_DRIVER[d], d) for d in DRIVERS_CONTROL)
         return ()
 
 

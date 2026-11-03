@@ -23,10 +23,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from backend.config import AppConfig, ControlConfig
 from backend.control.audit import AuditorConsignas
@@ -42,14 +41,11 @@ from backend.control.tipos import (
 from backend.device.tipos import TipoDispositivo
 from backend.lote.cliente import ClienteLotes
 from backend.lote.tipos import ErrorLotes, Lote
+from backend.tiempo import ahora_iso_utc
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_STOP = 5.0
-
-
-def _ahora_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _positivo(valor: float | None, default: float) -> float:
@@ -69,9 +65,7 @@ def _rango(
 
 def _limites_del_producto(producto) -> LimitesAplicacion:
     """Deriva los límites de aplicación del producto, con defaults seguros."""
-    temp_min, temp_max = _rango(
-        producto.temp_min, producto.temp_max, 0.0, 500.0
-    )
+    temp_min, temp_max = _rango(producto.temp_min, producto.temp_max, 0.0, 500.0)
     vel_min, vel_max = _rango(
         producto.velocidad_cinta_min,
         producto.velocidad_cinta_max,
@@ -148,12 +142,12 @@ class ControlService:
         self._aplicaciones_ok: int = 0
         self._aplicaciones_error: int = 0
         self._ultima_telemetria: float = 0.0
+        # Último poll de propuestas (para el countdown real de la UI).
+        self._ultimo_poll: float | None = None
         # Dedup por decision_id del backend: ttl = 3 ciclos de poll para tolerar
         # reintentos del backend sin aplicar dos veces la misma decisión.
         self._decision_vistas: dict[str, float] = {}
-        self._decision_ttl_segundos: float = (
-            self._ctrl_cfg.poll_consigna_propuesta_segundos * 3
-        )
+        self._decision_ttl_segundos: float = self._ctrl_cfg.poll_consigna_propuesta_segundos * 3
         # Última lectura cruda del lector (cache para la UI). Se actualiza en
         # cada _publicar_telemetria aunque la lectura venga sin datos, así
         # el panel refleja "stale" en vez de "sin inicializar".
@@ -269,9 +263,7 @@ class ControlService:
             "temp_horno_1": lectura.temp_horno_1,
             "velocidad_cinta": lectura.velocidad_cinta,
             "temp_objetivo": (
-                lectura.temp_objetivo
-                if lectura.temp_objetivo is not None
-                else lectura.temp_horno_1
+                lectura.temp_objetivo if lectura.temp_objetivo is not None else lectura.temp_horno_1
             ),
             "vel_objetivo": (
                 lectura.vel_objetivo
@@ -281,9 +273,7 @@ class ControlService:
             "confianza_deteccion": lectura.confianza_deteccion,
         }
 
-    def actualizar_modo(
-        self, modo: ModoControl, limites: LimitesAplicacion | None = None
-    ) -> None:
+    def actualizar_modo(self, modo: ModoControl, limites: LimitesAplicacion | None = None) -> None:
         """Cambio de modo en vivo (el operador lo cambia desde el panel)."""
         with self._lock:
             self._modo = modo
@@ -294,17 +284,6 @@ class ControlService:
         logger.info("control: modo actualizado a %s", modo.value)
 
     # --- comandos del operario (SUPERVISION) ---
-
-    def aplazar_siguiente(self) -> None:
-        """Obsoleto: la supervisión ahora siempre espera aprobación.
-
-        Se conserva porque la UI/protocolo pueden seguir llamándolo; sólo
-        registra un aviso y no altera el flujo.
-        """
-        logger.warning(
-            "control: aplazar_siguiente está obsoleto; "
-            "SUPERVISION siempre espera aprobación"
-        )
 
     def aplicar_pendiente(self) -> bool:
         """Aprueba y aplica la propuesta pendiente (sólo SUPERVISION).
@@ -368,7 +347,9 @@ class ControlService:
         # Si el ack quedó pendiente, `_aplicar_y_confirmar` ya auditó el fallo.
         if not self._tiene_ack_pendiente(propuesta.decision_id):
             self._audit.decision_aplicada(
-                lote_id, propuesta, resultado="aplicada",
+                lote_id,
+                propuesta,
+                resultado="aplicada",
                 detalle="aprobacion local (SUPERVISION)",
             )
         return True
@@ -411,10 +392,9 @@ class ControlService:
                 "ultimo_setpoint": self._ultimo_setpoint_aplicado,
                 "ultima_lectura": self._ultima_lectura,
                 "propuesta_pendiente": self._propuesta_pendiente,
-                # Clave legacy para la UI: la supervisión ya no aplaza.
-                "aplazar_siguiente": False,
                 "ultimo_error": self._ultimo_error,
                 "backend_ok": self._backend_ok,
+                "ultimo_poll": self._ultimo_poll,
                 "publicaciones_ok": self._publicaciones_ok,
                 "publicaciones_error": self._publicaciones_error,
                 "aplicaciones_ok": self._aplicaciones_ok,
@@ -442,13 +422,11 @@ class ControlService:
             return
 
         ahora = time.monotonic()
-        if (
-            ahora - self._ultima_telemetria
-            >= self._ctrl_cfg.publicar_telemetria_segundos
-        ):
+        if ahora - self._ultima_telemetria >= self._ctrl_cfg.publicar_telemetria_segundos:
             self._ultima_telemetria = ahora
             self._publicar_telemetria(secret, lote_id)
         self._reintentar_acks(secret, lote_id)
+        self._ultimo_poll = time.monotonic()
         self._buscar_y_aplicar_propuesta(secret, lote_id)
 
         # Espera hasta el próximo ciclo: usa el menor de los dos intervalos para
@@ -495,6 +473,7 @@ class ControlService:
                     self._ultimo_setpoint_aplicado = None
                     self._propuesta_pendiente = None
                     self._acks_pendientes.clear()
+                    self._decision_vistas.clear()
             return
 
         self._enganchar_o_actualizar(lote)
@@ -516,9 +495,7 @@ class ControlService:
             # en el próximo ciclo.
             return
         modo = self._modo_desde_lote(lote)
-        iniciado_manualmente = bool(
-            getattr(lote, "iniciado_manualmente", False)
-        )
+        iniciado_manualmente = bool(getattr(lote, "iniciado_manualmente", False))
         with self._lock:
             enganchado = self._lote_id == lote.id
             self._lote_id = lote.id
@@ -531,7 +508,9 @@ class ControlService:
                 self._acks_pendientes.clear()
                 logger.info(
                     "control: enganchado al lote %s modo=%s manual=%s",
-                    lote.id, modo.value, iniciado_manualmente,
+                    lote.id,
+                    modo.value,
+                    iniciado_manualmente,
                 )
 
     @staticmethod
@@ -576,7 +555,7 @@ class ControlService:
             logger.debug("control: sin lecturas para publicar")
             return
         payload = lectura.a_payload()
-        payload["received_at"] = _ahora_iso()
+        payload["received_at"] = ahora_iso_utc()
         try:
             self._cliente.publicar_telemetria(
                 secret, lote_id, self._ctrl_cfg.metricas_horno_endpoint, payload
@@ -637,8 +616,7 @@ class ControlService:
             with self._lock:
                 ya_pendiente = (
                     self._propuesta_pendiente is not None
-                    and self._propuesta_pendiente.decision_id
-                    == propuesta.decision_id
+                    and self._propuesta_pendiente.decision_id == propuesta.decision_id
                 )
                 self._propuesta_pendiente = propuesta
             if not ya_pendiente:
@@ -649,7 +627,9 @@ class ControlService:
                     propuesta.decision_id,
                 )
                 self._audit.decision_aplicada(
-                    lote_id, propuesta, resultado="pendiente_aprobacion",
+                    lote_id,
+                    propuesta,
+                    resultado="pendiente_aprobacion",
                 )
             return
 
@@ -663,7 +643,9 @@ class ControlService:
             # F-R10: registrar el descarte para tener trazabilidad del
             # backend incluso cuando no aplicamos.
             self._audit.decision_aplicada(
-                lote_id, propuesta, resultado="descartada_dup",
+                lote_id,
+                propuesta,
+                resultado="descartada_dup",
                 detalle="decision_id dentro del TTL de dedup",
             )
             return
@@ -694,7 +676,9 @@ class ControlService:
         # quedó pendiente, `_aplicar_y_confirmar` ya auditó "fallo_ack".
         if not self._tiene_ack_pendiente(propuesta.decision_id):
             self._audit.decision_aplicada(
-                lote_id, propuesta, resultado="aplicada",
+                lote_id,
+                propuesta,
+                resultado="aplicada",
             )
 
     def _limites_snapshot(self) -> LimitesAplicacion | None:
@@ -788,7 +772,9 @@ class ControlService:
             # esto el operador no puede reconciliar el estado del horno
             # con el del backend.
             self._audit.decision_aplicada(
-                lote_id, propuesta, resultado="fallo_ack",
+                lote_id,
+                propuesta,
+                resultado="fallo_ack",
                 detalle=str(exc),
             )
             return True
@@ -863,9 +849,7 @@ class ControlService:
             t1 = max(limites.temp_min, min(limites.temp_max, propuesta.temp_horno_1))
             v = max(limites.vel_min, min(limites.vel_max, propuesta.velocidad_cinta))
         else:
-            t1 = self._clampear_temp(
-                propuesta.temp_horno_1, actual_t1, limites
-            )
+            t1 = self._clampear_temp(propuesta.temp_horno_1, actual_t1, limites)
             v = self._clampear_vel(propuesta.velocidad_cinta, actual_v, limites)
 
         try:
@@ -879,9 +863,7 @@ class ControlService:
         return (t1, v)
 
     @staticmethod
-    def _clampear_temp(
-        objetivo: float, actual: float, limites: LimitesAplicacion
-    ) -> float:
+    def _clampear_temp(objetivo: float, actual: float, limites: LimitesAplicacion) -> float:
         """Clamp de T al rango del producto + Δmáx por ciclo."""
         delta = objetivo - actual
         if abs(delta) > limites.delta_temp_max_c:
@@ -891,14 +873,10 @@ class ControlService:
         return max(limites.temp_min, min(limites.temp_max, objetivo))
 
     @staticmethod
-    def _clampear_vel(
-        objetivo: float, actual: float, limites: LimitesAplicacion
-    ) -> float:
+    def _clampear_vel(objetivo: float, actual: float, limites: LimitesAplicacion) -> float:
         delta = objetivo - actual
         if abs(delta) > limites.delta_vel_max:
-            objetivo = actual + (
-                limites.delta_vel_max if delta > 0 else -limites.delta_vel_max
-            )
+            objetivo = actual + (limites.delta_vel_max if delta > 0 else -limites.delta_vel_max)
         return max(limites.vel_min, min(limites.vel_max, objetivo))
 
     # --- manejo de errores ---
@@ -917,27 +895,10 @@ class ControlService:
 
     @staticmethod
     def _cargar_config(config: AppConfig) -> ControlConfig:
-        """Lee config.control. Si falta la sección, devuelve defaults seguros.
+        """Devuelve config.control; el loader ya resuelve el default.
 
-        Mantener compat con configs viejos: si la sección no existe, se
-        deshabilita el servicio (sin telemetría ni aplicación). Los nuevos
-        campos (sensores/actuadores/lotes_modo_endpoint) caen a sus defaults
-        del dataclass, así que un config viejo sigue funcionando con stubs.
+        Si la sección no existe en config.json, `load_config()` devuelve un
+        ControlConfig deshabilitado con defaults seguros, así que acá nunca
+        llega `None`.
         """
-        cfg = getattr(config, "control", None)
-        if cfg is None:
-            return ControlConfig(
-                habilitado=False,
-                publicar_telemetria_segundos=5.0,
-                poll_consigna_propuesta_segundos=3.0,
-                metricas_horno_endpoint="/api/v1/lotes/{id}/metricas-horno",
-                consigna_propuesta_endpoint="/api/v1/lotes/{id}/consigna-propuesta",
-                aplicar_consigna_endpoint="/api/v1/lotes/{id}/aplicar-consigna",
-                consigna_ack_endpoint="/api/v1/lotes/{id}/consigna/ack",
-                consigna_reg_temp1=100,
-                consigna_reg_vel=104,
-                umbral_marcha_temp_c=50.0,
-                umbral_marcha_velocidad=0.01,
-                # sensores/actuadores/lotes_modo_endpoint usan defaults del dataclass
-            )
-        return cfg
+        return config.control

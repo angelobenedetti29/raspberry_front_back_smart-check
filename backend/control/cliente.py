@@ -3,7 +3,7 @@
 Endpoints consumidos:
   - POST /api/v1/lotes/{id}/metricas-horno        (Bearer dispositivo)
   - GET  /api/v1/lotes/{id}/consigna-propuesta    (Bearer dispositivo)
-  - POST /api/v1/lotes/{id}/aprobar-consigna      (Bearer dispositivo; alias /aplicar-consigna)
+  - POST /api/v1/lotes/{id}/aplicar-consigna      (Bearer dispositivo; alias /aprobar-consigna)
   - POST /api/v1/lotes/{id}/consigna/ack          (Bearer dispositivo)
 
 Las URLs se arman desde la plantilla del endpoint y el id del lote, igual
@@ -64,9 +64,7 @@ class ClienteControl:
                 codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
-            raise ErrorControl(
-                f"No se pudo publicar telemetría al backend: {exc.detalle}"
-            ) from exc
+            raise ErrorControl(f"No se pudo publicar telemetría al backend: {exc.detalle}") from exc
         except ErrorFormato as exc:
             raise ErrorControl(str(exc)) from exc
 
@@ -93,9 +91,7 @@ class ClienteControl:
                 codigo=exc.codigo,
             ) from exc
         except ErrorConexion as exc:
-            raise ErrorControl(
-                f"No se pudo consultar propuesta al backend: {exc.detalle}"
-            ) from exc
+            raise ErrorControl(f"No se pudo consultar propuesta al backend: {exc.detalle}") from exc
         except ErrorFormato as exc:
             raise ErrorControl(str(exc)) from exc
         if data is None:
@@ -115,10 +111,7 @@ class ClienteControl:
             if not isinstance(propuesta, dict):
                 raise ErrorControl("Propuesta mal formada: propuesta no es objeto")
             payload = propuesta
-        if not any(
-            clave in payload
-            for clave in ("temp1_objetivo", "temp1", "temperaturaObjetivo")
-        ):
+        if not any(clave in payload for clave in ("temp1_objetivo", "temperaturaObjetivo")):
             raise ErrorControl("Propuesta mal formada: falta temp1_objetivo")
         try:
             return _a_setpoint(payload)
@@ -132,20 +125,19 @@ class ClienteControl:
         endpoint_plantilla: str,
         body: dict | None = None,
     ) -> None:
-        """POST /api/v1/lotes/{id}/aprobar-consigna (aprobación del operario).
+        """POST /api/v1/lotes/{id}/aplicar-consigna (aprobación del operario).
 
-        El backend sólo registra la aprobación de una propuesta SUPERVISION;
-        no aplica el setpoint. La aplicación real la confirma la Pi con
-        `ack_consigna`. `body` puede llevar `decision_id` para que el backend
-        rechace la aprobación si la propuesta vigente cambió.
+        El endpoint principal es `/aplicar-consigna`; `/aprobar-consigna` es el
+        alias. El backend sólo registra la aprobación de una propuesta
+        SUPERVISION; no aplica el setpoint. La aplicación real la confirma la
+        Pi con `ack_consigna`. `body` puede llevar `decision_id` para que el
+        backend rechace la aprobación si la propuesta vigente cambió.
         """
         if not secret:
             raise ErrorControl("No hay secret de dispositivo para autenticar")
         path = endpoint_plantilla.format(id=lote_id)
         try:
-            self._http.peticion(
-                "POST", path, payload=body, token=secret, parsear=False
-            )
+            self._http.peticion("POST", path, payload=body, token=secret, parsear=False)
         except ErrorHttp as exc:
             raise ErrorControl(
                 f"El backend rechazó la aprobación de consigna ({exc.codigo}): {exc.detalle}",
@@ -157,16 +149,6 @@ class ClienteControl:
             ) from exc
         except ErrorFormato as exc:
             raise ErrorControl(str(exc)) from exc
-
-    def aplicar_consigna(
-        self,
-        secret: str,
-        lote_id: str,
-        endpoint_plantilla: str,
-        body: dict | None = None,
-    ) -> None:
-        """Alias legacy de `aprobar_consigna`; el body se ignora."""
-        self.aprobar_consigna(secret, lote_id, endpoint_plantilla)
 
     def ack_consigna(
         self,
@@ -180,9 +162,7 @@ class ClienteControl:
             raise ErrorControl("No hay secret de dispositivo para autenticar")
         path = endpoint_plantilla.format(id=lote_id)
         try:
-            self._http.peticion(
-                "POST", path, payload=body, token=secret, parsear=False
-            )
+            self._http.peticion("POST", path, payload=body, token=secret, parsear=False)
         except ErrorHttp as exc:
             raise ErrorControl(
                 f"El backend rechazó el ack de consigna ({exc.codigo}): {exc.detalle}",
@@ -290,9 +270,7 @@ def _limites_de_payload(payload: dict) -> LimitesAplicacion | None:
         delta_vel_max = float(bruto["delta_vel_max"])
     except (KeyError, TypeError, ValueError):
         return None
-    valores = (
-        temp_min, temp_max, vel_min, vel_max, delta_temp_max_c, delta_vel_max
-    )
+    valores = (temp_min, temp_max, vel_min, vel_max, delta_temp_max_c, delta_vel_max)
     if not all(math.isfinite(v) for v in valores):
         return None
     if temp_max <= temp_min or vel_max <= vel_min:

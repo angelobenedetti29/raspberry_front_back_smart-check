@@ -11,9 +11,10 @@ El orden de los grupos se deriva de `campos()` preservando la primera aparición
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 class TipoCampo(str, Enum):

@@ -25,9 +25,7 @@ class _ClienteFalso:
 
 def test_lector_usa_las_direcciones_de_consigna_pasadas() -> None:
     cliente = _ClienteFalso()
-    lector = LectorSensoresModbus(
-        cliente, consigna_reg_temp1=110, consigna_reg_vel=114
-    )
+    lector = LectorSensoresModbus(cliente, consigna_reg_temp1=110, consigna_reg_vel=114)
 
     lectura = lector.leer()
 
@@ -53,9 +51,7 @@ def test_crear_lector_inyecta_las_direcciones(monkeypatch) -> None:
         def __init__(self, cfg: ModbusDriverConfig) -> None:
             creados.append(cfg)
 
-    monkeypatch.setattr(
-        "backend.control.sensores.ClienteModbus", _ClienteFalsoConstructor
-    )
+    monkeypatch.setattr("backend.control.sensores.ClienteModbus", _ClienteFalsoConstructor)
     cfg = ModbusDriverConfig(driver="modbus_tcp", host="127.0.0.1", port=5020)
 
     lector = crear_lector(cfg, 110, 114)

@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from backend.config import AppConfig
-from backend.device.almacen import AlmacenDispositivo, EstadoDispositivo, ErrorAlmacen
+from backend.device.almacen import AlmacenDispositivo, ErrorAlmacen, EstadoDispositivo
 from backend.device.cliente import (
     ClienteDispositivo,
     ClienteRegistro,
@@ -87,8 +87,6 @@ class DeviceService:
         # El alta no es automática: el hilo solo pide registro cuando el
         # operador lo dispara (o cuando retoma una solicitud ya persistida).
         self._solicitado = False
-
-
 
         #! Si quedó una rename_url que el backend todavía no conoce (porque el
         #! operador la editó en Configuración y la Pi ya estaba aprobada), el
@@ -395,11 +393,7 @@ class DeviceService:
             return  # noop: el operador "guardó" sin tocar el par efectivo.
 
         with self._lock:
-            if (
-                url_cambia
-                and self._estado is EstadoRegistro.APROBADO
-                and self._secret is not None
-            ):
+            if url_cambia and self._estado is EstadoRegistro.APROBADO and self._secret is not None:
                 self._url_pendiente = nueva_url
                 # Si había un mensaje de error viejo, lo pisamos con el de sync;
                 # si no, lo dejamos en None hasta el primer intento.
@@ -478,7 +472,7 @@ class DeviceService:
             if self._hay_url_pendiente():
                 try:
                     self._sincronizar_url()
-                except Exception as exc:  # noqa: BLE001 - el hilo no debe morir
+                except Exception:  # noqa: BLE001 - el hilo no debe morir
                     logger.exception("device: sincronizar url inesperado")
                 with self._lock:
                     espera = self._url_backoff_segundos
@@ -626,9 +620,7 @@ class DeviceService:
         respuesta = self._cliente.consultar(request_id)
         if respuesta.status == "APPROVED":
             if respuesta.device_id is None or respuesta.secret is None:
-                raise ErrorRegistro(
-                    "El backend aprobó la solicitud sin device_id o secret"
-                )
+                raise ErrorRegistro("El backend aprobó la solicitud sin device_id o secret")
             with self._lock:
                 self._device_id = respuesta.device_id
                 self._secret = respuesta.secret

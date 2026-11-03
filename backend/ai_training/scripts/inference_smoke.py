@@ -39,9 +39,7 @@ def main(argv=None):
         cfg = rutas.cargar_config()
         entrada = validar.entrada_catalogo(cfg, args.modelo)
         resuelto = next(
-            r
-            for r in catalogo_resuelto(cfg.models.catalog)
-            if r.model_id == entrada.model_id
+            r for r in catalogo_resuelto(cfg.models.catalog) if r.model_id == entrada.model_id
         )
     except (ConfigError, ValueError, StopIteration) as exc:
         print(f"[ERROR] {exc}")

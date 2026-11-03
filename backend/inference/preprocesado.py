@@ -29,9 +29,7 @@ def letterbox(frame: np.ndarray, size: int) -> tuple[np.ndarray, float, int, int
     nuevo_ancho = max(1, round(ancho * escala))
     nuevo_alto = max(1, round(alto * escala))
 
-    redimensionado = cv2.resize(
-        frame, (nuevo_ancho, nuevo_alto), interpolation=cv2.INTER_LINEAR
-    )
+    redimensionado = cv2.resize(frame, (nuevo_ancho, nuevo_alto), interpolation=cv2.INTER_LINEAR)
     lienzo = np.full((size, size, 3), _COLOR_RELLENO, dtype=frame.dtype)
 
     pad_x = (size - nuevo_ancho) // 2

@@ -15,7 +15,6 @@ from frontend.nucleo.estado import EstadoItem, NivelEstado, SnapshotSistema
 
 if TYPE_CHECKING:
     from backend.config import AppConfig
-
     from frontend.nucleo.controlador import ControladorStreaming, EstadoUI
 
 
@@ -58,9 +57,7 @@ class ProveedorServicio:
             ),
         )
 
-        evaluables = [
-            item for item in items if item.nivel is not NivelEstado.SIN_DATO
-        ]
+        evaluables = [item for item in items if item.nivel is not NivelEstado.SIN_DATO]
         activos = sum(1 for item in evaluables if item.nivel is NivelEstado.ACTIVO)
 
         return SnapshotSistema(
@@ -85,9 +82,7 @@ class ProveedorServicio:
         else:
             nivel = NivelEstado.INACTIVO
 
-        return EstadoItem(
-            clave="captura", etiqueta="Captura", nivel=nivel, detalle=detalle
-        )
+        return EstadoItem(clave="captura", etiqueta="Captura", nivel=nivel, detalle=detalle)
 
     def _fila_inferencia(self, estado: EstadoUI) -> EstadoItem:
         """Inferencia: mientras carga no es ni logro ni problema, así que SIN_DATO."""
@@ -110,9 +105,7 @@ class ProveedorServicio:
             nivel = NivelEstado.SIN_DATO
             detalle = f"{etiqueta_modelo} · cargando"
 
-        return EstadoItem(
-            clave="inferencia", etiqueta="Inferencia", nivel=nivel, detalle=detalle
-        )
+        return EstadoItem(clave="inferencia", etiqueta="Inferencia", nivel=nivel, detalle=detalle)
 
     def _fila_publicacion(self, estado: EstadoUI, url: str) -> EstadoItem:
         """Publicación: reintentando es atención, detenida es inactivo."""
@@ -126,6 +119,4 @@ class ProveedorServicio:
         else:
             nivel = NivelEstado.INACTIVO
 
-        return EstadoItem(
-            clave="publicacion", etiqueta="Publicación", nivel=nivel, detalle=detalle
-        )
+        return EstadoItem(clave="publicacion", etiqueta="Publicación", nivel=nivel, detalle=detalle)

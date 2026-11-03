@@ -92,9 +92,7 @@ def entrenar(
     save_dir = Path(getattr(trainer, "save_dir", Path(proyecto) / nombre))
     best = save_dir / "weights" / "best.pt"
     if not best.is_file():
-        raise FileNotFoundError(
-            f"No se encontró best.pt tras el entrenamiento: {best}"
-        )
+        raise FileNotFoundError(f"No se encontró best.pt tras el entrenamiento: {best}")
     return best
 
 
@@ -117,10 +115,7 @@ def exportar_onnx(
     from ultralytics import YOLO
 
     modelo = YOLO(str(weights))
-    aviso(
-        f"[INFO] Exportando a ONNX (opset {opset}, simplify={simplify}, "
-        f"{image_size}px)."
-    )
+    aviso(f"[INFO] Exportando a ONNX (opset {opset}, simplify={simplify}, " f"{image_size}px).")
     # YOLO26 trae cabezal dual NMS-Free por defecto. Forzamos el "one-to-many"
     # (`end2end=False`) para que la salida conserve el formato clásico
     # `(1, 4 + clases, N)`, que es el que esperan `yolo_opencv.py` (NMS con
