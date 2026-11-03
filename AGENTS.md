@@ -8,8 +8,9 @@ aparte en `backend/ai_training/requirements-training.txt` y **no** se instalan e
 la Raspberry. En la Raspberry, OpenCV (`cv2`) y
 `hailo_platform` vienen del sistema y **no** se instalan por pip (rompen el build
 con GStreamer/Hailo). El único secreto (el `secret` del dispositivo) no vive en
-`config.json` sino en `device.json` (ignorado por git). No hay build ni linter
-configurados: no asumas comandos de lint/build.
+`config.json` sino en `device.json` (ignorado por git). No hay build. El
+linter/formateador no tiene config local: la CI corre `ruff` y `black` con flags
+inline, y `pytest` (ver `.github/workflows/ci.yml`).
 
 ## Reglas para agentes
 
@@ -34,6 +35,11 @@ configurados: no asumas comandos de lint/build.
   (bloquea en el loop de Qt; usar `timeout`).
 - Requiere Python 3.10+ (`str | None`, `slots=True`). Objetivo: Bookworm / 3.11
   (el venv de desarrollo corre 3.14).
+- Tests: `pytest` **no** está en `requirements.txt`; instalalo aparte
+  (`pip install pytest`). Backend: `python -m pytest tests/backend -q`; suite
+  completa desde la raíz: `pytest -q` (incluye `tests/frontend/`).
+- Instalación paso a paso (venv, doble instancia ENTRADA/SALIDA):
+  `MANUAL_INSTALACION.md`.
 
 ## Arquitectura
 
@@ -88,15 +94,37 @@ configurados: no asumas comandos de lint/build.
   backend (`cliente.py`). `LoteService` corre en su hilo; el rol (ENTRADA abre el
   lote con el primer `alta`, SALIDA reporta y cierra por inactividad) sale de
   `TipoDispositivo`.
+- `backend/etiquetas.py` — convención de etiquetas `<producto>_<estado>`: el
+  estado es el sufijo tras el último `_` y sólo puede ser `crudo`|`ok`|`quemado`;
+  el prefijo identifica el producto y se resuelve por nombre normalizado contra el
+  catálogo del Go. `backend/lote/` usa `separar_etiqueta` para resolver el
+  producto; sin estado válido el evento no cuenta para el lote.
+  `_ALIAS_TRANSITORIOS` mantiene los modelos viejos (`tcq`, `tcok`,
+  `tostada quemada`, `tostadas ok`) hasta que se reentrene el modelo.
 - `backend/control/` — ControlService (SCA-400, sólo ENTRADA): publica telemetría
-  del horno y aplica consignas con clamp a los Δmáx del producto. Sensores y
+  del horno y aplica consignas. Pollea
+  `GET /api/v1/lotes/{id}/consigna-propuesta` cada
+  `control.poll_consigna_propuesta_segundos`: en AUTOMATICO aplica las que llegan
+  con `autorizada=true`; en SUPERVISION espera la aprobación del operario; en
+  MANUAL el MPC no propone, pero sí se sirve un override manual ya aprobado
+  (`manual_override=True`) que se aplica sin el Δmáx por ciclo, sólo con el rango
+  del producto. El resto de las propuestas se clampea al Δmáx del producto antes
+  de escribir el PLC/variador. La propuesta (`SetpointPropuesto`) llega con
+  `temp1_objetivo`/`vel_objetivo`, `autorizada`, `decision_id`, `limites` y
+  `manual_override`; la Pi confirma lo aplicado con `consigna/ack`. Sensores y
   actuadores se eligen por config (`control.sensores/actuadores.driver`):
   `stub` (sin hardware), `simulado` (`simulado.py`: planta en memoria dentro del
   proceso, para probar lógica y UI) o `modbus_rtu/tcp` (`modbus.py`, el driver
   real). Para probar la ruta Modbus sin PLC está `tools/simulador_modbus.py`
   (standalone, sin imports de la app; espeja el mapa de registros de `modbus.py`,
   así que si cambiás uno cambiá el otro; con `driver: "modbus_tcp"` apuntando a
-  él).
+  él). El simulador trae un panel web de pruebas en `http://127.0.0.1:8091/`
+  (flags `--ui-host`, `--ui-puerto`, `--sin-ui`) con `GET /api/estado` y
+  `POST /api/consignas`, `/api/parametros`, `/api/reiniciar` y `/api/rechazar`;
+  permite mover la planta y cambiar parámetros en caliente. **El panel no tiene
+  autenticación**: por defecto escucha en loopback. Usa `pymodbus.simulator` y
+  necesita `pymodbus >= 3.15`; `requirements.txt` declara `>=3.11,<4`, así que
+  pip resuelve la última 3.x.
 - `backend/ai_training/` — herramientas de entrenamiento/exportación/compilación,
   **bajo demanda**: `run.py` no lo arranca y la app no lo importa. `rutas.py`
   centraliza ROOT/config; `calibrar.py` arma `calib_dataset.npy`; `entrenar.py`
@@ -109,7 +137,8 @@ configurados: no asumas comandos de lint/build.
   secciones y los `adaptador*.py` los únicos que importan `backend.*`
   (`adaptador.py` → `backend.streaming`, `adaptador_config.py` → `backend.config`,
   `adaptador_monitor.py` → `backend.monitor`, `adaptador_dispositivo.py` →
-  `backend.device`, `adaptador_lotes.py` → `backend.lote`). `contrato.py` define
+  `backend.device`, `adaptador_lotes.py` → `backend.lote`, `adaptador_control.py`
+  → `backend.control`). `contrato.py` define
   `ContextoApp` y los grupos de sección (`GrupoSeccion`: COMUN/ENTRADA/SALIDA) e
   inyecta todo en cada sección. `bus.py` es el bus de señales Qt, `registro.py` el
   orden y la visibilidad de las secciones, `estado.py` el modelo del estado del
@@ -121,8 +150,18 @@ configurados: no asumas comandos de lint/build.
   `SeccionBase` y leen por `ContextoApp`.
 - `frontend/secciones/configuracion.py` — edita un subconjunto operativo de
   `config.json` por medio de `ControladorConfig`. El guardado se valida antes de
-  escribir y **requiere reiniciar** la app: los servicios ya corren con la
-  configuración del arranque, no se aplica en caliente.
+  escribir. El par `device.public_url` + `device.local_port` se aplica en
+  caliente: re-bindea el `ServidorHTTP` y sincroniza la `rename_url` con el Go.
+  El resto de la configuración **requiere reiniciar** la app: los servicios ya
+  corren con la configuración del arranque.
+- `visible_si` — mecanismo de campos condicionales: `CampoConfigUI` lleva
+  `visible_si=(clave, valor)` (`frontend/nucleo/controlador_config.py`),
+  `AdaptadorConfig` lo resuelve en cada `campos()` y `Configuracion` muestra u
+  oculta la celda según el valor actual del otro campo. Al guardar, los campos
+  ocultos **no se envían**; las claves que ya existan en el JSON no se borran.
+  Hoy se usa para `control.sensores/actuadores.host/port`, visibles sólo con
+  driver `modbus_tcp`; si la clave falta, el adaptador ofrece el default
+  `127.0.0.1:5020`.
 - `frontend/app.py` → `run_gui(config, controlador…)`. `frontend/main_window.py` →
   `MainWindow` (shell con rail lateral y `QStackedWidget`).
 - `run_gui` corre un `QTimer` de 200 ms como *pump*: sin él, Python no procesa
@@ -138,8 +177,8 @@ configurados: no asumas comandos de lint/build.
   desde `paths.models_dir`, y `stream.storage.path` queda fijo en
   `paths.data_dir/eventos.db`. `api.base_url` es sólo esquema + host + puerto (sin
   `/` final); las rutas de los recursos van como endpoints nombrados
-  (`api.*_endpoint`, todos empezando con `/`): registro, ping, nombre, productos,
-  sector y lotes.
+  (`api.*_endpoint`, todos empezando con `/`): registro, ping, nombre, rename-url,
+  productos, sector y lotes.
 - `paths.models_dir` (`models/`) debe existir o el loader falla, y es la base de
   `catalog[].file/names_file`. `paths.data_dir` (`data/`) es salida en runtime (el log
   de eventos) y se crea bajo demanda; `paths.videos_dir` (`multimedia/videos/`) es la
@@ -152,30 +191,44 @@ configurados: no asumas comandos de lint/build.
 - El loader valida integridad referencial: `models.default_model_id` debe existir en
   `catalog`. `confidence_threshold` ∈ [0,1], `nms_threshold` ∈ (0,1], `image_size > 0`,
   `fps > 0`, `rtsp_transport` ∈ {`tcp`, `udp`}. Error de dominio: `ConfigError`.
-- `catalog[].producto_id` (opcional, `null` o string no vacío) vincula el modelo a un
-  producto del backend. `catalog[].class_thresholds` son umbrales por clase; las claves
-  se normalizan a minúscula (el detector las busca con `label.lower()`) y lo que no
-  figure usa `stream.inference.confidence_threshold`. El loader los expone inmutables
-  (`MappingProxyType`), coherente con el `frozen=True` de los dataclasses.
+- `catalog[].class_thresholds` son umbrales por clase; las claves se normalizan a
+  minúscula (el detector las busca con `label.lower()`) y lo que no figure usa
+  `stream.inference.confidence_threshold`. El loader los expone inmutables
+  (`MappingProxyType`), coherente con el `frozen=True` de los dataclasses. Las
+  clases siguen la convención `<producto>_<estado>` (`backend/etiquetas.py`): el
+  producto se resuelve por prefijo normalizado contra el catálogo del Go, sin
+  `producto_id` en el catálogo.
 - `device.*`: `hostname` lógico (no vacío), `ping_interval_seconds` (telemetría del
   monitor) y `registration_poll_interval_seconds` (polling del alta), ambos > 0.
-  `url` (opcional, default `""`) es la URL completa (esquema + host + puerto) que el
-  Go usa para enviar los renombres a esta Pi: la Pi la manda como `rename_url` en el
-  alta y de ahí deriva el host:puerto de bind de su servidor local de renombre (host
-  local → ese host; host remoto/túnel → `127.0.0.1`, que es lo que reenvía
-  `cloudflared`; puerto explícito, o 80/443 según el esquema). `listen_address`/
-  `listen_port` son el bind de respaldo cuando `url` está vacía (suelen ser `0.0.0.0`,
-  no routable). El anuncio al Go es la `url` tal cual; el bind lo resuelve
-  `DeviceService`.
+  `public_url` (opcional, default `""`) es la URL completa (esquema + host + puerto)
+  que el Go usa para enviar los renombres a esta Pi: la Pi la manda como
+  `rename_url` en el alta y de ahí deriva el host:puerto de bind de su servidor
+  HTTP (`DeviceService.derivar_bind`). Regla: URL vacía →
+  `listen_address:local_port`; host loopback → `127.0.0.1`; hostname de túnel (no
+  IP) → `127.0.0.1`; IP literal de la LAN → `0.0.0.0`. Puerto: el de la URL si
+  viene; si no, 80/443 para host loopback y `local_port` para el resto.
+  `listen_address`/`local_port` son el bind de respaldo cuando `public_url` está
+  vacía. El anuncio al Go es la `public_url` tal cual. El par
+  `public_url`+`local_port` se puede cambiar desde Configuración y re-bindea en
+  caliente; el resto de `device.*` requiere reinicio. El alta usa la URL del
+  arranque (`DeviceService._url`): el cambio en caliente sirve para rotar una Pi
+  ya aprobada, no para habilitar el alta si la app arrancó con `public_url`
+  vacía.
+- `control.sensores`/`control.actuadores`: `driver` ∈ {`stub`, `simulado`,
+  `modbus_rtu`, `modbus_tcp`}. `modbus_rtu` exige `serial_port`; `modbus_tcp`
+  exige `host` y `port` (1–65535). `unit_id` ∈ [1,247]. `consigna_reg_temp1`/
+  `consigna_reg_vel` (default 100/104) deben coincidir con el mapa del PLC
+  (`backend/control/modbus.py`); la Pi es la única que escribe.
 - `lote.*`: `habilitado`, `cierre_sin_detecciones_segundos` (inactividad para cerrar),
   `flush_segundos` (debe ser < cierre), `max_eventos_por_envio` ∈ [1,100],
   `cola_eventos` ≥ 1, `max_pendientes` ≥ `max_eventos_por_envio`,
   `refresco_catalogo_segundos` y el backoff de reintentos.
 - `stream.publisher.server_url` es sólo la base RTSP (esquema + host + puerto, sin
-  `/` final). El path de publicación se deriva como `<nombre>-<entrada|salida>`
-  (`backend/streaming/url.py`) con el nombre y el tipo vivos del dispositivo; el
-  front web arma el WHEP con el mismo path. Si el tipo todavía no se conoce
-  (dispositivo sin registrar), no se publica hasta que el alta lo provea.
+  `/` final). El path de publicación se deriva como
+  `<slug(nombre)>-<entrada|salida>` (`backend/streaming/url.py`) con el nombre y
+  el tipo vivos del dispositivo; el front web arma el WHEP con el mismo path. Si
+  el tipo todavía no se conoce (dispositivo sin registrar), no se publica hasta
+  que el alta lo provea.
 - `stream.publisher.write_timeout`: tiempo máximo que puede tardar un frame en entrar
   al pipe de ffmpeg antes de dar el proceso por trabado y reiniciarlo. Un ffmpeg sano
   acepta un frame de 720p en pocos milisegundos, así que un valor chico no afecta el
@@ -213,9 +266,12 @@ el stream publicado a `stream.capture.fps` (30).
 
 ## Pendiente / no asumir
 
-- No hay tests, linter ni build configurados: existen las carpetas `tests/backend` y
-  `tests/frontend` (vacías) y el `.gitignore` contempla `.pytest_cache/`/`.ruff_cache/`,
-  pero no hay archivos de test ni config de pytest/ruff.
+- Hay tests en `tests/backend/` y `tests/frontend/`. `pytest` no está en
+  `requirements.txt`: instalalo aparte (`pip install pytest`) y corré
+  `python -m pytest tests/backend -q` (o `pytest -q` para todo). No hay config
+  local de lint/format; la CI corre `ruff` y `black` con flags inline.
 - La ruta NPU y la captura real no están verificadas en dev (ver la sección anterior).
 - El entrenamiento real (Ultralytics/torch) y la compilación HEF (DFC) tampoco son
   verificables en dev: ver `backend/ai_training/compile_instructions.md`.
+- La verificación con PLC, cámara y Hailo reales sigue pendiente; el detalle está
+  en `RECORDATORIOS.md` y en la sección anterior.

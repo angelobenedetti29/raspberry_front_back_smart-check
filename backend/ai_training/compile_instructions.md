@@ -92,8 +92,9 @@ Pasos internos (los tres automatizados):
 
 1. `hailo parser onnx models/tostadas_v2.onnx --hw-arch hailo8l --net-name
    tostadas_v2 --har-path ... -y` → `.har`
-   (se parsea el grafo entero: YOLO26 end-to-end NMS-free. `--end-node` queda
-   sólo como escape manual por si el parser necesitara recortar.)
+   (se parsea el grafo entero del ONNX exportado con `end2end=False`, cabezal
+   one-to-many. `--end-node` queda sólo como escape manual por si el parser
+   necesitara recortar.)
 2. `ClientRunner(har).load_model_script(<nombre>.alls)` **antes** de
    `optimize(calib_dataset.npy)` → `_quantized.har`
 3. `hailo compiler --hw-arch hailo8l <quantized.har> --output-dir ...
@@ -118,9 +119,9 @@ necesita OpenCV, sólo el DFC.
 - El `.alls` **debe** cargarse en el runner antes de `optimize`; si se pasa
   sólo al comando `hailo compiler`, la normalización no queda horneada y el
   modelo no detecta nada (ver el comentario en `yolo_hailo.py`).
-- Sin `_nms.json` ni `bbox_decoders`: con la cabeza NMS-Free no hay
-  decodificadores que apuntar, así que ya no existe el problema de índices de
-  `conv` que tenían YOLO11/YOLOv8.
+- Sin `_nms.json` ni `bbox_decoders`: el HEF sale con la salida cruda
+  `(1, 4+clases, N)` y no hay decodificadores que apuntar, así que ya no existe
+  el problema de índices de `conv` que tenían YOLO11/YOLOv8.
 
 ## 6. Registrar el modelo en el catálogo
 
@@ -134,11 +135,11 @@ Agregar/editar en `config.json` → `models.catalog`:
   "names_file": "tostadas_v2.names",
   "class_thresholds": { "tostada_comun_quemado": 0.3, "tostada_comun_ok": 0.6 }
 }
+```
 
 Ya no hay `producto_id`: el producto de cada detección se resuelve desde el
 prefijo de la clase (`<producto>_`) contra el catálogo de productos del backend
 (los umbrales por clase van con la etiqueta compuesta completa, en minúsculas).
-```
 
 Con el `.hef` hermano en `models/`, la app lo redirige solo a la NPU cuando
 `hailo_platform` está disponible; si no, usa el `.onnx` en CPU.
