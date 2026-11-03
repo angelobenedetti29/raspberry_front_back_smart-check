@@ -32,6 +32,7 @@ from frontend.nucleo.controlador_control import (
     ModoControlUI,
     SetpointUI,
 )
+from frontend.nucleo.qt_helpers import vaciar_layout
 from frontend.nucleo.tema import color, repolish
 
 # --- constantes visuales / bandas ------------------------------------------
@@ -549,7 +550,7 @@ class HornoYCinta(SeccionBase):
             self._historial.appendleft((ahora, sp))
             self._ultimo_decision_id = decision_id
         # Reconstruir las filas.
-        self._vaciar_layout(self._historial_contenedor)
+        vaciar_layout(self._historial_contenedor)
         if not self._historial:
             self._historial_contenedor.addWidget(
                 self._construir_fila_vacia("Sin setpoints aplicados todavía")
@@ -633,22 +634,6 @@ class HornoYCinta(SeccionBase):
         # El próximo _al_actualizar_estado no lo afecta; lo limpiamos nosotros.
         # Truco simple: marcar el timestamp y ocultar en el próximo refresh si pasó.
         self._feedback_timer_ms = int(time.monotonic() * 1000) + 2500
-
-    # --- helpers ---
-
-    @staticmethod
-    def _vaciar_layout(layout) -> None:
-        while True:
-            item = layout.takeAt(0)
-            if item is None:
-                return
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-            else:
-                sub = item.layout()
-                if sub is not None:
-                    HornoYCinta._vaciar_layout(sub)
 
 
 # --- helpers de módulo -------------------------------------------------------

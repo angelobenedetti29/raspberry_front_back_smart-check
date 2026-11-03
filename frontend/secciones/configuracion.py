@@ -35,6 +35,7 @@ from frontend.nucleo.controlador_config import (
     CampoConfigUI,
     TipoCampo,
 )
+from frontend.nucleo.qt_helpers import vaciar_layout
 from frontend.nucleo.tema import color
 
 _ALTO_BOTON = 40
@@ -53,22 +54,6 @@ _MIN_ENTERO = 0
 _MAX_ENTERO = 2_000_000_000
 _MIN_DECIMAL = 0.0
 _MAX_DECIMAL = 1_000_000.0
-
-
-def _vaciar_layout(layout: QVBoxLayout) -> None:
-    """Despega y destruye los widgets de un layout.
-
-    `setParent(None)` los despega ya mismo; `deleteLater()` solo no alcanza
-    cuando se reconstruye y se vuelve a medir en el acto.
-    """
-    while layout.count():
-        elemento = layout.takeAt(0)
-        if elemento is None:
-            continue
-        widget = elemento.widget()
-        if widget is not None:
-            widget.setParent(None)
-            widget.deleteLater()
 
 
 class _SpinEnteroSinRueda(QSpinBox):
@@ -303,7 +288,7 @@ class Configuracion(SeccionBase):
 
     def _limpiar_contenedor(self) -> None:
         """Despega y destruye las tarjetas actuales."""
-        _vaciar_layout(self._layout_campos)
+        vaciar_layout(self._layout_campos)
 
     def _reconstruir(self, campos: tuple[CampoConfigUI, ...]) -> None:
         """Arma una tarjeta por grupo, en el orden de aparición de los campos."""

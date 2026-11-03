@@ -31,6 +31,7 @@ from frontend.nucleo.contrato import ContextoApp, SeccionBase
 from frontend.nucleo.controlador_dispositivo import TipoDispositivoUI
 from frontend.nucleo.controlador_lotes import EstadoLotesUI, LoteUI
 from frontend.nucleo.iconos import icono
+from frontend.nucleo.qt_helpers import vaciar_layout
 from frontend.nucleo.tema import color, repolish
 
 _VALOR_SIN_DATO = "—"
@@ -62,22 +63,6 @@ _CONTEOS: tuple[tuple[str, str, str | None], ...] = (
     ("quemado", "Quemado", "error"),
     ("total", "Total", None),
 )
-
-
-def _vaciar_layout(layout: QVBoxLayout) -> None:
-    """Despega y destruye los widgets de un layout.
-
-    `setParent(None)` los despega ya mismo; `deleteLater()` solo no alcanza
-    cuando se reconstruye y se vuelve a medir en el acto.
-    """
-    while layout.count():
-        elemento = layout.takeAt(0)
-        if elemento is None:
-            continue
-        widget = elemento.widget()
-        if widget is not None:
-            widget.setParent(None)
-            widget.deleteLater()
 
 
 def _texto_motivo(motivo: str) -> str:
@@ -722,7 +707,7 @@ class Lotes(SeccionBase):
             return
         self._firma_historial = firma
 
-        _vaciar_layout(self._layout_historial)
+        vaciar_layout(self._layout_historial)
 
         cantidad = len(historial)
         if cantidad == 0:
