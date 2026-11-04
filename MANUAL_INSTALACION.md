@@ -21,7 +21,6 @@ backend en hilos y corre la GUI en el hilo principal.
 | Python | 3.10+; el objetivo es 3.11 (el de Bookworm) |
 | Red | La Pi tiene que alcanzar `api.base_url` (backend Go) y el RTSP de MediaMTX |
 
-`AGENTS.md` fija el piso en Python 3.10 (`str | None`, `slots=True`).
 
 ### 1.2 Dependencias por origen
 
@@ -640,54 +639,3 @@ panel no arranca y esa ruta no existe.
 | Un modelo falla al elegirse por archivo ausente | Revisá que el `file` del catálogo exista en `models/` (hay entradas del catálogo sin archivo) |
 | El control no publica telemetría | `control.habilitado = false`, no hay lote abierto, o la instancia es SALIDA |
 | El simulador no muestra "En línea" | No hubo request Modbus en 5 s: sin lote abierto el ControlService no lee |
-
----
-
-## 11. Verificación rápida
-
-Desde la raíz del repo, con el venv activado:
-
-```bash
-cd /home/graso/projects/tesis/raspberry_front_back_smart-check
-source .venv/bin/activate
-
-# 1. Dependencias
-python -c "import PySide6, pymodbus, fastapi; print('pip OK')"
-python -c "import cv2; print('cv2', cv2.__version__)"
-python -c "import hailo_platform; print('hailo OK')"   # sólo en la Pi con Hailo
-
-# 2. Config válida y valores efectivos
-python -c "from backend.config import load_config as l; c=l(); print(c.device.hostname, c.device.public_url, c.device.local_port); print(c.control.sensores.driver, c.control.sensores.host, c.control.sensores.port)"
-
-# 3. Arranque sin display (bloquea; timeout manda SIGTERM)
-QT_QPA_PLATFORM=offscreen timeout 15 python run.py; echo "exit=$?"
-
-# 4. Servidor HTTP local (401 esperado sin Bearer, con el device ya aprobado).
-#    Reemplazá <device_id> por el que devolvió el alta (está en device.json).
-#    Ajustá el puerto: 9000 por defecto, 9001 en la ENTRADA de dos instancias.
-curl -s -o /dev/null -w '%{http_code}\n' -X PUT \
-  "http://127.0.0.1:9000/api/v1/dispositivos/<device_id>/nombre"
-
-# 5. Simulador (si está levantado)
-curl -s http://127.0.0.1:8091/api/estado | head -c 400; echo
-
-# 6. Backend Go
-curl -s http://localhost:8080/health
-
-# 7. Tests del backend
-python -m pytest tests/backend -q
-```
-
-Para la ENTRADA de la receta de dos instancias, repetí el paso 4 contra
-`http://127.0.0.1:9001`.
-
----
-
-## Referencias
-
-- `AGENTS.md` — arquitectura, gotchas de config y verificación pendiente en la Pi.
-- `INFRAESTRUCTURA.md` — túnel de Cloudflare (campos reales: `public_url` /
-  `local_port`).
-- `RECORDATORIOS.md` — pendientes y deuda conocida (hardware, migración de
-  etiquetas y docs).
-- `tools/simulador_modbus.py` — mapa de registros y opciones del simulador.
