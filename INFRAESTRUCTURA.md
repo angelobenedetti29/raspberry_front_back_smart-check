@@ -237,3 +237,19 @@ funcionando, sólo se pierde el camino inverso de renombre.
   `device.json` con permisos `0600`. Es el único secreto que la Pi necesita
   para autenticar el push del Go; no lo expongas en logs ni lo mandes por
   canales inseguros.
+
+## Túnel con nombre (dominio fijo)
+
+Si en vez del quick tunnel usás un túnel con nombre:
+
+1. `cloudflared tunnel login`
+2. `cloudflared tunnel create smartcheck-pi`
+3. `cloudflared tunnel route dns smartcheck-pi renombre.example.com`
+4. `cloudflared tunnel run --url http://127.0.0.1:9000 smartcheck-pi`
+5. Poné `https://renombre.example.com` en `device.public_url`.
+
+El bind local sigue siendo `127.0.0.1:9000`; cloudflared es el único que lo
+alcanza. Para que arranque con la Pi, creá un unit
+`cloudflared-smartcheck.service` con
+`ExecStart=/usr/bin/cloudflared tunnel run --url http://127.0.0.1:9000 smartcheck-pi`
+y `Restart=on-failure`.

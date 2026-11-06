@@ -51,10 +51,10 @@
         "default_model_id": "tostadas-v3",
         "catalog": [
             {
-                "model_id": "yolo26n-coco",
-                "label": "YOLOv26 Original (COCO)",
-                "file": "yolo26n.onnx",
-                "names_file": "coco.names",
+                "model_id": "yolo11n-coco",
+                "label": "YOLOv11 Original (COCO)",
+                "file": "yolo11n.onnx",
+                "names_file": "class.names",
                 "class_thresholds": {}
             },
             {

@@ -22,9 +22,7 @@ productos del backend (ver `backend/etiquetas.py`).
 
 ## 2. Docs desactualizados
 
-| Qué | Dónde | Cuándo |
-|-----|-------|--------|
-| Receta de túnel con nombre (todo el doc asume quick tunnel) y `systemd` unit para `cloudflared` ("no viene incluido") | `INFRAESTRUCTURA.md` | Al pasar el túnel a producción |
+No hay pendientes conocidos en esta sección.
 
 ## 3. Hardware real (PLC / sensores / actuadores)
 
@@ -41,7 +39,6 @@ productos del backend (ver `backend/etiquetas.py`).
 |-----|-------|--------|
 | El `secret` del dispositivo no tiene rotación: "se usa para autenticar hasta el próximo alta" | `backend/device/almacen.py` (~78) | Si el Go agrega refresh/rotación de credenciales |
 | Eventos con label que no matchea ningún producto del Go se descartan con warning (una vez por prefijo, hasta el refresco de catálogo): los nombres de productos del Go tienen que coincidir con el prefijo normalizado | `backend/lote/__init__.py` (`_resolver_producto`) | Al crear o renombrar productos en el Go (verificar contra `backend.etiquetas.normalizar_clave`) |
-| La doc del contrato del Go (`docs/device-registration-contract.md`) describe el push como `PUT {rename_url}/api/v1/dispositivos/nombre`, sin `{device_id}`; el handler real usa `RenamePushPath(deviceID)` (`/api/v1/dispositivos/{id}/nombre`) y la Pi expone esa ruta | `backend_smart-check-automation_go/docs/device-registration-contract.md` | Al tocar el contrato de renombre |
 
 ## 5. Verificación en la Raspberry (no verificable en dev)
 
@@ -54,8 +51,6 @@ productos del backend (ver `backend/etiquetas.py`).
 | Qué | Dónde | Cuándo |
 |-----|-------|--------|
 | `multimedia/videos/t3.mp4` no se versiona porque supera el límite de GitHub: una copia o un clon nuevo no lo tiene. Usar `t1.mp4`/`t2.mp4` o copiarlo a mano | `multimedia/videos/`, `.gitignore` | Al preparar una instancia nueva o una demo |
-| `yolo26n-coco` referencia `yolo26n.onnx`, que no existe en `models/` (elegirlo falla por archivo ausente); `yolo11n.onnx` existe pero no tiene entrada de catálogo | `config.json` (~51-54), `models/` | Al elegir ese modelo desde la UI, o al ordenar `models/` |
-| No hay config local de lint/format (`pyproject.toml`/`ruff.toml`): la CI pasa `ruff` (select E,F,I,B,UP,SIM) y `black` inline | `.github/workflows/ci.yml` | Cuando se quiera lint local |
 
 ## 7. Puntos de extensión previstos (no deuda)
 
