@@ -8,9 +8,10 @@ aparte en `backend/ai_training/requirements-training.txt` y **no** se instalan e
 la Raspberry. En la Raspberry, OpenCV (`cv2`) y
 `hailo_platform` vienen del sistema y **no** se instalan por pip (rompen el build
 con GStreamer/Hailo). El único secreto (el `secret` del dispositivo) no vive en
-`config.json` sino en `device.json` (ignorado por git). No hay build. El
-linter/formateador no tiene config local: la CI corre `ruff` y `black` con flags
-inline, y `pytest` (ver `.github/workflows/ci.yml`).
+`config.json` sino en `device.json` (ignorado por git). No hay build. La config de
+lint/format vive en `pyproject.toml` (ruff y black, line-length 100, target py310)
+y la CI la usa con `ruff check .` y `black --check .`, sin flags inline; `pytest`
+no está en `requirements.txt` y se instala aparte (ver `.github/workflows/ci.yml`).
 
 ## Reglas para agentes
 
@@ -268,8 +269,9 @@ el stream publicado a `stream.capture.fps` (30).
 
 - Hay tests en `tests/backend/` y `tests/frontend/`. `pytest` no está en
   `requirements.txt`: instalalo aparte (`pip install pytest`) y corré
-  `python -m pytest tests/backend -q` (o `pytest -q` para todo). No hay config
-  local de lint/format; la CI corre `ruff` y `black` con flags inline.
+  `python -m pytest tests/backend -q` (o `pytest -q` para todo). La config de
+  lint/format está en `pyproject.toml` y la CI la usa (`ruff check .` y
+  `black --check .`).
 - La ruta NPU y la captura real no están verificadas en dev (ver la sección anterior).
 - El entrenamiento real (Ultralytics/torch) y la compilación HEF (DFC) tampoco son
   verificables en dev: ver `backend/ai_training/compile_instructions.md`.

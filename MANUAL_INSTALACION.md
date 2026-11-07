@@ -636,6 +636,6 @@ panel no arranca y esa ruta no existe.
 | La captura no abre | `source: "0"` sin cámara, o el archivo no existe en `multimedia/videos/` |
 | `ffmpeg` no arranca / reinicia el publisher | `ffmpeg` no está en `PATH` o no coincide con `stream.publisher.ffmpeg_executable` |
 | El backend no responde | Revisá `api.base_url`, que el Go esté arriba (`curl http://localhost:8080/health`) y la red |
-| Un modelo falla al elegirse por archivo ausente | Revisá que el `file` del catálogo exista en `models/` (hay entradas del catálogo sin archivo) |
+| Un modelo falla al elegirse por archivo ausente | Revisá que el `file` del catálogo exista en `models/` |
 | El control no publica telemetría | `control.habilitado = false`, no hay lote abierto, o la instancia es SALIDA |
 | El simulador no muestra "En línea" | No hubo request Modbus en 5 s: sin lote abierto el ControlService no lee |
