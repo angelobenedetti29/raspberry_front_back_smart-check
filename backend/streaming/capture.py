@@ -1,8 +1,8 @@
 """Captura de frames desde una webcam o un archivo de video.
 
-Entrega siempre frames BGR normalizados a ``capture.width x capture.height``: el
-pipeline puede cambiar de fuente sin que el publicador se entere, porque el pipe
-a ffmpeg nunca cambia de tamaño.
+Conserva el frame BGR original para inferencia y prepara una visualización de
+``capture.width x capture.height`` sin deformarlo. El pipe a ffmpeg mantiene su
+tamaño aunque cambie la fuente.
 
 No tiene hilo propio. El hilo de producción del pipeline llama a `leer()`; por
 eso `cerrar()` sólo se debe invocar después de que ese hilo terminó.
@@ -17,13 +17,33 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
+import numpy as np
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from backend.config import CaptureConfig, ReconnectConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class FrameCapturado:
+    """Frame original y su transformación al lienzo de visualización."""
+
+    original: np.ndarray
+    visualizacion: np.ndarray
+    escala_x: float
+    escala_y: float
+    pad_x: int
+    pad_y: int
+
+    def proyectar_bbox(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        """Lleva una caja del original al lienzo, incluido el relleno lateral."""
+        left, top, ancho, alto = bbox
+        x1 = round(left * self.escala_x) + self.pad_x
+        y1 = round(top * self.escala_y) + self.pad_y
+        x2 = round((left + ancho) * self.escala_x) + self.pad_x
+        y2 = round((top + alto) * self.escala_y) + self.pad_y
+        return x1, y1, x2 - x1, y2 - y1
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,8 +154,8 @@ class CapturaOpenCV:
         self._objetivo = time.monotonic()
         return True
 
-    def leer(self) -> np.ndarray | None:
-        """Devuelve el próximo frame normalizado, o None si todavía no hay.
+    def leer(self) -> FrameCapturado | None:
+        """Devuelve el original y su visualización, o None si todavía no hay.
 
         Un None no es un error por sí solo: puede ser backoff esperando o un EOF
         rebobinando. El pipeline decide qué hacer con eso usando
@@ -216,14 +236,23 @@ class CapturaOpenCV:
             # Vamos atrasados: resincronizar en vez de leer a ráfagas.
             self._objetivo = time.monotonic()
 
-    def _normalizar(self, frame: np.ndarray) -> np.ndarray:
-        """Escala el frame a la resolución configurada."""
+    def _normalizar(self, frame: np.ndarray) -> FrameCapturado:
+        """Prepara el lienzo sin deformar ni alterar el original para inferencia."""
         alto, ancho = frame.shape[:2]
         destino = (self._captura.width, self._captura.height)
         if (ancho, alto) == destino:
-            return frame
+            return FrameCapturado(frame, frame, 1.0, 1.0, 0, 0)
 
-        interpolacion = (
-            cv2.INTER_AREA if ancho > destino[0] or alto > destino[1] else cv2.INTER_LINEAR
+        escala = min(destino[0] / ancho, destino[1] / alto)
+        nuevo_ancho = max(1, round(ancho * escala))
+        nuevo_alto = max(1, round(alto * escala))
+
+        interpolacion = cv2.INTER_AREA if escala < 1 else cv2.INTER_LINEAR
+        redimensionado = cv2.resize(frame, (nuevo_ancho, nuevo_alto), interpolation=interpolacion)
+        pad_x = (destino[0] - nuevo_ancho) // 2
+        pad_y = (destino[1] - nuevo_alto) // 2
+        lienzo = np.full((destino[1], destino[0], 3), 114, dtype=frame.dtype)
+        lienzo[pad_y : pad_y + nuevo_alto, pad_x : pad_x + nuevo_ancho] = redimensionado
+        return FrameCapturado(
+            frame, lienzo, nuevo_ancho / ancho, nuevo_alto / alto, pad_x, pad_y
         )
-        return cv2.resize(frame, destino, interpolation=interpolacion)

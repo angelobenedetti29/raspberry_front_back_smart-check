@@ -25,7 +25,7 @@ from backend.config import ModelEntry
 from backend.inference import Detector, ErrorCargaModelo, ResultadoDeteccion
 from backend.inference.catalogo import construir_detector
 from backend.streaming.anotador import dibujar
-from backend.streaming.capture import CapturaOpenCV
+from backend.streaming.capture import CapturaOpenCV, FrameCapturado
 from backend.streaming.estabilizador import EstabilizadorDetecciones, EventoPista
 from backend.streaming.estado import EstadoModelo, ModoPublicacion, RegistroEstado
 from backend.streaming.publisher import PublicadorFFmpeg
@@ -69,8 +69,8 @@ class Pipeline:
         self._frame_nuevo = threading.Event()
 
         # --- slots compartidos ---
-        # (timestamp, número de frame, frame crudo) para el lazo de inferencia.
-        self._slot_inferencia: tuple[float, int, np.ndarray] | None = None
+        # Original y transformación a visualización del mismo frame capturado.
+        self._slot_inferencia: tuple[float, int, FrameCapturado] | None = None
         # (detecciones, retraso_ms) que deja el lazo de inferencia.
         self._slot_detecciones: tuple[list[ResultadoDeteccion], int] | None = None
         # Último frame listo para mostrar (anotado si el modo es inferencia).
@@ -223,10 +223,11 @@ class Pipeline:
             self._parar.wait(_ESPERA_SIN_FRAME)
             return
 
-        frame = captura.leer()
-        if frame is None:
+        capturado = captura.leer()
+        if capturado is None:
             self._parar.wait(_ESPERA_SIN_FRAME)
             return
+        frame = capturado.visualizacion
 
         with self._lock:
             modo = self._modo
@@ -244,7 +245,7 @@ class Pipeline:
             anotado = frame
 
         with self._lock:
-            self._slot_inferencia = (time.monotonic(), numero, frame)
+            self._slot_inferencia = (time.monotonic(), numero, capturado)
             # Sólo se guarda para mostrar si alguien va a mirar: el frame
             # anotado ya se usó para publicar y retenerlo cuando nadie mira es
             # memoria al pedo.
@@ -478,9 +479,16 @@ class Pipeline:
         if pendiente is None or self._detector is None:
             return
 
-        instante, numero_frame, frame = pendiente
-        crudas = self._detector.detectar_frame(frame)
-        detecciones = self._estabilizador.estabilizar(crudas)
+        instante, numero_frame, capturado = pendiente
+        crudas = self._detector.detectar_frame(capturado.original)
+        # Pistas, línea de conteo y dibujo conservan las coordenadas del lienzo.
+        # La geometría viaja con el frame: no depende de la fuente actual, que
+        # puede cambiar mientras el detector todavía procesa el anterior.
+        proyectadas = [
+            replace(deteccion, bbox=capturado.proyectar_bbox(deteccion.bbox))
+            for deteccion in crudas
+        ]
+        detecciones = self._estabilizador.estabilizar(proyectadas)
         eventos = self._estabilizador.eventos()
         retraso_ms = int((time.monotonic() - instante) * 1000)
 
