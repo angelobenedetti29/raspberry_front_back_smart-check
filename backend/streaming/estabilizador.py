@@ -17,7 +17,8 @@ La solución copia la semántica del `ToastTracker` de la referencia:
   consecutivos vistos: hasta entonces es tentativa, no se dibuja ni cuenta como
   producto. Una pista tentativa que se pierde se descarta en silencio.
 - Una vez quemada, la pista NO vuelve a OK (latch anti-parpadeo).
-- La pista sigue reportándose unos frames perdidos antes de desaparecer.
+- La pista se conserva internamente durante las pérdidas para poder recuperarla,
+  pero sólo se dibuja si tiene una detección en la inferencia actual.
 
 Además, el estabilizador emite eventos de ciclo de vida por pista (`alta`,
 `cruce`, `quemada`, `cambio`, `baja`) para poder contar productos a posteriori.
@@ -42,8 +43,6 @@ _IOU_MIN = 0.30
 _DISTANCIA_MAX_PX = 150.0
 # Ventaja de score de una coincidencia por IoU sobre una por distancia.
 _BONUS_IOU = 1.0
-# Frames que una pista perdida sigue reportándose como visible (anti-parpadeo).
-_FRAMES_VISIBLE_PERDIDA = 3
 # Frames perdidos tras los cuales la pista se elimina (tolerancia a oclusiones).
 _FRAMES_MAX_PERDIDA = 25
 # Frames acumulados con etiqueta quemada para confirmar el estado "burnt".
@@ -118,7 +117,10 @@ class EstabilizadorDetecciones:
         Genera las candidatas (score, pista, detección), las resuelve con
         matching codicioso y actualiza el estado. Las detecciones sin pareja
         crean pista nueva (el NMS class-agnostic ya evita solapadas de distinta
-        clase). El orden de salida es el de las pistas.
+        clase). Sólo devuelve pistas confirmadas vistas en esta inferencia: una
+        caja vieja no debe superponerse con las detecciones actuales. Las pistas
+        perdidas siguen vivas para la asociación y los eventos de conteo.
+        El orden de salida es el de las pistas.
         """
         crudas = list(detecciones)
 
@@ -194,7 +196,7 @@ class EstabilizadorDetecciones:
                 bbox=pista.bbox,
             )
             for pista in self._pistas
-            if pista.confirmada and pista.frames_desde_visto <= _FRAMES_VISIBLE_PERDIDA
+            if pista.confirmada and pista.frames_desde_visto == 0
         ]
 
     def eventos(self) -> list[EventoPista]:
