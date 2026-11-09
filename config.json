@@ -96,6 +96,28 @@
                 "file": "/usr/share/hailo-models/yolov8s_h8l.hef",
                 "names_file": "class.names",
                 "class_thresholds": {}
+            },
+            {
+                "model_id": "entrada-horno-v1",
+                "label": "YOLO Entrada Horno V1",
+                "file": "entrada_horno_V1.onnx",
+                "names_file": "entrada_horno_V1.names",
+                "class_thresholds": {
+                    "fajita": 0.55,
+                    "tc": 0.50
+                }
+            },
+            {
+                "model_id": "salida-horno-v4",
+                "label": "YOLO Salida Horno V4",
+                "file": "salida_horno_V4.onnx",
+                "names_file": "salida_horno_V4.names",
+                "class_thresholds": {
+                    "chaok": 0.55,
+                    "chaq": 0.45,
+                    "tcok": 0.55,
+                    "tcq": 0.45
+                }
             }
         ]
     },
