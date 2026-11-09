@@ -162,5 +162,14 @@
             "host": "127.0.0.1",
             "port": 5020
         }
+    },
+    "notificaciones": {
+        "habilitado": true,
+        "email_auth": "admin@fermar.com.ar",
+        "password_auth": "password123",
+        "destinatario_email": "nachochiofalo@gmail.com",
+        "umbral_anomalia": 1,
+        "ventana_segundos": 10.0,
+        "cooldown_segundos": 5.0
     }
 }

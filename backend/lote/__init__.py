@@ -28,6 +28,7 @@ from backend.etiquetas import normalizar_clave, separar_etiqueta
 from backend.lote.cliente import ClienteLotes
 from backend.lote.dlq import ColaDLQ
 from backend.lote.estado import clasificar_estado
+from backend.lote.monitor_calidad import MonitorCalidad
 from backend.lote.tipos import (
     Conteos,
     ErrorLotes,
@@ -41,6 +42,7 @@ from backend.lote.tipos import (
     Sector,
     dict_a_evento,
 )
+from backend.notificaciones import ClienteNotificaciones
 from backend.streaming import StreamingService
 from backend.streaming.suscripcion import ColaEventos, EventoObservado
 from backend.tiempo import ahora_iso_local
@@ -119,6 +121,21 @@ class LoteService:
             dlq_dir / config.lote.dlq_path,
             max_bytes=config.lote.dlq_max_bytes,
             max_files=config.lote.dlq_max_files,
+        )
+
+        # Notificaciones de anomalías de calidad
+        self._notificaciones_cfg = config.notificaciones
+        self._cliente_notificaciones = ClienteNotificaciones(
+            config.api.base_url, config.notificaciones
+        )
+        self._monitor_calidad = (
+            MonitorCalidad(
+                umbral_anomalia=config.notificaciones.umbral_anomalia,
+                ventana_segundos=config.notificaciones.ventana_segundos,
+                cooldown_segundos=config.notificaciones.cooldown_segundos,
+            )
+            if config.notificaciones.habilitado
+            else None
         )
 
         self._lock = threading.Lock()
@@ -349,6 +366,14 @@ class LoteService:
 
     def _encolar_salida(self, eventos: list[EventoObservado]) -> None:
         for observado in eventos:
+            # Detección temprana de anomalías en calidad (alerta ante quemada/cruda directa del tracking)
+            if self._monitor_calidad is not None:
+                estado_directo = clasificar_estado(observado.evento.label)
+                if estado_directo is not None:
+                    alerta = self._monitor_calidad.registrar(estado_directo)
+                    if alerta:
+                        self._cliente_notificaciones.disparar_alerta_asincrona(alerta)
+
             deteccion = self._traducir(observado)
             if deteccion is None:
                 continue
@@ -708,6 +733,8 @@ class LoteService:
             self._historial = (cerrado, *self._historial)[:_HISTORIAL_MAX]
         self._reportadas.clear()
         self._conteos_locales.clear()
+        if self._monitor_calidad is not None:
+            self._monitor_calidad.reiniciar()
         self._marcar_ok()
         logger.info("lote: cerrado %s (%s)", cerrado.id, motivo.value)
         # Notificar al ControlService para que libere el enganche sin esperar

@@ -266,6 +266,17 @@ class ControlConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class NotificacionesConfig:
+    habilitado: bool = False
+    email_auth: str = ""
+    password_auth: str = ""
+    destinatario_email: str = ""
+    umbral_anomalia: int = 20
+    ventana_segundos: float = 10.0
+    cooldown_segundos: float = 60.0
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     paths: PathsConfig
     stream: StreamConfig
@@ -278,6 +289,7 @@ class AppConfig:
     # los defaults). Así el resto de la app nunca recibe `None` y puede
     # consultar `cfg.sensores`/`cfg.actuadores` sin guard.
     control: ControlConfig
+    notificaciones: NotificacionesConfig = NotificacionesConfig()
 
 
 def resolve_path(value: str | Path, base: Path) -> Path:
@@ -811,6 +823,27 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
             if "{id}" not in getattr(control, campo):
                 raise ConfigError(f"'control.{campo}' debe contener el placeholder '{{id}}'")
 
+    # --- notificaciones ---
+    notificaciones_raw = data.get("notificaciones")
+    if isinstance(notificaciones_raw, dict):
+        notificaciones = NotificacionesConfig(
+            habilitado=_get(notificaciones_raw, "habilitado", bool, "notificaciones"),
+            email_auth=_get(notificaciones_raw, "email_auth", str, "notificaciones"),
+            password_auth=_get(notificaciones_raw, "password_auth", str, "notificaciones"),
+            destinatario_email=_get(notificaciones_raw, "destinatario_email", str, "notificaciones"),
+            umbral_anomalia=_int_opcional(notificaciones_raw, "umbral_anomalia", 20, "notificaciones"),
+            ventana_segundos=_float_opcional(notificaciones_raw, "ventana_segundos", 10.0, "notificaciones"),
+            cooldown_segundos=_float_opcional(notificaciones_raw, "cooldown_segundos", 60.0, "notificaciones"),
+        )
+        if notificaciones.umbral_anomalia <= 0:
+            raise ConfigError("'notificaciones.umbral_anomalia' debe ser > 0")
+        if notificaciones.ventana_segundos <= 0:
+            raise ConfigError("'notificaciones.ventana_segundos' debe ser > 0")
+        if notificaciones.cooldown_segundos < 0:
+            raise ConfigError("'notificaciones.cooldown_segundos' no puede ser negativo")
+    else:
+        notificaciones = NotificacionesConfig()
+
     return AppConfig(
         paths=paths,
         stream=stream,
@@ -819,6 +852,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         device=device,
         lote=lote,
         control=control,
+        notificaciones=notificaciones,
     )
 
 
