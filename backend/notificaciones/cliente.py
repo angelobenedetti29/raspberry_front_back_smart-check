@@ -1,20 +1,19 @@
-"""Cliente para el envío de notificaciones y alertas al backend central.
+"""Cliente de alertas de calidad hacia el backend Go.
 
-Implementa autenticación vía JWT (/api/v1/auth/login), resolución de usuarioId
-por email (/api/v1/admin/notificaciones) y despacho de alertas de prueba / test
-(/api/v1/admin/notificaciones/test) hacia EMAIL y TELEGRAM.
+Cuando el `MonitorCalidad` detecta una racha de anomalías, la Pi reporta la
+alerta al lote abierto con `POST /api/v1/lotes/{lote_id}/alertas-calidad`,
+autenticada con el secret del dispositivo (el mismo que usa `lote/cliente.py`).
+El backend decide a quién notificar y por qué canales: la Pi ya no se loguea ni
+habla con los endpoints de administración de notificaciones.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
-import urllib.error
-import urllib.request
-from typing import Any
 
-from backend.config import NotificacionesConfig
+from backend.api import ClienteHTTP, ErrorConexion, ErrorFormato, ErrorHttp
+from backend.config import ApiConfig, NotificacionesConfig
 
 logger = logging.getLogger(__name__)
 
@@ -22,183 +21,107 @@ _TIMEOUT_HTTP = 10.0
 
 
 class ClienteNotificaciones:
-    """Gestiona la comunicación con la API de notificaciones del backend central."""
+    """Reporta alertas de calidad del lote abierto al backend central."""
 
-    def __init__(self, base_url: str, config: NotificacionesConfig) -> None:
-        self._base_url = base_url.rstrip("/")
+    def __init__(self, api: ApiConfig, config: NotificacionesConfig) -> None:
+        self._api = api
         self._config = config
-        self._token: str | None = None
-        self._usuario_id: str | None = None
-        self._lock = threading.Lock()
+        self._http = ClienteHTTP(api.base_url, _TIMEOUT_HTTP)
 
-    def disparar_alerta_asincrona(self, tipo_alerta: str) -> None:
-        """Lanza el envío de notificaciones por EMAIL y TELEGRAM en un hilo daemon."""
+    def disparar_alerta_asincrona(
+        self,
+        secret: str,
+        lote_id: str,
+        tipo_alerta: str,
+        porcentaje: float,
+    ) -> None:
+        """Envía la alerta en un hilo daemon para no frenar el lazo del lote."""
         if not self._config.habilitado:
             return
 
         hilo = threading.Thread(
-            target=self._enviar_canales_seguro,
-            args=(tipo_alerta,),
-            name=f"notificacion-{tipo_alerta}",
+            target=self._enviar_seguro,
+            args=(secret, lote_id, tipo_alerta, porcentaje),
+            name=f"alerta-calidad-{tipo_alerta}",
             daemon=True,
         )
         hilo.start()
 
-    def _enviar_canales_seguro(self, tipo_alerta: str) -> None:
-        """Envía la alerta por Email y Telegram manejando excepciones."""
+    def _enviar_seguro(
+        self,
+        secret: str,
+        lote_id: str,
+        tipo_alerta: str,
+        porcentaje: float,
+    ) -> None:
+        """Envía la alerta sin dejar escapar excepciones del hilo."""
         try:
-            self.enviar_alerta_ambos_canales(tipo_alerta)
-        except Exception:
+            self.enviar_alerta(secret, lote_id, tipo_alerta, porcentaje)
+        except Exception:  # noqa: BLE001 - el hilo no debe morir ruidosamente
             logger.exception("Error al enviar alerta de calidad: %s", tipo_alerta)
 
-    def enviar_alerta_ambos_canales(self, tipo_alerta: str) -> None:
-        """Envía la alerta secuencialmente a EMAIL y TELEGRAM."""
-        with self._lock:
-            if not self._token:
-                self._login()
+    def enviar_alerta(
+        self,
+        secret: str,
+        lote_id: str,
+        tipo_alerta: str,
+        porcentaje: float,
+    ) -> bool:
+        """POST /api/v1/lotes/{lote_id}/alertas-calidad. Devuelve True si el backend la aceptó.
 
-            if not self._usuario_id:
-                self._resolver_usuario_id()
-
-            usuario_id = self._usuario_id
-            if not usuario_id:
-                logger.warning(
-                    "No se pudo resolver usuario_id para %s. Alerta abortada.",
-                    self._config.destinatario_email,
-                )
-                return
-
-        # Envío a ambos canales
-        for canal in ("EMAIL", "TELEGRAM"):
-            self._enviar_test(canal, usuario_id, tipo_alerta)
-
-    def _login(self) -> None:
-        """Autentica contra /api/v1/auth/login y almacena el token Bearer/cookie."""
-        url = f"{self._base_url}/api/v1/auth/login"
-        payload_dict = {
-            "email": self._config.email_auth,
-            "password": self._config.password_auth,
-        }
-        payload = json.dumps(payload_dict).encode("utf-8")
-
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        logger.info("[HTTP REQUEST] POST %s | payload: {email: %s, password: ***}", url, self._config.email_auth)
-        try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_HTTP) as resp:
-                resp_text = resp.read().decode("utf-8")
-                logger.info("[HTTP RESPONSE] Status %s from %s | body: %s", resp.status, url, resp_text)
-                
-                token = None
-                # 1. Intentar extraer de cookie Set-Cookie: session_token=...
-                set_cookie = resp.headers.get("Set-Cookie") or ""
-                for part in set_cookie.split(";"):
-                    part = part.strip()
-                    if part.startswith("session_token="):
-                        token = part.split("=", 1)[1]
-                        break
-
-                # 2. Si no vino en la cookie, buscar en el body JSON
-                if not token:
-                    try:
-                        data = json.loads(resp_text)
-                        token = data.get("token") or (data.get("data") or {}).get("token")
-                    except Exception:
-                        pass
-
-                if not token:
-                    raise ValueError(f"Respuesta de login sin token en cookie ni body: {resp_text}")
-
-                self._token = token
-                logger.info("Autenticación exitosa para notificaciones.")
-        except urllib.error.HTTPError as err:
-            err_body = err.read().decode("utf-8", errors="replace")
-            logger.error("[HTTP ERROR] Status %s from %s | body: %s", err.code, url, err_body)
-            self._token = None
-            raise
-        except Exception as exc:
-            logger.error("Fallo al autenticar contra el backend (%s): %s", url, exc)
-            self._token = None
-            raise
-
-    def _resolver_usuario_id(self) -> None:
-        """Consulta /api/v1/admin/notificaciones para hallar el usuarioId del email configurado."""
-        if not self._token:
-            return
-
-        url = f"{self._base_url}/api/v1/admin/notificaciones"
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Cookie": f"session_token={self._token}",
-            "Content-Type": "application/json",
-        }
-        req = urllib.request.Request(
-            url,
-            headers=headers,
-            method="GET",
-        )
-        logger.info("[HTTP REQUEST] GET %s | Auth: Bearer ...", url)
-        try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_HTTP) as resp:
-                resp_text = resp.read().decode("utf-8")
-                logger.info("[HTTP RESPONSE] Status %s from %s | body: %s", resp.status, url, resp_text)
-                data = json.loads(resp_text)
-                destinatarios = (data.get("data") or {}).get("destinatarios") or []
-                email_objetivo = self._config.destinatario_email.strip().lower()
-
-                for dest in destinatarios:
-                    if (dest.get("email") or "").strip().lower() == email_objetivo:
-                        self._usuario_id = dest.get("usuario_id")
-                        logger.info(
-                            "Usuario ID encontrado para %s: %s",
-                            email_objetivo,
-                            self._usuario_id,
-                        )
-                        return
-
-                logger.warning(
-                    "El email %s no figura entre los destinatarios de notificaciones: %s",
-                    email_objetivo,
-                    [d.get("email") for d in destinatarios],
-                )
-        except urllib.error.HTTPError as err:
-            err_body = err.read().decode("utf-8", errors="replace")
-            logger.error("[HTTP ERROR] Status %s from %s | body: %s", err.code, url, err_body)
-            if err.code == 401:
-                self._token = None
-            raise
-
-    def _enviar_test(self, canal: str, usuario_id: str, tipo_alerta: str) -> None:
-        """Dispara la llamada a /api/v1/admin/notificaciones/test."""
-        url = f"{self._base_url}/api/v1/admin/notificaciones/test"
-        payload_dict = {
-            "canal": canal,
-            "usuario_id": usuario_id,
+        201 (alerta creada) y 200 con `creada=false` (ya había una activa) son
+        ambos éxito. No reintenta: ante cualquier fallo loguea y descarta; la
+        próxima alerta llega recién después del cooldown del monitor.
+        """
+        path = f"{self._api.lotes_endpoint}/{lote_id}/alertas-calidad"
+        payload = {
             "tipo": tipo_alerta,
+            "porcentaje": round(porcentaje, 2),
+            # Enteros cuando son exactos: Python serializa 10.0 como "10.0" y un
+            # decoder estricto de Go no lo acepta en un campo int (con 10 sirve
+            # tanto para int como para float64).
+            "umbral": _entero_si_exacto(self._config.umbral_anomalia),
+            "ventana_segundos": _entero_si_exacto(self._config.ventana_segundos),
         }
-        payload = json.dumps(payload_dict).encode("utf-8")
-
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Cookie": f"session_token={self._token}",
-            "Content-Type": "application/json",
-        }
-
-        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-        logger.info("[HTTP REQUEST] POST %s | Canal: %s | UsuarioId: %s | Tipo: %s", url, canal, usuario_id, tipo_alerta)
+        logger.info(
+            "[HTTP REQUEST] POST %s | Tipo: %s | porcentaje: %.2f | umbral: %s | ventana: %ss",
+            path,
+            tipo_alerta,
+            payload["porcentaje"],
+            payload["umbral"],
+            payload["ventana_segundos"],
+        )
         try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT_HTTP) as resp:
-                resp_text = resp.read().decode("utf-8")
-                logger.info("[HTTP RESPONSE] Status %s from %s | Canal %s | body: %s", resp.status, url, canal, resp_text)
-        except urllib.error.HTTPError as err:
-            err_body = err.read().decode("utf-8", errors="replace")
-            logger.error("[HTTP ERROR] Status %s from %s | Canal %s | body: %s", err.code, url, canal, err_body)
-            if err.code == 401:
-                self._token = None
-        except Exception as exc:
-            logger.error("Error inesperado enviando notificación por %s: %s", canal, exc)
+            data = self._http.peticion("POST", path, payload=payload, token=secret)
+        except ErrorHttp as exc:
+            logger.error("[HTTP ERROR] Status %s en POST %s | %s", exc.codigo, path, exc.detalle)
+            return False
+        except ErrorConexion as exc:
+            logger.error("No se pudo enviar la alerta de calidad (%s): %s", path, exc.detalle)
+            return False
+        except ErrorFormato:
+            # El backend respondió 2xx pero con un cuerpo que no es JSON: la
+            # alerta se aceptó, sólo no podemos saber si fue nueva o repetida.
+            logger.info("Alerta de calidad %s aceptada (respuesta sin JSON)", tipo_alerta)
+            return True
 
+        if _creada(data) is False:
+            logger.info("Alerta de calidad %s: ya había una activa en el lote", tipo_alerta)
+        else:
+            logger.info("Alerta de calidad %s creada", tipo_alerta)
+        return True
+
+
+def _entero_si_exacto(valor: float) -> int | float:
+    """Devuelve `valor` como int si no tiene parte decimal (10.0 -> 10)."""
+    return int(valor) if float(valor).is_integer() else valor
+
+
+def _creada(data: object) -> bool | None:
+    """Lee `creada` de la respuesta (directo o dentro del envelope `data`)."""
+    if not isinstance(data, dict):
+        return None
+    for fuente in (data, data.get("data")):
+        if isinstance(fuente, dict) and isinstance(fuente.get("creada"), bool):
+            return fuente["creada"]
+    return None

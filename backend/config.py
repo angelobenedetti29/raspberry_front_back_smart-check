@@ -268,9 +268,6 @@ class ControlConfig:
 @dataclass(frozen=True, slots=True)
 class NotificacionesConfig:
     habilitado: bool = False
-    email_auth: str = ""
-    password_auth: str = ""
-    destinatario_email: str = ""
     umbral_anomalia: int = 20
     ventana_segundos: float = 10.0
     cooldown_segundos: float = 60.0
@@ -828,9 +825,6 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
     if isinstance(notificaciones_raw, dict):
         notificaciones = NotificacionesConfig(
             habilitado=_get(notificaciones_raw, "habilitado", bool, "notificaciones"),
-            email_auth=_get(notificaciones_raw, "email_auth", str, "notificaciones"),
-            password_auth=_get(notificaciones_raw, "password_auth", str, "notificaciones"),
-            destinatario_email=_get(notificaciones_raw, "destinatario_email", str, "notificaciones"),
             umbral_anomalia=_int_opcional(notificaciones_raw, "umbral_anomalia", 20, "notificaciones"),
             ventana_segundos=_float_opcional(notificaciones_raw, "ventana_segundos", 10.0, "notificaciones"),
             cooldown_segundos=_float_opcional(notificaciones_raw, "cooldown_segundos", 60.0, "notificaciones"),

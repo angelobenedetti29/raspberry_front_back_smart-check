@@ -125,9 +125,7 @@ class LoteService:
 
         # Notificaciones de anomalías de calidad
         self._notificaciones_cfg = config.notificaciones
-        self._cliente_notificaciones = ClienteNotificaciones(
-            config.api.base_url, config.notificaciones
-        )
+        self._cliente_notificaciones = ClienteNotificaciones(config.api, config.notificaciones)
         self._monitor_calidad = (
             MonitorCalidad(
                 umbral_anomalia=config.notificaciones.umbral_anomalia,
@@ -372,7 +370,7 @@ class LoteService:
                 if estado_directo is not None:
                     alerta = self._monitor_calidad.registrar(estado_directo)
                     if alerta:
-                        self._cliente_notificaciones.disparar_alerta_asincrona(alerta)
+                        self._reportar_alerta_calidad(alerta)
 
             deteccion = self._traducir(observado)
             if deteccion is None:
@@ -385,6 +383,17 @@ class LoteService:
             self._conteos_locales[deteccion.estado] = (
                 self._conteos_locales.get(deteccion.estado, 0) + 1
             )
+
+    def _reportar_alerta_calidad(self, tipo: str) -> None:
+        """Reporta la alerta al lote abierto; sin lote abierto no envía nada."""
+        with self._lock:
+            secret = self._secret
+            lote = self._lote
+        if not secret or lote is None or self._monitor_calidad is None:
+            logger.info("lote: alerta %s omitida: no hay lote abierto", tipo)
+            return
+        porcentaje = self._monitor_calidad.porcentaje(tipo)
+        self._cliente_notificaciones.disparar_alerta_asincrona(secret, lote.id, tipo, porcentaje)
 
     def _resolver_producto(self, label: str) -> Producto | None:
         """Resuelve el producto del catálogo del backend desde el prefijo del label.

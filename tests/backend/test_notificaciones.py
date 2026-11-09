@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.config import NotificacionesConfig
+from backend.config import ApiConfig, NotificacionesConfig
 from backend.lote.monitor_calidad import (
     TIPO_ALERTA_CRUDOS,
     TIPO_ALERTA_QUEMADOS,
@@ -91,88 +91,109 @@ class TestMonitorCalidad:
         assert alerta == TIPO_ALERTA_QUEMADOS
 
 
+class TestPorcentajeVentana:
+    """El porcentaje se mide sobre todos los eventos de la ventana (OK incluidos)."""
+
+    def test_porcentaje_sobre_total_de_la_ventana(self) -> None:
+        monitor = MonitorCalidad(umbral_anomalia=2, ventana_segundos=10.0, cooldown_segundos=60.0)
+        for i in range(6):
+            monitor.registrar(EstadoProducto.OK, ahora=float(i) * 0.1)
+        monitor.registrar(EstadoProducto.QUEMADO, ahora=1.0)
+        alerta = monitor.registrar(EstadoProducto.QUEMADO, ahora=1.1)
+        assert alerta == TIPO_ALERTA_QUEMADOS
+        # 2 quemados de 8 eventos en la ventana -> 25 %
+        assert monitor.porcentaje(TIPO_ALERTA_QUEMADOS, ahora=1.1) == pytest.approx(25.0)
+        assert monitor.porcentaje(TIPO_ALERTA_CRUDOS, ahora=1.1) == 0.0
+
+    def test_porcentaje_ignora_eventos_vencidos(self) -> None:
+        monitor = MonitorCalidad(umbral_anomalia=2, ventana_segundos=10.0)
+        monitor.registrar(EstadoProducto.OK, ahora=0.0)
+        monitor.registrar(EstadoProducto.QUEMADO, ahora=20.0)
+        # El OK de t=0 ya venció: 1 quemado de 1 evento -> 100 %
+        assert monitor.porcentaje(TIPO_ALERTA_QUEMADOS, ahora=20.0) == pytest.approx(100.0)
+
+    def test_porcentaje_sin_eventos_es_cero(self) -> None:
+        monitor = MonitorCalidad()
+        assert monitor.porcentaje(TIPO_ALERTA_QUEMADOS, ahora=5.0) == 0.0
+
+
+def _api() -> ApiConfig:
+    return ApiConfig(
+        base_url="http://localhost:8080",
+        registration_requests_endpoint="/api/v1/registration-requests/",
+        dispositivos_ping_endpoint="/api/v1/dispositivos/ping",
+        dispositivos_nombre_endpoint="/api/v1/dispositivos/nombre",
+        dispositivos_rename_url_endpoint="/api/v1/dispositivos/rename-url",
+        productos_endpoint="/api/v1/productos",
+        dispositivos_sector_endpoint="/api/v1/dispositivos/sector",
+        lotes_endpoint="/api/v1/lotes",
+    )
+
+
+def _respuesta(cuerpo: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.read.return_value = json.dumps(cuerpo).encode()
+    return resp
+
+
 class TestClienteNotificaciones:
-    """Verifica el flujo HTTP contra el backend simulado."""
+    """La alerta va al lote abierto con el secret del dispositivo, sin reintentos."""
 
-    @patch("urllib.request.urlopen")
-    def test_flujo_completo_notificaciones(self, mock_urlopen: MagicMock) -> None:
-        # Mock de 4 respuestas:
-        # 1. /api/v1/auth/login -> { "data": { "token": "jwt-token-123" } }
-        # 2. /api/v1/admin/notificaciones -> { "data": { "destinatarios": [{"email": "operador@fermar.com", "usuario_id": "usr-999"}] } }
-        # 3. /api/v1/admin/notificaciones/test (EMAIL) -> status 200
-        # 4. /api/v1/admin/notificaciones/test (TELEGRAM) -> status 200
-
-        resp_login = MagicMock()
-        resp_login.__enter__.return_value = resp_login
-        resp_login.read.return_value = json.dumps({"data": {"token": "jwt-token-123"}}).encode()
-
-        resp_destinatarios = MagicMock()
-        resp_destinatarios.__enter__.return_value = resp_destinatarios
-        resp_destinatarios.read.return_value = json.dumps(
-            {
-                "data": {
-                    "destinatarios": [
-                        {"email": "otro@fermar.com", "usuario_id": "usr-111"},
-                        {"email": "operador@fermar.com", "usuario_id": "usr-999"},
-                    ]
-                }
-            }
-        ).encode()
-
-        resp_test_email = MagicMock()
-        resp_test_email.__enter__.return_value = resp_test_email
-        resp_test_email.status = 200
-
-        resp_test_tg = MagicMock()
-        resp_test_tg.__enter__.return_value = resp_test_tg
-        resp_test_tg.status = 200
-
-        mock_urlopen.side_effect = [
-            resp_login,
-            resp_destinatarios,
-            resp_test_email,
-            resp_test_tg,
-        ]
-
+    def _cliente(self, habilitado: bool = True) -> ClienteNotificaciones:
         cfg = NotificacionesConfig(
-            habilitado=True,
-            email_auth="admin@fermar.com.ar",
-            password_auth="password123",
-            destinatario_email="operador@fermar.com",
-            umbral_anomalia=20,
+            habilitado=habilitado,
+            umbral_anomalia=10,
             ventana_segundos=10.0,
             cooldown_segundos=60.0,
         )
+        return ClienteNotificaciones(_api(), cfg)
 
-        cliente = ClienteNotificaciones("http://localhost:8080", cfg)
-        cliente.enviar_alerta_ambos_canales(TIPO_ALERTA_QUEMADOS)
+    @patch("urllib.request.urlopen")
+    def test_alerta_creada(self, mock_urlopen: MagicMock) -> None:
+        mock_urlopen.return_value = _respuesta({"success": True, "data": {"creada": True}})
 
-        assert mock_urlopen.call_count == 4
+        ok = self._cliente().enviar_alerta("secret-xyz", "lote-1", TIPO_ALERTA_QUEMADOS, 8.4567)
 
-        # Verificar headers y bodies
-        llamadas = mock_urlopen.call_args_list
+        assert ok is True
+        assert mock_urlopen.call_count == 1
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "http://localhost:8080/api/v1/lotes/lote-1/alertas-calidad"
+        assert req.get_method() == "POST"
+        assert req.headers["Authorization"] == "Bearer secret-xyz"
+        assert json.loads(req.data.decode()) == {
+            "tipo": TIPO_ALERTA_QUEMADOS,
+            "porcentaje": 8.46,
+            "umbral": 10,
+            "ventana_segundos": 10,
+        }
+        # Sin ".0": el JSON crudo lleva enteros exactos, no floats.
+        assert b'"umbral": 10, "ventana_segundos": 10}' in req.data
 
-        # Llamada 1: login
-        req1 = llamadas[0][0][0]
-        assert req1.full_url == "http://localhost:8080/api/v1/auth/login"
+    @patch("urllib.request.urlopen")
+    def test_alerta_ya_activa_es_exito_sin_reintento(self, mock_urlopen: MagicMock) -> None:
+        mock_urlopen.return_value = _respuesta({"success": True, "data": {"creada": False}})
 
-        # Llamada 2: destinatarios con bearer token
-        req2 = llamadas[1][0][0]
-        assert req2.full_url == "http://localhost:8080/api/v1/admin/notificaciones"
-        assert req2.headers["Authorization"] == "Bearer jwt-token-123"
+        ok = self._cliente().enviar_alerta("secret-xyz", "lote-1", TIPO_ALERTA_CRUDOS, 30.0)
 
-        # Llamada 3: test EMAIL
-        req3 = llamadas[2][0][0]
-        assert req3.full_url == "http://localhost:8080/api/v1/admin/notificaciones/test"
-        body3 = json.loads(req3.data.decode())
-        assert body3["canal"] == "EMAIL"
-        assert body3["usuario_id"] == "usr-999"
-        assert body3["tipo"] == TIPO_ALERTA_QUEMADOS
+        assert ok is True
+        assert mock_urlopen.call_count == 1
 
-        # Llamada 4: test TELEGRAM
-        req4 = llamadas[3][0][0]
-        assert req4.full_url == "http://localhost:8080/api/v1/admin/notificaciones/test"
-        body4 = json.loads(req4.data.decode())
-        assert body4["canal"] == "TELEGRAM"
-        assert body4["usuario_id"] == "usr-999"
-        assert body4["tipo"] == TIPO_ALERTA_QUEMADOS
+    @patch("urllib.request.urlopen")
+    def test_error_http_no_reintenta(self, mock_urlopen: MagicMock) -> None:
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080", 409, "Conflict", {}, io.BytesIO(b'{"error":"cerrado"}')
+        )
+
+        ok = self._cliente().enviar_alerta("secret-xyz", "lote-1", TIPO_ALERTA_QUEMADOS, 12.0)
+
+        assert ok is False
+        assert mock_urlopen.call_count == 1
+
+    @patch("urllib.request.urlopen")
+    def test_deshabilitado_no_envia(self, mock_urlopen: MagicMock) -> None:
+        self._cliente(habilitado=False).disparar_alerta_asincrona(
+            "secret-xyz", "lote-1", TIPO_ALERTA_QUEMADOS, 12.0
+        )
+
+        assert mock_urlopen.call_count == 0
