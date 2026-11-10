@@ -435,7 +435,7 @@ class Pipeline:
 
         try:
             detector = construir_detector(entrada, self._config.stream.inference)
-        except ErrorCargaModelo as exc:
+        except (ErrorCargaModelo, Exception) as exc:
             self._registro.actualizar(
                 motor=None, modelo_path=None, modelo_estado=EstadoModelo.ERROR
             )

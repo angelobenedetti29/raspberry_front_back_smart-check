@@ -36,10 +36,59 @@ from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
 
-# El modelo es una exportación de Ultralytics, con salida (1, 4 + clases, N).
+# El modelo puede tener salida cruda (1, 4 + clases, N) o post-NMS por clase.
 _ATRIBUTOS_BASE = 4
+_COLUMNAS_POST_NMS = 5  # [ymin, xmin, ymax, xmax, confianza]
 _FORMATO_ENTRADA = "UINT8"
 _FORMATO_SALIDA = "FLOAT32"
+
+
+def _es_estructura_post_nms(crudas: Any) -> tuple[bool, int]:
+    """Determina si la salida corresponde al formato post-NMS de Hailo.
+
+    Devuelve (es_post_nms, cantidad_clases).
+    """
+    # Si es un ndarray numérico denso 3D (1, 4+clases, N), es tensor crudo.
+    if isinstance(crudas, np.ndarray) and crudas.dtype != object:
+        return False, 0
+
+    cand = crudas
+    if isinstance(cand, (list, tuple)) and len(cand) == 1:
+        cand = cand[0]
+    elif (
+        isinstance(cand, np.ndarray)
+        and cand.ndim >= 1
+        and cand.shape[0] == 1
+        and cand.dtype == object
+    ):
+        cand = cand[0]
+
+    if not isinstance(cand, (list, tuple, np.ndarray)) or len(cand) == 0:
+        return False, 0
+
+    # Cada elemento de cand corresponde a una clase y contiene filas
+    # [ymin, xmin, ymax, xmax, confianza]
+    for elem in cand:
+        if isinstance(elem, np.ndarray):
+            if elem.ndim == 2:
+                if elem.shape[0] > 0 and elem.shape[1] != _COLUMNAS_POST_NMS:
+                    return False, 0
+            elif elem.ndim == 1 and elem.size == 0:
+                pass
+            else:
+                return False, 0
+        elif isinstance(elem, (list, tuple)):
+            if len(elem) > 0:
+                primer_elem = elem[0]
+                if (
+                    not isinstance(primer_elem, (list, tuple, np.ndarray))
+                    or len(primer_elem) != _COLUMNAS_POST_NMS
+                ):
+                    return False, 0
+        else:
+            return False, 0
+
+    return True, len(cand)
 
 
 def _soltar_grupo(grupo: Any) -> None:
@@ -213,6 +262,7 @@ class DetectorYoloHailo(DetectorYoloBase):
             else None
         )
 
+        self._es_post_nms: bool = False
         self._lock = threading.Lock()
         self._montaje: MontajeHailo | None = None
 
@@ -222,13 +272,19 @@ class DetectorYoloHailo(DetectorYoloBase):
         except ErrorCargaModelo:
             self.liberar()
             raise
+        except Exception as exc:
+            self.liberar()
+            raise ErrorCargaModelo(
+                f"Fallo al validar la salida de {self.modelo_path.name}: {exc}"
+            ) from exc
 
         logger.info(
-            "Detector Hailo cargado: %s (%d clases, entrada %dx%d)",
+            "Detector Hailo cargado: %s (%d clases, entrada %dx%d, modo %s)",
             self.modelo_path.name,
             len(self.nombres),
             self.image_size,
             self.image_size,
+            "post-NMS" if self._es_post_nms else "crudo",
         )
 
     def detectar_frame(self, frame: np.ndarray) -> list[ResultadoDeteccion]:
@@ -236,10 +292,13 @@ class DetectorYoloHailo(DetectorYoloBase):
         with self._lock:
             if self._montaje is None or frame is None or frame.size == 0:
                 return []
-            preds, escala, pad_x, pad_y = self._inferir_crudo(frame)
+            crudas, escala, pad_x, pad_y = self._inferir_crudo(frame)
+
+        if self._es_post_nms:
+            return self._decodificar_post_nms(crudas, escala, pad_x, pad_y)
 
         return decodificar_salida(
-            preds,
+            crudas,
             escala=escala,
             pad_x=pad_x,
             pad_y=pad_y,
@@ -282,24 +341,110 @@ class DetectorYoloHailo(DetectorYoloBase):
             pad_y,
         )
 
+    def _umbral_de_indice(self, clase_id: int) -> float:
+        """Devuelve el umbral precalculado para el índice de clase."""
+        if 0 <= clase_id < len(self._umbrales_por_clase):
+            return self._umbrales_por_clase[clase_id]
+        return self.confidence_threshold
+
+    def _decodificar_post_nms(
+        self,
+        crudas: Any,
+        escala: float,
+        pad_x: int,
+        pad_y: int,
+    ) -> list[ResultadoDeteccion]:
+        """Decodifica salida post-NMS de Hailo (lista de detecciones por clase)."""
+        cand = crudas
+        if isinstance(cand, (list, tuple)) and len(cand) == 1:
+            cand = cand[0]
+        elif (
+            isinstance(cand, np.ndarray)
+            and cand.ndim >= 1
+            and cand.shape[0] == 1
+            and cand.dtype == object
+        ):
+            cand = cand[0]
+
+        resultados: list[ResultadoDeteccion] = []
+        for clase_id, filas in enumerate(cand):
+            if filas is None or len(filas) == 0:
+                continue
+            etiqueta = self._etiqueta(clase_id)
+            umbral = self._umbral_de_indice(clase_id)
+            for fila in filas:
+                # Cada fila es [ymin, xmin, ymax, xmax, confianza]
+                ymin, xmin, ymax, xmax, confianza = (
+                    float(v) for v in fila[:_COLUMNAS_POST_NMS]
+                )
+                if confianza <= umbral:
+                    continue
+
+                # Coordenadas [0, 1] relativas a la entrada letterboxeada
+                left = int(round((xmin * self.image_size - pad_x) / escala))
+                top = int(round((ymin * self.image_size - pad_y) / escala))
+                w = int(round(((xmax - xmin) * self.image_size) / escala))
+                h = int(round(((ymax - ymin) * self.image_size) / escala))
+                if w <= 0 or h <= 0:
+                    continue
+
+                resultados.append(
+                    ResultadoDeteccion(
+                        label=etiqueta,
+                        confianza=confianza,
+                        bbox=(left, top, w, h),
+                    )
+                )
+        return resultados
+
     def _validar_salida(self) -> None:
         """Corre una inferencia en negro y verifica la forma de la salida.
 
-        Un HEF con otro orden de tensores devolvería "cero detecciones" en
-        silencio. Es mejor fallar en la carga, donde el error se ve en el panel.
+        Soporta tanto HEF con tensor crudo (1, 4+clases, N) como HEF con
+        salida post-NMS por clase (NMS embebido en el HEF).
         """
         prueba = np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
-        crudas, _, _, _ = self._inferir_crudo(prueba)
-        preds = np.asarray(crudas)
-        if preds.ndim != 3 or preds.shape[0] != 1:
+        try:
+            crudas, _, _, _ = self._inferir_crudo(prueba)
+        except Exception as exc:
             raise ErrorCargaModelo(
-                f"Salida inesperada de {self.modelo_path.name}: se esperaba "
-                f"tensor (1, 4+clases, N), se obtuvo {preds.shape}"
-            )
-        if preds.shape[1] != _ATRIBUTOS_BASE + len(self.nombres):
-            logger.warning(
-                "El HEF declara %d columnas y el archivo de nombres tiene %d "
-                "clases: las detecciones pueden salir mal etiquetadas.",
-                preds.shape[1] - _ATRIBUTOS_BASE,
-                len(self.nombres),
-            )
+                f"Fallo en inferencia de validación para {self.modelo_path.name}: {exc}"
+            ) from exc
+
+        # 1. ¿Es salida post-NMS de Hailo?
+        es_post, num_clases = _es_estructura_post_nms(crudas)
+        if es_post:
+            self._es_post_nms = True
+            if num_clases != len(self.nombres):
+                logger.warning(
+                    "El HEF post-NMS declara %d clases y el archivo de nombres tiene %d: "
+                    "las que sobren se rotularán como 'class_N'.",
+                    num_clases,
+                    len(self.nombres),
+                )
+            return
+
+        # 2. ¿Es tensor crudo rectangular?
+        try:
+            preds = np.asarray(crudas)
+        except Exception as exc:
+            raise ErrorCargaModelo(
+                f"Estructura no reconocida en la salida de {self.modelo_path.name}: {exc}"
+            ) from exc
+
+        if preds.ndim == 3 and preds.shape[0] == 1 and preds.shape[1] >= _ATRIBUTOS_BASE:
+            self._es_post_nms = False
+            if preds.shape[1] != _ATRIBUTOS_BASE + len(self.nombres):
+                logger.warning(
+                    "El HEF declara %d columnas y el archivo de nombres tiene %d "
+                    "clases: las detecciones pueden salir mal etiquetadas.",
+                    preds.shape[1] - _ATRIBUTOS_BASE,
+                    len(self.nombres),
+                )
+            return
+
+        raise ErrorCargaModelo(
+            f"Salida inesperada de {self.modelo_path.name}: se esperaba tensor "
+            f"(1, 4+clases, N) o estructura post-NMS por clase. "
+            f"Forma: {getattr(preds, 'shape', type(crudas))}"
+        )

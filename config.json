@@ -1,7 +1,7 @@
 {
     "stream": {
         "capture": {
-            "source": "0",
+            "source": "t1.mp4",
             "width": 1280,
             "height": 720,
             "fps": 30,
@@ -48,7 +48,7 @@
         }
     },
     "models": {
-        "default_model_id": "tostadas-v3",
+        "default_model_id": "salida-horno-v4",
         "catalog": [
             {
                 "model_id": "yolo11n-coco",
