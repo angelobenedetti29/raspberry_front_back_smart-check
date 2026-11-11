@@ -1,0 +1,55 @@
+[33mcommit 9b300a84f2bd6bfde2955fd69b145bed3c267295[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mrework/raspberry_modeloNuevo[m[33m, [m[1;31morigin/rework/raspberry_modeloNuevo[m[33m)[m
+Author: EmmaCh <emmanuelricardochaile@hotmail.com>
+Date:   Wed Nov 11 12:10:43 2026 -0300
+
+    modificaciones del comp_hailo, agregado de entrada v1.3, CREO QUE NADA MÁS
+
+[1mdiff --git a/backend/ai_training/compilar_hailo.py b/backend/ai_training/compilar_hailo.py[m
+[1mindex 468070f..4a1d9d1 100644[m
+[1m--- a/backend/ai_training/compilar_hailo.py[m
+[1m+++ b/backend/ai_training/compilar_hailo.py[m
+[36m@@ -193,6 +193,15 @@[m [mdef compilar_hef([m
+         f"se esperaba {net_name}.hef."[m
+     )[m
+ [m
+[32m+[m[32m#Cargamos algunos nodos a mano, si falla es por esto...[m
+[32m+[m[32mnodos_de_corte = [[m
+[32m+[m[32m    "/model.23/cv2.0/cv2.0.2/Conv",[m
+[32m+[m[32m    "/model.23/cv3.0/cv3.0.2/Conv",[m
+[32m+[m[32m    "/model.23/cv2.1/cv2.1.2/Conv",[m
+[32m+[m[32m    "/model.23/cv3.1/cv3.1.2/Conv",[m
+[32m+[m[32m    "/model.23/cv2.2/cv2.2.2/Conv",[m
+[32m+[m[32m    "/model.23/cv3.2/cv3.2.2/Conv"[m
+[32m+[m[32m][m
+ [m
+ def compilar([m
+     onnx: Path,[m
+[36m@@ -203,7 +212,9 @@[m [mdef compilar([m
+     image_size: int,[m
+     net_name: str | None = None,[m
+     hw_arch: str = HW_ARCH_DEFECTO,[m
+[31m-    end_nodes: Sequence[str] | None = None,[m
+[32m+[m[32m    #Esto estaba antes, borrar comentario[m
+[32m+[m[32m    #end_nodes: Sequence[str] | None = None,[m
+[32m+[m[32m    end_nodes = nodos_de_corte,[m
+     aviso: Callable[[str], None] = print,[m
+ ) -> Path:[m
+     """Corre los 3 pasos y devuelve el HEF generado dentro de `work_dir`."""[m
+[1mdiff --git a/models/entrada_horno_V1.names b/models/entrada_horno_1.3.names[m
+[1msimilarity index 100%[m
+[1mrename from models/entrada_horno_V1.names[m
+[1mrename to models/entrada_horno_1.3.names[m
+[1mdiff --git a/models/entrada_horno_v1_1.onnx b/models/entrada_horno_1.3.onnx[m
+[1msimilarity index 57%[m
+[1mrename from models/entrada_horno_v1_1.onnx[m
+[1mrename to models/entrada_horno_1.3.onnx[m
+[1mindex 39f57d9..68ef62c 100644[m
+Binary files a/models/entrada_horno_v1_1.onnx and b/models/entrada_horno_1.3.onnx differ
+[1mdiff --git a/models/entrada_horno_V1.onnx b/models/entrada_horno_V1.onnx[m
+[1mdeleted file mode 100644[m
+[1mindex 05f18c7..0000000[m
+Binary files a/models/entrada_horno_V1.onnx and /dev/null differ
+[1mdiff --git a/models/entrada_horno_v1.3.hef b/models/entrada_horno_v1.3.hef[m
+[1mnew file mode 100644[m
+[1mindex 0000000..59f2589[m
+Binary files /dev/null and b/models/entrada_horno_v1.3.hef differ
