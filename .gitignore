@@ -21,6 +21,7 @@ __pycache__/
 venv/
 env/
 hailo_ven*/
+hailo_venv*
 
 # IDE files
 .vscode/
@@ -29,6 +30,7 @@ hailo_ven*/
 # Hailo DFC intermediate files, datasets and YOLO training runs
 *.har
 *.npy
+output_hef/
 backend/ai_training/runs/
 backend/ai_training/*.alls
 backend/ai_training/*_nms.json
@@ -54,3 +56,10 @@ graphify-out/
 
 # Deepwork session state (local only)
 .slim/deepwork/
+
+# Archivos de entrenamiento y compilación de HEF
+*.pt
+*.har
+*.npy
+*.alls
+*.log

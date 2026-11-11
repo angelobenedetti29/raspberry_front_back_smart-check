@@ -20,7 +20,7 @@ from pathlib import Path
 from backend.ai_training.rutas import asegurar_dir
 
 HW_ARCH_DEFECTO = "hailo8l"
-NIVEL_OPTIMIZACION = "max"
+NIVEL_OPTIMIZACION = "0"
 
 
 def generar_alls(

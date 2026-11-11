@@ -20,11 +20,11 @@ _EXTENSIONES = (".jpg", ".jpeg", ".png")
 
 
 def listar_imagenes(images_dir: Path) -> list[Path]:
-    """Devuelve las imágenes soportadas del directorio, ordenadas."""
+    """Devuelve imágenes soportadas buscando también en subcarpetas."""
     return sorted(
-        p for p in images_dir.iterdir() if p.is_file() and p.suffix.lower() in _EXTENSIONES
+        p for p in images_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in _EXTENSIONES
     )
-
 
 def preparar_calibracion(
     images_dir: Path,
