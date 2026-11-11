@@ -62,10 +62,10 @@ RESOLUTOR = ResolutorEtiquetas(
         "tc": ("tostada_comun", None),
         "tcok": ("tostada_comun", "ok"),
         "tcq": ("tostada_comun", "quemado"),
-        "cha": ("chalitas", None),
-        "fajita": ("chalitas", None),
-        "chaok": ("chalitas", "ok"),
-        "chaq": ("chalitas", "quemado"),
+        "cha": ("fajitas", None),
+        "fajita": ("fajitas", None),
+        "chaok": ("fajitas", "ok"),
+        "chaq": ("fajitas", "quemado"),
     }
 )
 
@@ -76,8 +76,8 @@ RESOLUTOR = ResolutorEtiquetas(
         # Códigos cortos del mapa configurable.
         ("TC", ("tostada_comun", None)),
         ("TCQ", ("tostada_comun", "quemado")),
-        ("chaok", ("chalitas", "ok")),
-        ("Fajita", ("chalitas", None)),
+        ("chaok", ("fajitas", "ok")),
+        ("Fajita", ("fajitas", None)),
         ("Tostada Común", ("tostada_comun", None)),
         # Fuera del mapa: cae a la convención <producto>_<estado>.
         ("tostada_comun_quemado", ("tostada_comun", "quemado")),
@@ -176,7 +176,7 @@ def test_estabilizador_alias_tcq_confirma_quemado() -> None:
 
 
 def test_estabilizador_resolutor_configurable_confirma_quemada() -> None:
-    """Con el mapa del config, CHAQ (chalitas quemado) confirma la quemada."""
+    """Con el mapa del config, CHAQ (fajitas quemado) confirma la quemada."""
     eventos = _eventos_estables("CHAQ", separar=RESOLUTOR.separar)
     assert ("quemada", "CHAQ") in eventos
 

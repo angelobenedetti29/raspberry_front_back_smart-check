@@ -399,13 +399,13 @@ def test_etiquetas_parsea_y_normaliza(repo_root: Path) -> None:
     data["etiquetas"] = {
         "clases": {
             "TCQ": {"producto": "Tostada Común", "estado": "quemado"},
-            "fajita": {"producto": "Chalitas"},
+            "fajita": {"producto": "Fajitas"},
         }
     }
     _escribir(repo_root, data)
     cfg = load_config(repo_root / "config.json")
     assert cfg.etiquetas.clases["tcq"] == ("tostada_comun", "quemado")
-    assert cfg.etiquetas.clases["fajita"] == ("chalitas", None)
+    assert cfg.etiquetas.clases["fajita"] == ("fajitas", None)
 
 
 def test_etiquetas_estado_invalido_falla(repo_root: Path) -> None:

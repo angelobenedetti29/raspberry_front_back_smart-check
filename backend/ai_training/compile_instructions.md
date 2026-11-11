@@ -45,7 +45,7 @@ Hace `train` (100 épocas por defecto, `--device 0`) y exporta a
   `backend/etiquetas.py`): de ahí salen el estado que reporta el lote y el color
   de las cajas. El valor `producto` del mapa (o el prefijo de la clase compuesta)
   tiene que coincidir, normalizado, con el nombre del catálogo del Go ("Tostada
-  Común" → `tostada_comun`); por ejemplo `fajita` y `cha` → `chalitas`.
+  Común" → `tostada_comun`); por ejemplo `fajita` y `cha` → `fajitas`.
 - La exportación fuerza `opset 11` + simplificado, que es lo que digiere el
   parser de Hailo-8L.
 - Para YOLO26 fuerza además `end2end=False`, que mantiene el cabezal

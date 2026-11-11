@@ -184,9 +184,9 @@ class TestLoteServiceTraduccion(unittest.TestCase):
         assert det is not None
         self.assertEqual(det.estado, EstadoProducto.OK)
 
-    def _sembrar_chalitas(self) -> None:
-        self.servicio._producto_por_nombre["chalitas"] = Producto(
-            id="p-2", nombre="Chalitas", activo=True
+    def _sembrar_fajitas(self) -> None:
+        self.servicio._producto_por_nombre["fajitas"] = Producto(
+            id="p-2", nombre="Fajitas", activo=True
         )
 
     def test_entrada_tc_resuelve_tostada_comun(self) -> None:
@@ -196,15 +196,15 @@ class TestLoteServiceTraduccion(unittest.TestCase):
         assert producto is not None
         self.assertEqual(producto.id, "p-1")
 
-    def test_entrada_fajita_resuelve_chalitas(self) -> None:
-        self._sembrar_chalitas()
+    def test_entrada_fajita_resuelve_fajitas(self) -> None:
+        self._sembrar_fajitas()
         producto = self.servicio._resolver_producto("Fajita")
         self.assertIsNotNone(producto)
         assert producto is not None
         self.assertEqual(producto.id, "p-2")
 
-    def test_cruce_chaq_resuelve_chalitas(self) -> None:
-        self._sembrar_chalitas()
+    def test_cruce_chaq_resuelve_fajitas(self) -> None:
+        self._sembrar_fajitas()
         det = self.servicio._traducir(self._observado("cruce", 60, "CHAQ"))
         self.assertIsNotNone(det)
         assert det is not None
@@ -213,7 +213,7 @@ class TestLoteServiceTraduccion(unittest.TestCase):
 
     def test_evento_de_otro_producto_se_descarta(self) -> None:
         """Un evento de un producto distinto al del lote abierto no se reporta."""
-        self._sembrar_chalitas()
+        self._sembrar_fajitas()
         self.servicio._lote = Lote(
             id="l1",
             sector_id="s1",

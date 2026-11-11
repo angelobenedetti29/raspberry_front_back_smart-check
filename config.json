@@ -137,17 +137,17 @@
                 "estado": "quemado"
             },
             "cha": {
-                "producto": "Chalitas"
+                "producto": "Fajitas"
             },
             "fajita": {
-                "producto": "Chalitas"
+                "producto": "Fajitas"
             },
             "chaok": {
-                "producto": "Chalitas",
+                "producto": "Fajitas",
                 "estado": "ok"
             },
             "chaq": {
-                "producto": "Chalitas",
+                "producto": "Fajitas",
                 "estado": "quemado"
             },
             "tostada_quemada": {

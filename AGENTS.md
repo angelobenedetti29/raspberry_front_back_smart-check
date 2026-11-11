@@ -99,7 +99,7 @@ no está en `requirements.txt` y se instala aparte (ver `.github/workflows/ci.ym
 - `backend/etiquetas.py` — resolución de etiquetas a `(producto, estado)`.
   `config.json` → `etiquetas.clases` mapea los códigos cortos del modelo (`tc`,
   `tcok`, `tcq`, `cha`, `fajita`, `chaok`, `chaq`, ...) a producto normalizado y
-  estado opcional; `fajita` y `cha` resuelven a Chalitas. Sin coincidencia en el
+  estado opcional; `fajita` y `cha` resuelven a Fajitas. Sin coincidencia en el
   mapa se mantiene la convención `<producto>_<estado>`: el estado es el sufijo
   tras el último `_` y sólo puede ser `crudo`|`ok`|`quemado`; sin estado válido el
   evento no cuenta para el lote. `CLASES_POR_DEFECTO` es el fallback para configs

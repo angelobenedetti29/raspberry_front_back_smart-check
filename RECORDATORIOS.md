@@ -10,13 +10,13 @@ Las referencias de línea son de octubre de 2026 y pueden correrse con ediciones
 
 Cada modelo declara sus propias clases (`tc`, `tcok`, `tcq`, `fajita`, `chaok`,
 ...); `config.json` → `etiquetas.clases` las traduce al producto del backend y
-al estado opcional. `fajita` y `cha` resuelven a Chalitas. Si una clase no está
+al estado opcional. `fajita` y `cha` resuelven a Fajitas. Si una clase no está
 en el mapa, se interpreta como `<producto>_<estado>` (ver
 `backend/etiquetas.py`).
 
 | Qué | Dónde | Cuándo se hace necesario |
 |-----|-------|--------------------------|
-| Confirmar que el Go tenga activos `Tostada Común` y `Chalitas`: si no, la ENTRADA no abre lote y la SALIDA descarta los eventos | catálogo del Go / `GET /api/v1/productos` | Antes de desplegar |
+| Confirmar que el Go tenga activos `Tostada Común` y `Fajitas`: si no, la ENTRADA no abre lote y la SALIDA descarta los eventos | catálogo del Go / `GET /api/v1/productos` | Antes de desplegar |
 | Al agregar un producto o clase nueva, sumar la entrada en `etiquetas.clases` y su threshold si aplica | `config.json` | Al cambiar modelos/dataset |
 | Los alias viejos (`tostada_quemada`, `tostadas_ok`) y los códigos compartidos con modelos que se retiren (`tcq`, `tcok`) quedan en el mapa mientras esos `.names` estén en uso; no borrarlos antes | `config.json` y `CLASES_POR_DEFECTO` | Al retirar los modelos viejos |
 | Los eventos viejos de `data/eventos.db` tienen labels crudos: no hay migración | `data/eventos.db` | Sólo si se necesitan métricas históricas unificadas |

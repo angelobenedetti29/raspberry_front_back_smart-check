@@ -505,13 +505,13 @@ Reglas:
 
 ### 7.2.1 Verificación de modelos y etiquetas
 
-1. `GET /api/v1/productos` devuelve activos `Tostada Común` y `Chalitas`.
+1. `GET /api/v1/productos` devuelve activos `Tostada Común` y `Fajitas`.
 2. El `config.json` de ambas copias tiene `etiquetas.clases` y los dos defaults
    por tipo (`models.default_entrada_model_id` / `default_salida_model_id`).
 3. En **En vivo** cada instancia muestra el modelo de su rol
    (`entrada-horno-v1` / `salida-horno-v4`).
 4. Un lote de prueba: la ENTRADA abre con `tc` (Tostada Común) o `Fajita`
-   (Chalitas); la SALIDA reporta `TCOK`/`TCQ`/`CHAOK`/`CHAQ`.
+   (Fajitas); la SALIDA reporta `TCOK`/`TCQ`/`CHAOK`/`CHAQ`.
 5. Revisá el log por "etiqueta ... sin producto en el catálogo" y por
    "se descarta ... el lote es del producto".
 
