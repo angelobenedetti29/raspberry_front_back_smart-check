@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import cv2
 
-from backend.etiquetas import normalizar_clave, separar_etiqueta
+from backend.etiquetas import ResolutorEtiquetas, normalizar_clave, separar_etiqueta
 
 if TYPE_CHECKING:
     import numpy as np
@@ -46,19 +46,20 @@ _COLORES_ESTADO: dict[str, tuple[int, int, int]] = {
 }
 
 
-def _color(label: str) -> tuple[int, int, int]:
+def _color(label: str, resolutor: ResolutorEtiquetas | None = None) -> tuple[int, int, int]:
     """Color por estado de calidad, con hash de la etiqueta como fallback.
 
-    El estado sale del sufijo de la etiqueta (``_ok``/``_crudo``/``_quemado``,
-    ver ``backend.etiquetas``): ok/crudo/quemado usan los tokens del tema
-    (verde/amarillo/rojo) para que el operador lea el estado de un vistazo,
-    para cualquier producto. Si la etiqueta no tiene estado válido, se deriva
-    del hash de la clave normalizada y no de `hash()` a propósito: `hash()` de
-    un str está aleatorizado por proceso, así que el mismo producto cambiaría
-    de color entre arranques. Tampoco se usa el índice de clase, que depende
-    del archivo `.names` y haría bailar los colores si se reordena.
+    El estado sale del mapa ``config.etiquetas.clases`` o del sufijo de la
+    etiqueta (``_ok``/``_crudo``/``_quemado``, ver ``backend.etiquetas``):
+    ok/crudo/quemado usan los tokens del tema (verde/amarillo/rojo) para que el
+    operador lea el estado de un vistazo, para cualquier producto. Si la etiqueta
+    no tiene estado válido, se deriva del hash de la clave normalizada y no de
+    `hash()` a propósito: `hash()` de un str está aleatorizado por proceso, así
+    que el mismo producto cambiaría de color entre arranques. Tampoco se usa el
+    índice de clase, que depende del archivo `.names` y haría bailar los colores
+    si se reordena.
     """
-    estado = separar_etiqueta(label)[1]
+    estado = separar_etiqueta(label, resolutor)[1]
     if estado is not None and estado in _COLORES_ESTADO:
         return _COLORES_ESTADO[estado]
     clave = normalizar_clave(label)
@@ -153,6 +154,7 @@ def dibujar(
     detecciones: Sequence[ResultadoDeteccion],
     *,
     linea_conteo_y: int | None = None,
+    resolutor: ResolutorEtiquetas | None = None,
 ) -> None:
     """Dibuja cajas, etiquetas y la línea de conteo sobre `frame_bgr` in place.
 
@@ -187,7 +189,7 @@ def dibujar(
         if caja_ancho <= 0 or caja_alto <= 0:
             continue
 
-        color = _color(deteccion.label)
+        color = _color(deteccion.label, resolutor)
         cv2.rectangle(frame_bgr, (left, top), (left + caja_ancho, top + caja_alto), color, grosor)
         _rotular(
             frame_bgr,

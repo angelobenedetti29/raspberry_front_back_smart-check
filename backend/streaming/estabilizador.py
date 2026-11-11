@@ -31,7 +31,7 @@ segura para uso concurrente y no necesita lock.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from backend.etiquetas import separar_etiqueta
@@ -53,9 +53,11 @@ _FRAMES_CONFIRMAR_QUEMADA = 3
 _FRAMES_CONFIRMAR_PISTA = 2
 
 
-def _es_quemada(label: str) -> bool:
-    """True si la etiqueta representa un producto quemado (sufijo ``_quemado``)."""
-    return separar_etiqueta(label)[1] == "quemado"
+def _es_quemada(
+    label: str, separar: Callable[[str], tuple[str, str | None]] = separar_etiqueta
+) -> bool:
+    """True si la etiqueta representa un producto quemado (estado ``quemado``)."""
+    return separar(label)[1] == "quemado"
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +107,13 @@ class EstabilizadorDetecciones:
     vez cuando el centroide atraviesa la línea hacia abajo.
     """
 
-    def __init__(self, linea_conteo_y: int | None = None) -> None:
+    def __init__(
+        self,
+        linea_conteo_y: int | None = None,
+        separar: Callable[[str], tuple[str, str | None]] | None = None,
+    ) -> None:
         self._linea_y = linea_conteo_y
+        self._separar = separar or separar_etiqueta
         self._pistas: list[_Pista] = []
         self._siguiente_id = 1
         self._eventos: list[EventoPista] = []
@@ -169,7 +176,7 @@ class EstabilizadorDetecciones:
                 centro_y_prev=nuevo_centro_y,
                 centro_y=nuevo_centro_y,
                 cruzada=ya_paso,
-                racha_quemada=1 if _es_quemada(deteccion.label) else 0,
+                racha_quemada=1 if _es_quemada(deteccion.label, self._separar) else 0,
             )
             self._siguiente_id += 1
             self._confirmar_quemada(pista)
@@ -251,13 +258,13 @@ class EstabilizadorDetecciones:
 
         label_previo = pista.label
 
-        if not _es_quemada(deteccion.label):
+        if not _es_quemada(deteccion.label, self._separar):
             # Una detección OK NO corta la racha: es acumulativa durante la vida
             # de la pista (igual que el tracker de referencia), así un detector
             # que duda entre ok/quemado no impide confirmar la quemada.
             pista.label = deteccion.label
             # Sólo las transiciones entre clases NO quemadas cuentan como cambio.
-            if not _es_quemada(label_previo) and deteccion.label != label_previo:
+            if not _es_quemada(label_previo, self._separar) and deteccion.label != label_previo:
                 self._eventos.append(
                     EventoPista("cambio", pista.id, pista.label, pista.confianza, pista.bbox)
                 )

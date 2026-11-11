@@ -9,9 +9,16 @@ y el color por estado del anotador.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
-from backend.etiquetas import ESTADOS_VALIDOS, normalizar_clave, separar_etiqueta
+from backend.etiquetas import (
+    ESTADOS_VALIDOS,
+    ResolutorEtiquetas,
+    normalizar_clave,
+    separar_etiqueta,
+)
 from backend.inference import ResultadoDeteccion
 from backend.lote.estado import clasificar_estado
 from backend.lote.tipos import EstadoProducto
@@ -48,6 +55,37 @@ from backend.streaming.estabilizador import EstabilizadorDetecciones
 )
 def test_separar_etiqueta(label: str, esperado: tuple[str, str | None]) -> None:
     assert separar_etiqueta(label) == esperado
+
+
+RESOLUTOR = ResolutorEtiquetas(
+    {
+        "tc": ("tostada_comun", None),
+        "tcok": ("tostada_comun", "ok"),
+        "tcq": ("tostada_comun", "quemado"),
+        "cha": ("chalitas", None),
+        "fajita": ("chalitas", None),
+        "chaok": ("chalitas", "ok"),
+        "chaq": ("chalitas", "quemado"),
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "esperado"),
+    [
+        # Códigos cortos del mapa configurable.
+        ("TC", ("tostada_comun", None)),
+        ("TCQ", ("tostada_comun", "quemado")),
+        ("chaok", ("chalitas", "ok")),
+        ("Fajita", ("chalitas", None)),
+        ("Tostada Común", ("tostada_comun", None)),
+        # Fuera del mapa: cae a la convención <producto>_<estado>.
+        ("tostada_comun_quemado", ("tostada_comun", "quemado")),
+        ("person", ("person", None)),
+    ],
+)
+def test_resolutor_configurable(label: str, esperado: tuple[str, str | None]) -> None:
+    assert separar_etiqueta(label, RESOLUTOR) == esperado
 
 
 @pytest.mark.parametrize(
@@ -105,9 +143,13 @@ def test_color_fallback_paleta_para_labels_sin_estado() -> None:
     assert _color("person") in _PALETA
 
 
-def _eventos_estables(label: str, frames: int = 3) -> list[tuple[str, str]]:
+def _eventos_estables(
+    label: str,
+    frames: int = 3,
+    separar: Callable[[str], tuple[str, str | None]] | None = None,
+) -> list[tuple[str, str]]:
     """Corre `frames` detecciones del mismo label y acumula (tipo, label)."""
-    estabilizador = EstabilizadorDetecciones()
+    estabilizador = EstabilizadorDetecciones(separar=separar)
     eventos: list[tuple[str, str]] = []
     deteccion = ResultadoDeteccion(label=label, confianza=0.9, bbox=(100, 100, 200, 200))
     for _ in range(frames):
@@ -131,3 +173,13 @@ def test_estabilizador_ok_no_emite_quemada() -> None:
 def test_estabilizador_alias_tcq_confirma_quemado() -> None:
     eventos = _eventos_estables("TCQ")
     assert ("quemada", "TCQ") in eventos
+
+
+def test_estabilizador_resolutor_configurable_confirma_quemada() -> None:
+    """Con el mapa del config, CHAQ (chalitas quemado) confirma la quemada."""
+    eventos = _eventos_estables("CHAQ", separar=RESOLUTOR.separar)
+    assert ("quemada", "CHAQ") in eventos
+
+
+def test_color_por_resolutor_configurable() -> None:
+    assert _color("CHAQ", RESOLUTOR) == _ROJO_QUEMADO

@@ -17,3 +17,19 @@ def test_opciones_de_driver_incluyen_simulado() -> None:
     ):
         valores = {valor for _etiqueta, valor in AdaptadorConfig._opciones(clave, {})}
         assert valores == {"stub", "simulado", "modbus_rtu", "modbus_tcp"}
+
+
+def test_opciones_de_modelos_entrada_y_salida_salen_del_catalogo() -> None:
+    cruda = {
+        "models": {
+            "catalog": [
+                {"model_id": "entrada", "label": "Entrada"},
+                {"model_id": "salida", "label": "Salida"},
+            ]
+        }
+    }
+    for clave in ("models.default_entrada_model_id", "models.default_salida_model_id"):
+        assert {valor for _etiqueta, valor in AdaptadorConfig._opciones(clave, cruda)} == {
+            "entrada",
+            "salida",
+        }

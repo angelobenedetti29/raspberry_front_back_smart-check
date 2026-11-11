@@ -4,8 +4,9 @@ Adaptación a esta rama del test_conteo de d1033ed
 (rework/raspberry-halio-nueva-comp): el ``alta`` llega tras 2 frames vistos
 consecutivos, una tentativa que se pierde se descarta en silencio (sin
 ``baja``), el ``cruce`` sólo lo emite una pista confirmada, y ``_traducir``
-resuelve producto y estado con la convención ``<producto>_<estado>`` y los
-alias transitorios TCQ/TCOK (ver ``backend.etiquetas``).
+resuelve producto y estado con el mapa ``etiquetas.clases`` del config o, si la
+etiqueta no está en el mapa, con la convención ``<producto>_<estado>`` (ver
+``backend.etiquetas``).
 """
 
 from __future__ import annotations
@@ -16,7 +17,13 @@ from unittest.mock import MagicMock
 from backend.config import load_config
 from backend.inference.detector import ResultadoDeteccion
 from backend.lote import LoteService
-from backend.lote.tipos import EstadoProducto, Producto
+from backend.lote.tipos import (
+    Conteos,
+    EstadoLote,
+    EstadoProducto,
+    Lote,
+    Producto,
+)
 from backend.streaming.estabilizador import EstabilizadorDetecciones, EventoPista
 from backend.streaming.suscripcion import EventoObservado
 
@@ -133,8 +140,8 @@ class TestLoteServiceTraduccion(unittest.TestCase):
     def setUp(self) -> None:
         # config.json trae la línea habilitada (stream.counting.enabled).
         self.servicio = LoteService(load_config(), MagicMock())
-        # Catálogo sembrado: el alias TCQ/TCOK resuelve a tostada_comun
-        # (ver _ALIAS_TRANSITORIOS en backend.etiquetas).
+        # Catálogo sembrado: tc/tcok/tcq resuelven a tostada_comun
+        # (ver la sección `etiquetas.clases` de config.json).
         self.servicio._producto_por_nombre = {
             "tostada_comun": Producto(id="p-1", nombre="Tostada común", activo=True)
         }
@@ -176,6 +183,49 @@ class TestLoteServiceTraduccion(unittest.TestCase):
         self.assertIsNotNone(det)
         assert det is not None
         self.assertEqual(det.estado, EstadoProducto.OK)
+
+    def _sembrar_chalitas(self) -> None:
+        self.servicio._producto_por_nombre["chalitas"] = Producto(
+            id="p-2", nombre="Chalitas", activo=True
+        )
+
+    def test_entrada_tc_resuelve_tostada_comun(self) -> None:
+        """El código corto `tc` del mapa resuelve al producto del lote."""
+        producto = self.servicio._resolver_producto("tc")
+        self.assertIsNotNone(producto)
+        assert producto is not None
+        self.assertEqual(producto.id, "p-1")
+
+    def test_entrada_fajita_resuelve_chalitas(self) -> None:
+        self._sembrar_chalitas()
+        producto = self.servicio._resolver_producto("Fajita")
+        self.assertIsNotNone(producto)
+        assert producto is not None
+        self.assertEqual(producto.id, "p-2")
+
+    def test_cruce_chaq_resuelve_chalitas(self) -> None:
+        self._sembrar_chalitas()
+        det = self.servicio._traducir(self._observado("cruce", 60, "CHAQ"))
+        self.assertIsNotNone(det)
+        assert det is not None
+        self.assertEqual(det.producto_id, "p-2")
+        self.assertEqual(det.estado, EstadoProducto.QUEMADO)
+
+    def test_evento_de_otro_producto_se_descarta(self) -> None:
+        """Un evento de un producto distinto al del lote abierto no se reporta."""
+        self._sembrar_chalitas()
+        self.servicio._lote = Lote(
+            id="l1",
+            sector_id="s1",
+            estado=EstadoLote.ABIERTO,
+            producto_id="p-1",
+            producto_nombre="Tostada común",
+            abierto_en="",
+            abierto_por=None,
+            conteos=Conteos(None, None, None, 0),
+            inactividad_segundos=0.0,
+        )
+        self.assertIsNone(self.servicio._traducir(self._observado("cruce", 70, "CHAQ")))
 
 
 if __name__ == "__main__":

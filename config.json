@@ -1,7 +1,7 @@
 {
     "stream": {
         "capture": {
-            "source": "t1.mp4",
+            "source": "0",
             "width": 1280,
             "height": 720,
             "fps": 30,
@@ -12,7 +12,7 @@
         },
         "publisher": {
             "server_url": "rtsp://smartcheck.duckdns.org:8554",
-            "bitrate": "2M",
+            "bitrate": "4M",
             "ffmpeg_executable": "ffmpeg",
             "encoder": "libx264",
             "preset": "ultrafast",
@@ -49,6 +49,8 @@
     },
     "models": {
         "default_model_id": "salida-horno-v4",
+        "default_entrada_model_id": "entrada-horno-v1",
+        "default_salida_model_id": "salida-horno-v4",
         "catalog": [
             {
                 "model_id": "yolo11n-coco",
@@ -100,11 +102,11 @@
             {
                 "model_id": "entrada-horno-v1",
                 "label": "YOLO Entrada Horno V1",
-                "file": "entrada_horno_V1.onnx",
-                "names_file": "entrada_horno_V1.names",
+                "file": "entrada_horno_1.3.onnx",
+                "names_file": "entrada_horno_1.3.names",
                 "class_thresholds": {
                     "fajita": 0.55,
-                    "tc": 0.50
+                    "tc": 0.5
                 }
             },
             {
@@ -120,6 +122,43 @@
                 }
             }
         ]
+    },
+    "etiquetas": {
+        "clases": {
+            "tc": {
+                "producto": "Tostada Común"
+            },
+            "tcok": {
+                "producto": "Tostada Común",
+                "estado": "ok"
+            },
+            "tcq": {
+                "producto": "Tostada Común",
+                "estado": "quemado"
+            },
+            "cha": {
+                "producto": "Chalitas"
+            },
+            "fajita": {
+                "producto": "Chalitas"
+            },
+            "chaok": {
+                "producto": "Chalitas",
+                "estado": "ok"
+            },
+            "chaq": {
+                "producto": "Chalitas",
+                "estado": "quemado"
+            },
+            "tostada_quemada": {
+                "producto": "Tostada Común",
+                "estado": "quemado"
+            },
+            "tostadas_ok": {
+                "producto": "Tostada Común",
+                "estado": "ok"
+            }
+        }
     },
     "paths": {
         "videos_dir": "multimedia/videos",
@@ -137,7 +176,7 @@
         "lotes_endpoint": "/api/v1/lotes"
     },
     "device": {
-        "hostname": "rb-1",
+        "hostname": "rb-entrada",
         "ping_interval_seconds": 15.0,
         "registration_poll_interval_seconds": 5.0,
         "public_url": "http://192.168.100.8:9000",

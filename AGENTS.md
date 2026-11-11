@@ -94,14 +94,17 @@ no está en `requirements.txt` y se instala aparte (ver `.github/workflows/ci.ym
   el buzón, los traduce a productos con estado (`estado.py`) y los reporta al
   backend (`cliente.py`). `LoteService` corre en su hilo; el rol (ENTRADA abre el
   lote con el primer `alta`, SALIDA reporta y cierra por inactividad) sale de
-  `TipoDispositivo`.
-- `backend/etiquetas.py` — convención de etiquetas `<producto>_<estado>`: el
-  estado es el sufijo tras el último `_` y sólo puede ser `crudo`|`ok`|`quemado`;
-  el prefijo identifica el producto y se resuelve por nombre normalizado contra el
-  catálogo del Go. `backend/lote/` usa `separar_etiqueta` para resolver el
-  producto; sin estado válido el evento no cuenta para el lote.
-  `_ALIAS_TRANSITORIOS` mantiene los modelos viejos (`tcq`, `tcok`,
-  `tostada quemada`, `tostadas ok`) hasta que se reentrene el modelo.
+  `TipoDispositivo`. La SALIDA descarta los eventos de un producto distinto al del
+  lote abierto, porque el Go rechaza el batch completo.
+- `backend/etiquetas.py` — resolución de etiquetas a `(producto, estado)`.
+  `config.json` → `etiquetas.clases` mapea los códigos cortos del modelo (`tc`,
+  `tcok`, `tcq`, `cha`, `fajita`, `chaok`, `chaq`, ...) a producto normalizado y
+  estado opcional; `fajita` y `cha` resuelven a Chalitas. Sin coincidencia en el
+  mapa se mantiene la convención `<producto>_<estado>`: el estado es el sufijo
+  tras el último `_` y sólo puede ser `crudo`|`ok`|`quemado`; sin estado válido el
+  evento no cuenta para el lote. `CLASES_POR_DEFECTO` es el fallback para configs
+  viejas y tests, no el mapa principal. `backend/lote/` usa `separar_etiqueta` con
+  el resolutor del config.
 - `backend/control/` — ControlService (SCA-400, sólo ENTRADA): publica telemetría
   del horno y aplica consignas. Pollea
   `GET /api/v1/lotes/{id}/consigna-propuesta` cada
@@ -189,16 +192,30 @@ no está en `requirements.txt` y se instala aparte (ver `.github/workflows/ci.ym
   Contar productos es agrupar los `baja` por su `label` final. Rota por tamaño
   (`stream.storage.max_bytes` × `stream.storage.max_files`), y
   `stream.storage.persist_no_detection_every` es la cadencia del latido en frames.
-- El loader valida integridad referencial: `models.default_model_id` debe existir en
-  `catalog`. `confidence_threshold` ∈ [0,1], `nms_threshold` ∈ (0,1], `image_size > 0`,
-  `fps > 0`, `rtsp_transport` ∈ {`tcp`, `udp`}. Error de dominio: `ConfigError`.
+- El loader valida integridad referencial: `models.default_model_id`,
+  `models.default_entrada_model_id` y `models.default_salida_model_id` deben
+  existir en `catalog`. `confidence_threshold` ∈ [0,1], `nms_threshold` ∈ (0,1],
+  `image_size > 0`, `fps > 0`, `rtsp_transport` ∈ {`tcp`, `udp`}. Error de
+  dominio: `ConfigError`.
+- El modelo inicial de cada Raspberry sale del `TipoDispositivo` persistido en
+  `device.json` (`ModelsConfig.modelo_para`): `ENTRADA_HORNO` usa
+  `default_entrada_model_id`, `SALIDA_HORNO` usa `default_salida_model_id` y sin
+  tipo (o sin la clave) cae a `default_model_id`, que es el fallback. La elección
+  ocurre al arrancar: si la Pi se registra con la app ya iniciada, hay que
+  reiniciar para que tome el modelo de su rol.
+- `etiquetas.clases`: etiqueta → `{producto, estado}`. Claves y productos se
+  normalizan con `normalizar_clave` (minúsculas, sin tildes, separadores → `_`);
+  el `estado` es opcional y sólo acepta `crudo`|`ok`|`quemado` o `null`; el loader
+  rechaza etiquetas duplicadas al normalizar. Los alias viejos
+  (`tostada_quemada`, `tostadas_ok`) siguen en el mapa mientras se usen los
+  modelos viejos. Sin `etiquetas` en el config se usa `CLASES_POR_DEFECTO`.
 - `catalog[].class_thresholds` son umbrales por clase; las claves se normalizan a
   minúscula (el detector las busca con `label.lower()`) y lo que no figure usa
   `stream.inference.confidence_threshold`. El loader los expone inmutables
   (`MappingProxyType`), coherente con el `frozen=True` de los dataclasses. Las
-  clases siguen la convención `<producto>_<estado>` (`backend/etiquetas.py`): el
-  producto se resuelve por prefijo normalizado contra el catálogo del Go, sin
-  `producto_id` en el catálogo.
+  claves son las clases del `.names` tal cual (p. ej. `tcok`, `chaq` o
+  `tostada_comun_quemado`), no necesariamente compuestas; el producto se resuelve
+  con `etiquetas.clases`/`backend/etiquetas.py`, sin `producto_id` en el catálogo.
 - `device.*`: `hostname` lógico (no vacío), `ping_interval_seconds` (telemetría del
   monitor) y `registration_poll_interval_seconds` (polling del alta), ambos > 0.
   `public_url` (opcional, default `""`) es la URL completa (esquema + host + puerto)

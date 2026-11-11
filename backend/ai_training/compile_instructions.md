@@ -38,14 +38,14 @@ Hace `train` (100 épocas por defecto, `--device 0`) y exporta a
 
 - El `.names` se escribe desde `model.names` (orden real de los índices): no hay
   lista de clases hardcodeada.
-- **Convención de nombres de clases** (obligatoria): `<producto>_<estado>`, una
-  clase por combinación (p. ej. `tostada_comun_ok`, `tostada_comun_quemado`,
-  `fajita_crudo`). El estado es el sufijo tras el último `_` y sólo puede ser
-  `crudo`, `ok` o `quemado` (ver `backend/etiquetas.py`): de ahí salen el estado
-  que reporta el lote y el color de las cajas. El prefijo tiene que matchear el
-  nombre del producto del catálogo del backend (normalizado: minúsculas, sin
-  tildes, espacios → `_`, p. ej. "Tostada Común" → `tostada_comun`), porque la
-  app resuelve el producto desde el label, sin vínculos manuales.
+- **Nombres de clases**: cada modelo puede usar códigos cortos (`tc`, `tcok`,
+  `tcq`, `fajita`, `chaok`, ...) o la forma `<producto>_<estado>`. La app resuelve
+  producto y estado con `config.json` → `etiquetas.clases`; si la clase no está en
+  el mapa, aplica `<producto>_<estado>` con sufijo `crudo`, `ok` o `quemado` (ver
+  `backend/etiquetas.py`): de ahí salen el estado que reporta el lote y el color
+  de las cajas. El valor `producto` del mapa (o el prefijo de la clase compuesta)
+  tiene que coincidir, normalizado, con el nombre del catálogo del Go ("Tostada
+  Común" → `tostada_comun`); por ejemplo `fajita` y `cha` → `chalitas`.
 - La exportación fuerza `opset 11` + simplificado, que es lo que digiere el
   parser de Hailo-8L.
 - Para YOLO26 fuerza además `end2end=False`, que mantiene el cabezal
@@ -137,9 +137,10 @@ Agregar/editar en `config.json` → `models.catalog`:
 }
 ```
 
-Ya no hay `producto_id`: el producto de cada detección se resuelve desde el
-prefijo de la clase (`<producto>_`) contra el catálogo de productos del backend
-(los umbrales por clase van con la etiqueta compuesta completa, en minúsculas).
+Ya no hay `producto_id`: el producto y el estado de cada detección se resuelven
+con `etiquetas.clases` y, si la clase no está en el mapa, con el prefijo
+`<producto>_` contra el catálogo de productos del backend. Los umbrales por clase
+usan la clase del `.names` tal cual, en minúsculas.
 
 Con el `.hef` hermano en `models/`, la app lo redirige solo a la NPU cuando
 `hailo_platform` está disponible; si no, usa el `.onnx` en CPU.

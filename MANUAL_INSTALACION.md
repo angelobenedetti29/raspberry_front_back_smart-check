@@ -141,6 +141,9 @@ Valores del `config.json` actual:
 | `device.public_url` | `http://192.168.100.8:9000` | URL con la que el backend Go alcanza a esta Pi (`rename_url`) |
 | `device.listen_address` | `0.0.0.0` | Bind de respaldo cuando `public_url` está vacío |
 | `device.local_port` | `9000` | Puerto local del servidor HTTP y respaldo del bind |
+| `models.default_model_id` | `salida-horno-v4` | Fallback si el dispositivo no tiene tipo registrado |
+| `models.default_entrada_model_id` | `entrada-horno-v1` | Modelo que carga una Raspberry `ENTRADA_HORNO` |
+| `models.default_salida_model_id` | `salida-horno-v4` | Modelo que carga una Raspberry `SALIDA_HORNO` |
 | `control.habilitado` | `true` | Habilita el ControlService (SCA-400) |
 | `control.sensores.driver` | `modbus_tcp` | Backend del lector: `stub`, `simulado`, `modbus_rtu`, `modbus_tcp` |
 | `control.actuadores.driver` | `modbus_tcp` | Backend del aplicador de consignas |
@@ -167,6 +170,12 @@ Notas de cada grupo:
   Si `public_url` trae puerto explícito, el bind usa ese puerto. Si no lo trae,
   un host loopback usa 80 (`http`) / 443 (`https`) y el resto cae a
   `local_port`. Mantené `public_url` y `local_port` alineados.
+- **`models.*`**: el modelo inicial sale del tipo persistido en `device.json`:
+  `ENTRADA_HORNO` usa `default_entrada_model_id` y `SALIDA_HORNO` usa
+  `default_salida_model_id`. Si falta el tipo o la clave, usa
+  `default_model_id`. La elección es al arrancar, así que después del alta
+  inicial hay que reiniciar para que tome el modelo del rol. Las tres
+  referencias tienen que existir en `models.catalog`.
 - **`control.*`**: los drivers Modbus aceptan `stub` (no hace nada),
   `simulado` (planta en memoria dentro del proceso), `modbus_rtu`
   (`serial_port`, `baudrate`, `unit_id`) y `modbus_tcp` (`host`, `port`,
@@ -179,11 +188,13 @@ El `config.json` actual apunta **ambos** drivers a `modbus_tcp` en
 ### 3.3 Qué se puede editar desde la UI
 
 La sección **Configuración** edita un subconjunto operativo del archivo (captura,
-publicación, API, `device`, lotes y control). Al elegir un driver
-`modbus_tcp`, aparecen los campos de host y puerto de sensores/actuadores; con
-`stub` o `simulado` quedan ocultos porque no se usan. Los valores de
-`control.consigna_reg_temp1`/`consigna_reg_vel` no están en la UI: se editan en
-`config.json`.
+publicación, API, `device`, modelos, lotes y control). También permite elegir el
+modelo de entrada y el de salida por separado
+(`models.default_entrada_model_id` / `default_salida_model_id`); el cambio
+requiere reiniciar. Al elegir un driver `modbus_tcp`, aparecen los campos de host
+y puerto de sensores/actuadores; con `stub` o `simulado` quedan ocultos porque no
+se usan. Los valores de `control.consigna_reg_temp1`/`consigna_reg_vel` no están
+en la UI: se editan en `config.json`.
 
 Guardar desde la UI **valida antes de escribir** y, en general, requiere
 reiniciar la app: los servicios ya corren con la configuración del arranque. La
@@ -480,6 +491,10 @@ Reglas:
 - **SALIDA sin Modbus.** El ControlService sólo corre en ENTRADA; en SALIDA no
   hay lecturas ni escrituras. Aunque dejes `modbus_tcp`, no se emite tráfico,
   pero `stub`/`simulado` deja la intención explícita.
+- **Modelos por rol.** Cada copia puede llevar los mismos
+  `models.default_entrada_model_id` y `default_salida_model_id`: la app elige
+  según el `device.json` de esa copia. Confirmá que cada copia tenga en `models/`
+  el modelo y el `.names` de su rol.
 - **`<IP-LAN>`**: la IP de esta PC que el backend Go (en Docker) puede alcanzar.
   El `config.json` actual usa `192.168.100.8`; reemplazala por la tuya.
 - **Túneles (opcional).** Si en vez de la IP de la LAN usás cloudflared, cada
@@ -487,6 +502,18 @@ Reglas:
   `cloudflared tunnel --url http://127.0.0.1:9001` para ENTRADA y
   `cloudflared tunnel --url http://127.0.0.1:9000` para SALIDA. En ese caso el
   bind queda en loopback y `public_url` lleva el dominio `*.trycloudflare.com`.
+
+### 7.2.1 Verificación de modelos y etiquetas
+
+1. `GET /api/v1/productos` devuelve activos `Tostada Común` y `Chalitas`.
+2. El `config.json` de ambas copias tiene `etiquetas.clases` y los dos defaults
+   por tipo (`models.default_entrada_model_id` / `default_salida_model_id`).
+3. En **En vivo** cada instancia muestra el modelo de su rol
+   (`entrada-horno-v1` / `salida-horno-v4`).
+4. Un lote de prueba: la ENTRADA abre con `tc` (Tostada Común) o `Fajita`
+   (Chalitas); la SALIDA reporta `TCOK`/`TCQ`/`CHAOK`/`CHAQ`.
+5. Revisá el log por "etiqueta ... sin producto en el catálogo" y por
+   "se descarta ... el lote es del producto".
 
 ### 7.3 `device.json`: no se copia
 

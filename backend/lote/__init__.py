@@ -24,7 +24,7 @@ from backend.config import AppConfig
 from backend.control.tipos import LimitesAplicacion, ModoControl
 from backend.device.almacen import AlmacenDispositivo
 from backend.device.tipos import TipoDispositivo
-from backend.etiquetas import normalizar_clave, separar_etiqueta
+from backend.etiquetas import ResolutorEtiquetas, normalizar_clave, separar_etiqueta
 from backend.lote.cliente import ClienteLotes
 from backend.lote.dlq import ColaDLQ
 from backend.lote.estado import clasificar_estado
@@ -97,12 +97,15 @@ class LoteService:
         self._backoff_ini = config.lote.reintento_inicial_segundos
         self._backoff_max = config.lote.reintento_maximo_segundos
         self._catalogo = config.models.catalog
+        self._etiquetas = ResolutorEtiquetas(config.etiquetas.clases)
         # Producto del catálogo del Go indexado por nombre normalizado: la clave
         # es el prefijo del label (convención ``<producto>_<estado>`` de
         # backend.etiquetas), no el modelo. Se llena en `_refrescar_si_toca`.
         self._producto_por_nombre: dict[str, Producto] = {}
         # Prefijos ya advertidos por etiqueta sin producto: evita log-spam.
         self._prefijos_advertidos: set[str] = set()
+        # Productos descartados por no coincidir con el del lote abierto: evita log-spam.
+        self._productos_descartados: set[str] = set()
         # Estado para evitar emisiones espurias del callback de modo: se compara
         # contra el último modo que le pasamos al ControlService.
         self._ultimo_modo_emitido: ModoControl | None = None
@@ -297,6 +300,7 @@ class LoteService:
                 normalizar_clave(p.nombre): p for p in productos if p.activo
             }
             self._prefijos_advertidos.clear()
+            self._productos_descartados.clear()
             self._sector = sector
             lote_anterior = self._lote
             self._lote = lote
@@ -369,7 +373,7 @@ class LoteService:
         del catálogo. Sin match devuelve None y se advierte una sola vez por
         prefijo (hasta el próximo refresco de catálogo).
         """
-        prefijo, _estado = separar_etiqueta(label)
+        prefijo, _estado = separar_etiqueta(label, self._etiquetas)
         producto = self._producto_por_nombre.get(prefijo) if prefijo else None
         if producto is None and prefijo and prefijo not in self._prefijos_advertidos:
             self._prefijos_advertidos.add(prefijo)
@@ -380,6 +384,32 @@ class LoteService:
                 prefijo,
             )
         return producto
+
+    def _producto_aceptado(self, producto: Producto) -> bool:
+        """False si el producto no es el del lote abierto (o el primero pendiente).
+
+        El backend rechaza el batch entero si un evento no coincide con el
+        producto del lote; descartarlo acá evita perder los eventos válidos.
+        """
+        with self._lock:
+            lote = self._lote
+            if lote is not None and lote.producto_id is not None:
+                esperado = lote.producto_id
+            elif self._pendientes:
+                esperado = self._pendientes[0].producto_id
+            else:
+                esperado = None
+        if esperado is None or esperado == producto.id:
+            return True
+        if producto.id not in self._productos_descartados:
+            self._productos_descartados.add(producto.id)
+            logger.warning(
+                "lote: se descarta %r (%s): el lote es del producto %s",
+                producto.nombre,
+                producto.id,
+                esperado,
+            )
+        return False
 
     def _traducir(self, observado: EventoObservado) -> EventoDeteccion | None:
         """Un evento por producto confirmado.
@@ -405,11 +435,11 @@ class LoteService:
                 return None
             if clave in self._reportadas:
                 return None
-            estado = clasificar_estado(evento.label)
+            estado = clasificar_estado(evento.label, self._etiquetas)
             if estado is None:
                 return None
             producto = self._resolver_producto(evento.label)
-            if producto is None:
+            if producto is None or not self._producto_aceptado(producto):
                 return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
@@ -423,17 +453,17 @@ class LoteService:
             if clave in self._reportadas:
                 return None
             producto = self._resolver_producto(evento.label)
-            if producto is None:
+            if producto is None or not self._producto_aceptado(producto):
                 return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
             return self._evento(observado, producto, EstadoProducto.QUEMADO)
         if evento.tipo == "baja":
-            estado = clasificar_estado(evento.label)
+            estado = clasificar_estado(evento.label, self._etiquetas)
             if clave in self._reportadas or estado is None:
                 return None
             producto = self._resolver_producto(evento.label)
-            if producto is None:
+            if producto is None or not self._producto_aceptado(producto):
                 return None
             self._reportadas.add(clave)
             self._ultimo_modelo = observado.modelo_id
@@ -749,7 +779,7 @@ class LoteService:
                 logger.warning("lote: no se pudo leer %s", entrada.names_path)
             else:
                 for linea in texto.splitlines():
-                    estado = clasificar_estado(linea)
+                    estado = clasificar_estado(linea, self._etiquetas)
                     if estado is not None:
                         estados.add(estado)
         self._estados_por_modelo[modelo_id] = estados

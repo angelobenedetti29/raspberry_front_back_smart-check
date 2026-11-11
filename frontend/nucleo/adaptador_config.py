@@ -37,6 +37,8 @@ _FALTA = object()
 
 _CLAVE_RTSP = "stream.publisher.rtsp_transport"
 _CLAVE_MODELO = "models.default_model_id"
+_CLAVE_MODELO_ENTRADA = "models.default_entrada_model_id"
+_CLAVE_MODELO_SALIDA = "models.default_salida_model_id"
 _CLAVE_DRIVER_SENSORES = "control.sensores.driver"
 _CLAVE_DRIVER_ACTUADORES = "control.actuadores.driver"
 _CLAVE_LOTES_MODO_ENDPOINT = "control.lotes_modo_endpoint"
@@ -330,7 +332,22 @@ _ESQUEMA: tuple[_CampoEsquema, ...] = (
         "Modelos",
         "Modelo por defecto",
         TipoCampo.OPCION,
-        "Modelo que se carga al iniciar la aplicación.",
+        "Fallback cuando el dispositivo no tiene tipo o el modelo de su tipo "
+        "no está configurado.",
+    ),
+    _CampoEsquema(
+        _CLAVE_MODELO_ENTRADA,
+        "Modelos",
+        "Modelo de entrada",
+        TipoCampo.OPCION,
+        "Modelo que se carga en una Raspberry ENTRADA_HORNO.",
+    ),
+    _CampoEsquema(
+        _CLAVE_MODELO_SALIDA,
+        "Modelos",
+        "Modelo de salida",
+        TipoCampo.OPCION,
+        "Modelo que se carga en una Raspberry SALIDA_HORNO.",
     ),
     # API
     _CampoEsquema(
@@ -700,7 +717,7 @@ class AdaptadorConfig:
         """Opciones de los combos: transporte RTSP, drivers Modbus y modelos."""
         if clave == _CLAVE_RTSP:
             return (("TCP", "tcp"), ("UDP", "udp"))
-        if clave == _CLAVE_MODELO:
+        if clave in (_CLAVE_MODELO, _CLAVE_MODELO_ENTRADA, _CLAVE_MODELO_SALIDA):
             return _opciones_modelos(cruda)
         if clave in (_CLAVE_DRIVER_SENSORES, _CLAVE_DRIVER_ACTUADORES):
             return tuple((_ETIQUETAS_DRIVER[d], d) for d in DRIVERS_CONTROL)

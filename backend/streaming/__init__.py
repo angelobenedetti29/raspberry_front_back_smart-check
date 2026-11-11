@@ -29,16 +29,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _entrada_por_defecto(config: AppConfig) -> ModelEntry:
-    """Entrada del catálogo que corresponde a `models.default_model_id`."""
-    for entrada in config.models.catalog:
-        if entrada.model_id == config.models.default_model_id:
-            return entrada
-    # El loader ya valida esta referencia; esto es una red de seguridad.
-    raise RuntimeError(
-        f"'models.default_model_id' referencia un modelo inexistente: "
-        f"{config.models.default_model_id}"
-    )
+def _entrada_por_defecto(config: AppConfig, tipo: TipoDispositivo | None = None) -> ModelEntry:
+    """Entrada del catálogo según el tipo de dispositivo."""
+    return config.models.modelo_para(tipo)
 
 
 class StreamingService:
@@ -66,7 +59,9 @@ class StreamingService:
         # alta pueden cambiarlos después del arranque.
         self._nombre_provider = nombre_provider or (lambda: config.device.hostname)
         self._tipo_provider = tipo_provider
-        entrada = _entrada_por_defecto(config)
+        tipo = tipo_provider() if tipo_provider is not None else None
+        entrada = _entrada_por_defecto(config, tipo)
+        self._modelo_inicial_id = entrada.model_id
         self._registro = RegistroEstado(
             fuente=config.stream.capture.source,
             modelo_id=entrada.model_id,
@@ -90,7 +85,11 @@ class StreamingService:
             if self._pipeline is not None:
                 return
             pipeline = Pipeline(
-                self._config, self._registro, self._suscriptores, self._url_publicacion
+                self._config,
+                self._registro,
+                self._suscriptores,
+                self._url_publicacion,
+                modelo_inicial_id=self._modelo_inicial_id,
             )
             self._pipeline = pipeline
         pipeline.iniciar()

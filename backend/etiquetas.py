@@ -1,10 +1,14 @@
-"""Convención de etiquetas del modelo único: <producto>_<estado>.
+"""Resolución de etiquetas del detector a ``(producto, estado)``.
 
-El estado es el sufijo tras el último ``_`` y sólo puede ser ``crudo``,
-``ok`` o ``quemado``; todo lo que precede a ese sufijo identifica al
-producto (``tostada_comun_quemado`` → producto ``tostada_comun``, estado
-``quemado``). El prefijo se matchea por nombre normalizado contra el
-catálogo de productos del backend (ver ``normalizar_clave``).
+El mapa ``etiquetas.clases`` del config traduce códigos cortos (``tc``,
+``tcok``, ``tcq``, ``cha``, ``fajita``, ``chaok``, ``chaq``) a
+``(producto, estado)``. Si la etiqueta no está en el mapa, se mantiene la
+convención ``<producto>_<estado>``: el estado es el sufijo tras el último
+``_`` y sólo puede ser ``crudo``, ``ok`` o ``quemado``; todo lo que precede a
+ese sufijo identifica al producto (``tostada_comun_quemado`` → producto
+``tostada_comun``, estado ``quemado``). El prefijo se matchea por nombre
+normalizado contra el catálogo de productos del backend (ver
+``normalizar_clave``).
 
 Sin sufijo válido no hay estado: el evento no cuenta para el lote.
 """
@@ -13,15 +17,16 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 # Estados válidos como sufijo de etiqueta (mismos valores que EstadoProducto).
 ESTADOS_VALIDOS = ("crudo", "ok", "quemado")
 
-# Alias transitorios de los modelos actuales (``tcq``/``tcok`` y
-# ``tostada quemada``/``tostadas ok``): mantienen la clasificación hasta
-# que llegue el modelo reentrenado con clases ``producto_estado``.
-# BORRAR este bloque completo cuando ese modelo esté en producción.
-_ALIAS_TRANSITORIOS: dict[str, tuple[str, str]] = {
+# Clases por defecto: fallback para configs viejas (sin la sección
+# `etiquetas`) y para los tests. No es el único mapa: el config puede
+# reemplazarlo con `etiquetas.clases`.
+CLASES_POR_DEFECTO: dict[str, tuple[str, str | None]] = {
     "tcq": ("tostada_comun", "quemado"),
     "tcok": ("tostada_comun", "ok"),
     "tostada_quemada": ("tostada_comun", "quemado"),
@@ -43,20 +48,35 @@ def normalizar_clave(texto: str) -> str:
     return _NO_ALFANUM.sub("_", sin_tildes).strip("_")
 
 
-def separar_etiqueta(label: str) -> tuple[str, str | None]:
+@dataclass(frozen=True, slots=True)
+class ResolutorEtiquetas:
+    """Mapa normalizado ``etiqueta → (producto, estado)`` con fallback por sufijo."""
+
+    clases: Mapping[str, tuple[str, str | None]]
+
+    def separar(self, label: str) -> tuple[str, str | None]:
+        normal = normalizar_clave(label)
+        if not normal:
+            return ("", None)
+        clase = self.clases.get(normal)
+        if clase is not None:
+            return clase
+        producto, _, sufijo = normal.rpartition("_")
+        if sufijo in ESTADOS_VALIDOS and producto:
+            return (producto, sufijo)
+        return (normal, None)
+
+
+_POR_DEFECTO = ResolutorEtiquetas(CLASES_POR_DEFECTO)
+
+
+def separar_etiqueta(
+    label: str, resolutor: ResolutorEtiquetas | None = None
+) -> tuple[str, str | None]:
     """Separa un label del detector en ``(producto, estado)``.
 
-    El estado es el sufijo tras el último ``_`` si es un estado válido; si no,
-    se prueban los alias transitorios. Sin ninguno de los dos, el label entero
-    es el producto y el estado es ``None``.
+    Usa el resolutor dado o el mapa por defecto. El estado es el sufijo tras el
+    último ``_`` si es un estado válido; si no, el label entero es el producto y
+    el estado es ``None``.
     """
-    normal = normalizar_clave(label)
-    if not normal:
-        return ("", None)
-    alias = _ALIAS_TRANSITORIOS.get(normal)
-    if alias is not None:
-        return alias
-    producto, _, sufijo = normal.rpartition("_")
-    if sufijo in ESTADOS_VALIDOS and producto:
-        return (producto, sufijo)
-    return (normal, None)
+    return (resolutor or _POR_DEFECTO).separar(label)

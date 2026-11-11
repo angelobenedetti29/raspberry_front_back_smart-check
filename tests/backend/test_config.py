@@ -20,6 +20,7 @@ from backend.config import (
     guardar_config,
     load_config,
 )
+from backend.device.tipos import TipoDispositivo
 
 
 @pytest.fixture
@@ -381,3 +382,93 @@ def test_control_sin_seccion_usa_defaults_nuevos(repo_root: Path) -> None:
     assert cfg.control.consigna_reg_vel == 104
     assert cfg.control.umbral_marcha_temp_c == 50.0
     assert cfg.control.umbral_marcha_velocidad == 0.01
+
+
+# --- etiquetas: mapa configurable de clases ---
+
+
+def test_etiquetas_sin_seccion_usa_defaults(repo_root: Path) -> None:
+    """Sin `etiquetas`, el loader cae al mapa por defecto de modelos viejos."""
+    _escribir(repo_root, _config_minima())
+    cfg = load_config(repo_root / "config.json")
+    assert cfg.etiquetas.clases["tcq"] == ("tostada_comun", "quemado")
+
+
+def test_etiquetas_parsea_y_normaliza(repo_root: Path) -> None:
+    data = _config_minima()
+    data["etiquetas"] = {
+        "clases": {
+            "TCQ": {"producto": "Tostada Común", "estado": "quemado"},
+            "fajita": {"producto": "Chalitas"},
+        }
+    }
+    _escribir(repo_root, data)
+    cfg = load_config(repo_root / "config.json")
+    assert cfg.etiquetas.clases["tcq"] == ("tostada_comun", "quemado")
+    assert cfg.etiquetas.clases["fajita"] == ("chalitas", None)
+
+
+def test_etiquetas_estado_invalido_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    data["etiquetas"] = {"clases": {"x": {"producto": "X", "estado": "tostado"}}}
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="estado"):
+        load_config(repo_root / "config.json")
+
+
+def test_etiquetas_claves_duplicadas_al_normalizar_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    data["etiquetas"] = {
+        "clases": {
+            "TCQ": {"producto": "A", "estado": "quemado"},
+            "tcq": {"producto": "B", "estado": "quemado"},
+        }
+    }
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="duplicadas"):
+        load_config(repo_root / "config.json")
+
+
+# --- models: modelo por defecto según el tipo de dispositivo ---
+
+
+def _config_con_dos_modelos() -> dict:
+    """Config mínima con un segundo modelo (``mod-2``) en el catálogo."""
+    data = _config_minima()
+    data["models"]["catalog"].append(
+        {
+            "model_id": "mod-2",
+            "label": "Salida",
+            "file": "salida.onnx",
+            "names_file": "salida.names",
+        }
+    )
+    return data
+
+
+def test_modelo_por_tipo_entrada_y_salida(repo_root: Path) -> None:
+    data = _config_con_dos_modelos()
+    data["models"]["default_entrada_model_id"] = "mod-1"
+    data["models"]["default_salida_model_id"] = "mod-2"
+    _escribir(repo_root, data)
+    cfg = load_config(repo_root / "config.json")
+    assert cfg.models.modelo_para(TipoDispositivo.ENTRADA_HORNO).model_id == "mod-1"
+    assert cfg.models.modelo_para(TipoDispositivo.SALIDA_HORNO).model_id == "mod-2"
+
+
+def test_modelo_por_tipo_sin_default_usa_fallback(repo_root: Path) -> None:
+    _escribir(repo_root, _config_minima())
+    cfg = load_config(repo_root / "config.json")
+    assert (
+        cfg.models.modelo_para(TipoDispositivo.ENTRADA_HORNO).model_id
+        == cfg.models.default_model_id
+    )
+    assert cfg.models.modelo_para(None).model_id == cfg.models.default_model_id
+
+
+def test_default_por_tipo_inexistente_falla(repo_root: Path) -> None:
+    data = _config_minima()
+    data["models"]["default_entrada_model_id"] = "no-existe"
+    _escribir(repo_root, data)
+    with pytest.raises(ConfigError, match="default_entrada_model_id"):
+        load_config(repo_root / "config.json")

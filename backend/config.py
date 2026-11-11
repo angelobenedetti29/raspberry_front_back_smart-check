@@ -11,6 +11,8 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
 
+from backend.etiquetas import CLASES_POR_DEFECTO, ESTADOS_VALIDOS, normalizar_clave
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config.json"
 
@@ -146,6 +148,35 @@ class ModelEntry:
 class ModelsConfig:
     default_model_id: str
     catalog: tuple[ModelEntry, ...]
+    default_entrada_model_id: str = ""
+    default_salida_model_id: str = ""
+
+    def modelo_para(self, tipo: object | None) -> ModelEntry:
+        """Modelo por defecto según el tipo de dispositivo.
+
+        Acepta un `TipoDispositivo` o su valor string. Sin tipo (dispositivo
+        sin registrar) usa `default_model_id`.
+        """
+        # `tipo` es object y no TipoDispositivo para no importar
+        # backend.device (que importa este módulo) y cerrar el ciclo.
+        valor = getattr(tipo, "value", tipo)
+        if valor == "ENTRADA_HORNO":
+            objetivo = self.default_entrada_model_id or self.default_model_id
+        elif valor == "SALIDA_HORNO":
+            objetivo = self.default_salida_model_id or self.default_model_id
+        else:
+            objetivo = self.default_model_id
+        for entrada in self.catalog:
+            if entrada.model_id == objetivo:
+                return entrada
+        raise RuntimeError(f"Modelo por defecto inexistente para el tipo {tipo!r}: {objetivo}")
+
+
+@dataclass(frozen=True, slots=True)
+class EtiquetasConfig:
+    """Mapa ``etiqueta normalizada → (producto normalizado, estado)``."""
+
+    clases: Mapping[str, tuple[str, str | None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +301,7 @@ class AppConfig:
     paths: PathsConfig
     stream: StreamConfig
     models: ModelsConfig
+    etiquetas: EtiquetasConfig
     api: ApiConfig
     device: DeviceConfig
     lote: LoteConfig
@@ -406,6 +438,61 @@ def _parse_modbus_config(raw: dict[str, Any], where: str) -> ModbusDriverConfig:
         port=port if isinstance(port, int) else None,
         unit_id=unit_id,
     )
+
+
+def _parse_etiquetas(raw: Any) -> EtiquetasConfig:
+    """Parsea y valida `etiquetas.clases`: etiqueta → {producto, estado}.
+
+    Etiquetas y productos se normalizan con `normalizar_clave` (la misma que
+    usa el catálogo del Go) para que el match no dependa de tildes ni espacios.
+    """
+    if raw is None:
+        return EtiquetasConfig(clases=MappingProxyType(dict(CLASES_POR_DEFECTO)))
+    if not isinstance(raw, dict):
+        raise ConfigError("'etiquetas' debe ser un objeto JSON")
+
+    clases_raw = raw.get("clases")
+    if not isinstance(clases_raw, dict):
+        raise ConfigError("'etiquetas.clases' debe ser un objeto JSON")
+
+    clases: dict[str, tuple[str, str | None]] = {}
+    for etiqueta, valor in clases_raw.items():
+        if not isinstance(etiqueta, str) or not etiqueta.strip():
+            raise ConfigError("'etiquetas.clases' tiene una etiqueta vacía")
+        clave = normalizar_clave(etiqueta)
+        if not clave:
+            raise ConfigError("'etiquetas.clases' tiene una etiqueta vacía")
+        if clave in clases:
+            raise ConfigError(
+                f"'etiquetas.clases' tiene etiquetas duplicadas al normalizar: {etiqueta}"
+            )
+        if not isinstance(valor, dict):
+            raise ConfigError(f"'etiquetas.clases[\"{etiqueta}\"]' debe ser un objeto JSON")
+
+        producto_raw = valor.get("producto")
+        if not isinstance(producto_raw, str) or not producto_raw.strip():
+            raise ConfigError(
+                f"'etiquetas.clases[\"{etiqueta}\"].producto' debe ser un string no vacío"
+            )
+        producto = normalizar_clave(producto_raw)
+        if not producto:
+            raise ConfigError(
+                f"'etiquetas.clases[\"{etiqueta}\"].producto' debe ser un string no vacío"
+            )
+
+        estado_raw = valor.get("estado")
+        estado: str | None = None
+        if estado_raw is not None:
+            if not isinstance(estado_raw, str) or estado_raw.strip().lower() not in ESTADOS_VALIDOS:
+                raise ConfigError(
+                    f"'etiquetas.clases[\"{etiqueta}\"].estado' debe ser uno de "
+                    f"{ESTADOS_VALIDOS} o null"
+                )
+            estado = estado_raw.strip().lower()
+
+        clases[clave] = (producto, estado)
+
+    return EtiquetasConfig(clases=MappingProxyType(clases))
 
 
 def _parse_config(data: dict, root: Path) -> AppConfig:
@@ -616,11 +703,28 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         raise ConfigError(
             f"'models.default_model_id' referencia un modelo inexistente: {default_model_id}"
         )
+    default_entrada_model_id = _str_opcional(
+        models_raw, "default_entrada_model_id", default_model_id, "models"
+    )
+    default_salida_model_id = _str_opcional(
+        models_raw, "default_salida_model_id", default_model_id, "models"
+    )
+    for clave, valor in (
+        ("default_entrada_model_id", default_entrada_model_id),
+        ("default_salida_model_id", default_salida_model_id),
+    ):
+        if valor not in seen_ids:
+            raise ConfigError(f"'models.{clave}' referencia un modelo inexistente: {valor}")
 
     models = ModelsConfig(
         default_model_id=default_model_id,
         catalog=catalog,
+        default_entrada_model_id=default_entrada_model_id,
+        default_salida_model_id=default_salida_model_id,
     )
+
+    # --- etiquetas (mapa de clases cortas → producto/estado) ---
+    etiquetas = _parse_etiquetas(data.get("etiquetas"))
 
     # --- api (base_url sin path; los endpoints son rutas nombradas) ---
     api_raw = _get(data, "api", dict, "config")
@@ -815,6 +919,7 @@ def _parse_config(data: dict, root: Path) -> AppConfig:
         paths=paths,
         stream=stream,
         models=models,
+        etiquetas=etiquetas,
         api=api,
         device=device,
         lote=lote,

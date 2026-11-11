@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from backend.config import ModelEntry
+from backend.etiquetas import ResolutorEtiquetas
 from backend.inference import Detector, ErrorCargaModelo, ResultadoDeteccion
 from backend.inference.catalogo import construir_detector
 from backend.streaming.anotador import dibujar
@@ -59,11 +60,13 @@ class Pipeline:
         registro: RegistroEstado,
         suscriptores: RegistroSuscriptores,
         url_publicacion_provider: Callable[[], str | None],
+        modelo_inicial_id: str | None = None,
     ) -> None:
         self._config = config
         self._registro = registro
         self._suscriptores = suscriptores
         self._url_publicacion_provider = url_publicacion_provider
+        self._modelo_inicial_id = modelo_inicial_id or config.models.default_model_id
         self._lock = threading.Lock()
         self._parar = threading.Event()
         self._frame_nuevo = threading.Event()
@@ -102,7 +105,11 @@ class Pipeline:
         self._linea_conteo_y = (
             config.stream.counting.line_y if config.stream.counting.enabled else None
         )
-        self._estabilizador = EstabilizadorDetecciones(linea_conteo_y=self._linea_conteo_y)
+        self._etiquetas = ResolutorEtiquetas(config.etiquetas.clases)
+        self._estabilizador = EstabilizadorDetecciones(
+            linea_conteo_y=self._linea_conteo_y,
+            separar=self._etiquetas.separar,
+        )
         self._modelo_actual: str | None = None
         # Para el cierre de lote: segundos desde la última detección.
         self._inicio_monotonic = time.monotonic()
@@ -118,7 +125,7 @@ class Pipeline:
         if self._hilo_produccion is not None:
             return
         self._parar.clear()
-        self._modelo_pendiente = self._config.models.default_model_id
+        self._modelo_pendiente = self._modelo_inicial_id
         self._hilo_produccion = threading.Thread(
             target=self._bucle_produccion, name="streaming-produccion", daemon=True
         )
@@ -240,7 +247,12 @@ class Pipeline:
         # le metería cajas al detector.
         if modo is ModoPublicacion.INFERENCIA and (detecciones or self._linea_conteo_y is not None):
             anotado = frame.copy()
-            dibujar(anotado, detecciones, linea_conteo_y=self._linea_conteo_y)
+            dibujar(
+                anotado,
+                detecciones,
+                linea_conteo_y=self._linea_conteo_y,
+                resolutor=self._etiquetas,
+            )
         else:
             anotado = frame
 
