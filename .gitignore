@@ -48,8 +48,8 @@ data/dlq.jsonl*
 multimedia/output/
 
 # Video de prueba pesado: se usa local, no se versiona (supera el límite de GitHub)
-multimedia/videos/t3.mp4
-
+multimedia/videos
+*.mp4
 # Grafo local de graphify y config de OpenCode (solo local)
 graphify-out/
 .opencode/
