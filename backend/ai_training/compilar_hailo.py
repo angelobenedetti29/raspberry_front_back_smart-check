@@ -193,6 +193,15 @@ def compilar_hef(
         f"se esperaba {net_name}.hef."
     )
 
+#Cargamos algunos nodos a mano, si falla es por esto...
+nodos_de_corte = [
+    "/model.23/cv2.0/cv2.0.2/Conv",
+    "/model.23/cv3.0/cv3.0.2/Conv",
+    "/model.23/cv2.1/cv2.1.2/Conv",
+    "/model.23/cv3.1/cv3.1.2/Conv",
+    "/model.23/cv2.2/cv2.2.2/Conv",
+    "/model.23/cv3.2/cv3.2.2/Conv"
+]
 
 def compilar(
     onnx: Path,
@@ -203,7 +212,9 @@ def compilar(
     image_size: int,
     net_name: str | None = None,
     hw_arch: str = HW_ARCH_DEFECTO,
-    end_nodes: Sequence[str] | None = None,
+    #Esto estaba antes, borrar comentario
+    #end_nodes: Sequence[str] | None = None,
+    end_nodes = nodos_de_corte,
     aviso: Callable[[str], None] = print,
 ) -> Path:
     """Corre los 3 pasos y devuelve el HEF generado dentro de `work_dir`."""
