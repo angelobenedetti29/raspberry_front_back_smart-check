@@ -1,16 +1,9 @@
 """Detector YOLO sobre un HEF de Hailo, para la NPU de la Raspberry.
 
-Sólo funciona donde exista `hailo_platform`, así que el import es perezoso y este
-módulo se carga recién cuando el motor resuelto es NPU.
-
-La normalización (1/255) viene **compilada dentro del HEF** (ver el `.alls` que
-genera `backend/ai_training/compilar_hailo.py`): por eso acá no se divide la
-entrada por 255. Dividirla —como hacen muchos ejemplos de la comunidad que
-usan `FormatType.FLOAT32`— dejaría un modelo que no detecta nada.
-
-A partir del flujo YOLO26 end-to-end NMS-free, el HEF devuelve el tensor crudo
-`(1, 4 + clases, N)`. El NMS se aplica en CPU con `cv2.dnn.NMSBoxes`, igual que
-en `yolo_opencv.py`.
+Soporta:
+1. Modelos con NMS integrado (post-NMS nativo de Hailo).
+2. Modelos YOLO end-to-end con tensor consolidado (1, 4+clases, N).
+3. Modelos YOLO11/YOLOv8 con 6 salidas convolucionales crudas podadas vía end_nodes.
 """
 
 from __future__ import annotations
@@ -36,7 +29,6 @@ from backend.inference.preprocesado import letterbox
 
 logger = logging.getLogger(__name__)
 
-# El modelo puede tener salida cruda (1, 4 + clases, N) o post-NMS por clase.
 _ATRIBUTOS_BASE = 4
 _COLUMNAS_POST_NMS = 5  # [ymin, xmin, ymax, xmax, confianza]
 _FORMATO_ENTRADA = "UINT8"
@@ -44,11 +36,7 @@ _FORMATO_SALIDA = "FLOAT32"
 
 
 def _es_estructura_post_nms(crudas: Any) -> tuple[bool, int]:
-    """Determina si la salida corresponde al formato post-NMS de Hailo.
-
-    Devuelve (es_post_nms, cantidad_clases).
-    """
-    # Si es un ndarray numérico denso 3D (1, 4+clases, N), es tensor crudo.
+    """Determina si la salida corresponde al formato post-NMS de Hailo."""
     if isinstance(crudas, np.ndarray) and crudas.dtype != object:
         return False, 0
 
@@ -66,8 +54,6 @@ def _es_estructura_post_nms(crudas: Any) -> tuple[bool, int]:
     if not isinstance(cand, (list, tuple, np.ndarray)) or len(cand) == 0:
         return False, 0
 
-    # Cada elemento de cand corresponde a una clase y contiene filas
-    # [ymin, xmin, ymax, xmax, confianza]
     for elem in cand:
         if isinstance(elem, np.ndarray):
             if elem.ndim == 2:
@@ -92,12 +78,6 @@ def _es_estructura_post_nms(crudas: Any) -> tuple[bool, int]:
 
 
 def _soltar_grupo(grupo: Any) -> None:
-    """Suelta el network group si esta versión de HailoRT lo permite.
-
-    HailoRT no expone `release()` en todas las versiones: en algunas el grupo
-    queda atado al `VDevice` y se libera con él. Se intenta y, si no existe, se
-    registra para que la prueba de estrés en la Pi lo detecte.
-    """
     soltar = getattr(grupo, "release", None)
     if callable(soltar):
         soltar()
@@ -106,50 +86,31 @@ def _soltar_grupo(grupo: Any) -> None:
 
 
 class MontajeHailo:
-    """Un HEF cargado y listo para inferir, con su pila de contextos.
-
-    La pila se cierra en orden inverso al montaje: primero `InferVStreams`,
-    después la activación del grupo.
-    """
-
     def __init__(
         self,
         hef: Any,
         grupo: Any,
         entrada: Any,
-        salida: Any,
+        salidas: list[Any],
         pipeline: Any,
         pila: ExitStack,
     ) -> None:
         self.hef = hef
         self.grupo = grupo
         self.entrada = entrada
-        self.salida = salida
+        self.salidas = salidas
         self.pipeline = pipeline
         self._pila = pila
 
     def cerrar(self) -> None:
-        """Desmonta el HEF. Idempotente y tolerante a fallos parciales."""
         try:
             self._pila.close()
         except Exception:
-            # Un fallo al desmontar no debe impedir liberar el grupo ni ocultar
-            # el resto de la limpieza.
             logger.warning("Fallo al desmontar el HEF %s", self.hef, exc_info=True)
         _soltar_grupo(self.grupo)
 
 
 class DispositivoHailo:
-    """Dueño único del `VDevice` de la NPU.
-
-    En HailoRT puede existir **un solo `VDevice` a la vez**, y crearlo y
-    liberarlo en cada cambio de modelo es una causa conocida de que la NPU quede
-    tomada. Por eso el dispositivo vive lo que vive el proceso y lo único que se
-    desmonta al cambiar de modelo es lo que depende del HEF.
-
-    Nadie más construye ni libera la NPU: pasa por acá.
-    """
-
     _lock = threading.RLock()
     _instancia: DispositivoHailo | None = None
 
@@ -160,7 +121,6 @@ class DispositivoHailo:
 
     @classmethod
     def obtener(cls) -> DispositivoHailo:
-        """Devuelve el dispositivo del proceso, creándolo la primera vez."""
         with cls._lock:
             if cls._instancia is None:
                 cls._instancia = cls._crear()
@@ -180,7 +140,6 @@ class DispositivoHailo:
             raise ErrorCargaModelo(f"No se pudo inicializar la NPU: {exc}") from exc
 
     def montar(self, hef_path: Path) -> MontajeHailo:
-        """Carga un HEF en la NPU y devuelve el montaje listo para inferir."""
         with self._lock:
             hailo = self._hailo
             pila = ExitStack()
@@ -217,21 +176,10 @@ class DispositivoHailo:
                     f"No se pudo montar {hef_path.name} en la NPU: {exc}"
                 ) from exc
 
-            return MontajeHailo(hef, grupo, entradas[0], salidas[0], pipeline, pila)
+            return MontajeHailo(hef, grupo, entradas[0], salidas, pipeline, pila)
 
 
 class DetectorYoloHailo(DetectorYoloBase):
-    """Detector YOLO que corre en la NPU Hailo.
-
-    El HEF devuelve el tensor crudo `(1, 4 + clases, N)` y el NMS se corre en
-    CPU con `cv2.dnn.NMSBoxes` (mismo criterio que la rama OpenCV). Por eso acá
-    sí se recibe `nms_threshold`, a diferencia del esquema anterior en el que
-    el NMS venía horneado en el HEF.
-
-    No es seguro para uso concurrente; el dueño (el hilo de inferencia del
-    pipeline) serializa las llamadas y también la liberación.
-    """
-
     motor = MotorInferencia.HAILO
 
     def __init__(
@@ -253,9 +201,6 @@ class DetectorYoloHailo(DetectorYoloBase):
         )
 
         self.nms_threshold = float(nms_threshold)
-        # Tabla de umbrales por índice de clase, para resolver el filtro de todo
-        # el tensor de una vez. Sin clases declaradas no hay tabla y se usa el
-        # global para todas.
         self._tabla_umbrales = (
             np.asarray(self._umbrales_por_clase, dtype=np.float32)
             if self._umbrales_por_clase
@@ -263,6 +208,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         )
 
         self._es_post_nms: bool = False
+        self._es_ramas_crudas: bool = False
         self._lock = threading.Lock()
         self._montaje: MontajeHailo | None = None
 
@@ -278,17 +224,17 @@ class DetectorYoloHailo(DetectorYoloBase):
                 f"Fallo al validar la salida de {self.modelo_path.name}: {exc}"
             ) from exc
 
+        modo_desc = "post-NMS" if self._es_post_nms else ("6-ramas DFL" if self._es_ramas_crudas else "crudo")
         logger.info(
             "Detector Hailo cargado: %s (%d clases, entrada %dx%d, modo %s)",
             self.modelo_path.name,
             len(self.nombres),
             self.image_size,
             self.image_size,
-            "post-NMS" if self._es_post_nms else "crudo",
+            modo_desc,
         )
 
     def detectar_frame(self, frame: np.ndarray) -> list[ResultadoDeteccion]:
-        """Detecta objetos en un frame BGR. Devuelve [] si el detector fue liberado."""
         with self._lock:
             if self._montaje is None or frame is None or frame.size == 0:
                 return []
@@ -296,6 +242,9 @@ class DetectorYoloHailo(DetectorYoloBase):
 
         if self._es_post_nms:
             return self._decodificar_post_nms(crudas, escala, pad_x, pad_y)
+
+        if self._es_ramas_crudas:
+            return self._decodificar_ramas_dfl(crudas, escala, pad_x, pad_y)
 
         return decodificar_salida(
             crudas,
@@ -310,14 +259,8 @@ class DetectorYoloHailo(DetectorYoloBase):
         )
 
     def liberar(self) -> None:
-        """Suelta el montaje del HEF. Idempotente.
-
-        El `VDevice` no se libera acá: es del proceso, ver `DispositivoHailo`.
-        """
         with self._lock:
             self._soltar_montaje()
-
-    # --- internos ---
 
     def _soltar_montaje(self) -> None:
         montaje = self._montaje
@@ -326,26 +269,131 @@ class DetectorYoloHailo(DetectorYoloBase):
             montaje.cerrar()
 
     def _inferir_crudo(self, frame: np.ndarray) -> tuple[Any, float, int, int]:
-        """Corre la NPU y devuelve el tensor crudo y los parámetros del letterbox."""
         montaje = self._montaje
         if montaje is None:
-            return np.empty((0, _ATRIBUTOS_BASE), dtype=np.float32), 1.0, 0, 0
+            return {}, 1.0, 0, 0
         lienzo, escala, pad_x, pad_y = letterbox(frame, self.image_size)
         rgb = cv2.cvtColor(lienzo, cv2.COLOR_BGR2RGB)
         entrada = np.expand_dims(rgb, axis=0)
         salidas = montaje.pipeline.infer({montaje.entrada.name: entrada})
-        return (
-            salidas[montaje.salida.name],
-            escala,
-            pad_x,
-            pad_y,
-        )
+
+        if len(montaje.salidas) == 1:
+            return salidas[montaje.salidas[0].name], escala, pad_x, pad_y
+        return salidas, escala, pad_x, pad_y
 
     def _umbral_de_indice(self, clase_id: int) -> float:
-        """Devuelve el umbral precalculado para el índice de clase."""
         if 0 <= clase_id < len(self._umbrales_por_clase):
             return self._umbrales_por_clase[clase_id]
         return self.confidence_threshold
+
+    def _decodificar_ramas_dfl(
+        self,
+        salidas: dict[str, np.ndarray],
+        escala: float,
+        pad_x: int,
+        pad_y: int,
+    ) -> list[ResultadoDeteccion]:
+        """Decodifica las 6 salidas convolucionales de YOLO11 podado con end_nodes."""
+        tensores = list(salidas.values())
+        num_clases = len(self.nombres)
+
+        # Separar ramas de cajas (64 canales) y clases (num_clases canales)
+        box_branches = [t for t in tensores if t.shape[-1] == 64]
+        cls_branches = [t for t in tensores if t.shape[-1] == num_clases]
+
+        # Ordenar por resolución espacial: 80x80 -> 40x40 -> 20x20
+        box_branches.sort(key=lambda t: t.shape[1], reverse=True)
+        cls_branches.sort(key=lambda t: t.shape[1], reverse=True)
+
+        cajas_totales = []
+        confianzas_totales = []
+        clases_totales = []
+
+        strides = [8, 16, 32]
+        dfl_conv = np.arange(16, dtype=np.float32)
+
+        for stride, box_feat, cls_feat in zip(strides, box_branches, cls_branches):
+            H, W = box_feat.shape[1], box_feat.shape[2]
+
+            # Softmax de 16 bins para DFL y cálculo de distancias (L, T, R, B)
+            b = box_feat.reshape(-1, 4, 16)
+            b = np.exp(b - np.max(b, axis=-1, keepdims=True))
+            b /= np.sum(b, axis=-1, keepdims=True)
+            ltrb = np.dot(b, dfl_conv)
+
+            # Rejilla de anclas
+            grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
+            grid = np.stack([grid_x, grid_y], axis=-1).reshape(-1, 2) + 0.5
+
+            # Coordenadas [left, top, right, bottom] escaladas
+            x1 = (grid[:, 0] - ltrb[:, 0]) * stride
+            y1 = (grid[:, 1] - ltrb[:, 1]) * stride
+            x2 = (grid[:, 0] + ltrb[:, 2]) * stride
+            y2 = (grid[:, 1] + ltrb[:, 3]) * stride
+
+            # Probabilidad con sigmoide
+            cls_probs = 1.0 / (1.0 + np.exp(-cls_feat.reshape(-1, num_clases)))
+
+            best_clase = np.argmax(cls_probs, axis=-1)
+            best_score = np.max(cls_probs, axis=-1)
+
+            cajas = np.stack([x1, y1, x2 - x1, y2 - y1], axis=-1)
+
+            cajas_totales.append(cajas)
+            confianzas_totales.append(best_score)
+            clases_totales.append(best_clase)
+
+        if not cajas_totales:
+            return []
+
+        todas_cajas = np.concatenate(cajas_totales, axis=0)
+        todas_conf = np.concatenate(confianzas_totales, axis=0)
+        todas_clases = np.concatenate(clases_totales, axis=0)
+
+        # Umbralización por clase
+        mask = np.zeros(len(todas_conf), dtype=bool)
+        for c in range(num_clases):
+            umbral = self._umbral_de_indice(c)
+            mask |= (todas_clases == c) & (todas_conf >= umbral)
+
+        cajas_f = todas_cajas[mask]
+        conf_f = todas_conf[mask]
+        clases_f = todas_clases[mask]
+
+        if len(cajas_f) == 0:
+            return []
+
+        # NMS con OpenCV en CPU
+        indices = cv2.dnn.NMSBoxes(
+            bboxes=cajas_f.tolist(),
+            scores=conf_f.tolist(),
+            score_threshold=0.0,
+            nms_threshold=self.nms_threshold,
+        )
+
+        if len(indices) == 0:
+            return []
+
+        indices = np.array(indices).flatten()
+        resultados: list[ResultadoDeteccion] = []
+        for idx in indices:
+            x, y, w, h = cajas_f[idx]
+            left = int(round((x - pad_x) / escala))
+            top = int(round((y - pad_y) / escala))
+            width = int(round(w / escala))
+            height = int(round(h / escala))
+            if width <= 0 or height <= 0:
+                continue
+
+            clase_id = int(clases_f[idx])
+            resultados.append(
+                ResultadoDeteccion(
+                    label=self._etiqueta(clase_id),
+                    confianza=float(conf_f[idx]),
+                    bbox=(left, top, width, height),
+                )
+            )
+        return resultados
 
     def _decodificar_post_nms(
         self,
@@ -354,7 +402,6 @@ class DetectorYoloHailo(DetectorYoloBase):
         pad_x: int,
         pad_y: int,
     ) -> list[ResultadoDeteccion]:
-        """Decodifica salida post-NMS de Hailo (lista de detecciones por clase)."""
         cand = crudas
         if isinstance(cand, (list, tuple)) and len(cand) == 1:
             cand = cand[0]
@@ -373,14 +420,12 @@ class DetectorYoloHailo(DetectorYoloBase):
             etiqueta = self._etiqueta(clase_id)
             umbral = self._umbral_de_indice(clase_id)
             for fila in filas:
-                # Cada fila es [ymin, xmin, ymax, xmax, confianza]
                 ymin, xmin, ymax, xmax, confianza = (
                     float(v) for v in fila[:_COLUMNAS_POST_NMS]
                 )
                 if confianza <= umbral:
                     continue
 
-                # Coordenadas [0, 1] relativas a la entrada letterboxeada
                 left = int(round((xmin * self.image_size - pad_x) / escala))
                 top = int(round((ymin * self.image_size - pad_y) / escala))
                 w = int(round(((xmax - xmin) * self.image_size) / escala))
@@ -398,11 +443,6 @@ class DetectorYoloHailo(DetectorYoloBase):
         return resultados
 
     def _validar_salida(self) -> None:
-        """Corre una inferencia en negro y verifica la forma de la salida.
-
-        Soporta tanto HEF con tensor crudo (1, 4+clases, N) como HEF con
-        salida post-NMS por clase (NMS embebido en el HEF).
-        """
         prueba = np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
         try:
             crudas, _, _, _ = self._inferir_crudo(prueba)
@@ -411,20 +451,20 @@ class DetectorYoloHailo(DetectorYoloBase):
                 f"Fallo en inferencia de validación para {self.modelo_path.name}: {exc}"
             ) from exc
 
-        # 1. ¿Es salida post-NMS de Hailo?
+        # 1. Caso: Diccionario con múltiples ramas (salida podada con end_nodes)
+        if isinstance(crudas, dict) and len(crudas) >= 6:
+            self._es_ramas_crudas = True
+            self._es_post_nms = False
+            return
+
+        # 2. Caso: Salida post-NMS de Hailo
         es_post, num_clases = _es_estructura_post_nms(crudas)
         if es_post:
             self._es_post_nms = True
-            if num_clases != len(self.nombres):
-                logger.warning(
-                    "El HEF post-NMS declara %d clases y el archivo de nombres tiene %d: "
-                    "las que sobren se rotularán como 'class_N'.",
-                    num_clases,
-                    len(self.nombres),
-                )
+            self._es_ramas_crudas = False
             return
 
-        # 2. ¿Es tensor crudo rectangular?
+        # 3. Caso: Tensor rectangular consolidado (1, 4+clases, N)
         try:
             preds = np.asarray(crudas)
         except Exception as exc:
@@ -434,17 +474,11 @@ class DetectorYoloHailo(DetectorYoloBase):
 
         if preds.ndim == 3 and preds.shape[0] == 1 and preds.shape[1] >= _ATRIBUTOS_BASE:
             self._es_post_nms = False
-            if preds.shape[1] != _ATRIBUTOS_BASE + len(self.nombres):
-                logger.warning(
-                    "El HEF declara %d columnas y el archivo de nombres tiene %d "
-                    "clases: las detecciones pueden salir mal etiquetadas.",
-                    preds.shape[1] - _ATRIBUTOS_BASE,
-                    len(self.nombres),
-                )
+            self._es_ramas_crudas = False
             return
 
         raise ErrorCargaModelo(
             f"Salida inesperada de {self.modelo_path.name}: se esperaba tensor "
-            f"(1, 4+clases, N) o estructura post-NMS por clase. "
+            f"(1, 4+clases, N), diccionario de ramas crudas o estructura post-NMS por clase. "
             f"Forma: {getattr(preds, 'shape', type(crudas))}"
         )
