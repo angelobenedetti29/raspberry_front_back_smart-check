@@ -207,6 +207,14 @@ class DetectorYoloHailo(DetectorYoloBase):
             else None
         )
 
+        # Tablas y grillas precalculadas para decodificación DFL rápida (6-ramas)
+        self._dfl_conv = np.arange(16, dtype=np.float32)
+        self._grids: dict[int, np.ndarray] = {}
+        for stride in (8, 16, 32):
+            feat_size = self.image_size // stride
+            gy, gx = np.meshgrid(np.arange(feat_size), np.arange(feat_size), indexing="ij")
+            self._grids[stride] = np.stack([gx, gy], axis=-1).reshape(-1, 2) + 0.5
+
         self._es_post_nms: bool = False
         self._es_ramas_crudas: bool = False
         self._lock = threading.Lock()
@@ -293,7 +301,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         pad_x: int,
         pad_y: int,
     ) -> list[ResultadoDeteccion]:
-        """Decodifica las 6 salidas convolucionales de YOLO11 podado con end_nodes."""
+        """Decodifica las 6 salidas convolucionales de YOLO11 podado con end_nodes (optimizado)."""
         tensores = list(salidas.values())
         num_clases = len(self.nombres)
 
@@ -309,39 +317,41 @@ class DetectorYoloHailo(DetectorYoloBase):
         confianzas_totales = []
         clases_totales = []
 
-        strides = [8, 16, 32]
-        dfl_conv = np.arange(16, dtype=np.float32)
+        strides = (8, 16, 32)
+        umbrales_clase = np.asarray(
+            [self._umbral_de_indice(c) for c in range(num_clases)], dtype=np.float32
+        )
 
         for stride, box_feat, cls_feat in zip(strides, box_branches, cls_branches):
-            H, W = box_feat.shape[1], box_feat.shape[2]
+            cls_flat = cls_feat.reshape(-1, num_clases)
+            # Sigmoide sobre los logits de clase (vectorizado y liviano)
+            cls_probs = 1.0 / (1.0 + np.exp(-cls_flat))
+            best_clase = np.argmax(cls_probs, axis=-1)
+            best_score = cls_probs[np.arange(len(cls_probs)), best_clase]
 
-            # Softmax de 16 bins para DFL y cálculo de distancias (L, T, R, B)
-            b = box_feat.reshape(-1, 4, 16)
+            # Filtro temprano: descartamos anclas de fondo ANTES de calcular el costoso DFL
+            mask = best_score >= umbrales_clase[best_clase]
+            if not np.any(mask):
+                continue
+
+            # Softmax y cálculo de distancias LTRB sólo para las pocas anclas que superan el umbral
+            b = box_feat.reshape(-1, 4, 16)[mask]
             b = np.exp(b - np.max(b, axis=-1, keepdims=True))
             b /= np.sum(b, axis=-1, keepdims=True)
-            ltrb = np.dot(b, dfl_conv)
+            ltrb = np.dot(b, self._dfl_conv)
 
-            # Rejilla de anclas
-            grid_y, grid_x = np.meshgrid(np.arange(H), np.arange(W), indexing="ij")
-            grid = np.stack([grid_x, grid_y], axis=-1).reshape(-1, 2) + 0.5
-
-            # Coordenadas [left, top, right, bottom] escaladas
+            # Usamos la grilla precomputada para este stride
+            grid = self._grids[stride][mask]
             x1 = (grid[:, 0] - ltrb[:, 0]) * stride
             y1 = (grid[:, 1] - ltrb[:, 1]) * stride
             x2 = (grid[:, 0] + ltrb[:, 2]) * stride
             y2 = (grid[:, 1] + ltrb[:, 3]) * stride
 
-            # Probabilidad con sigmoide
-            cls_probs = 1.0 / (1.0 + np.exp(-cls_feat.reshape(-1, num_clases)))
-
-            best_clase = np.argmax(cls_probs, axis=-1)
-            best_score = np.max(cls_probs, axis=-1)
-
             cajas = np.stack([x1, y1, x2 - x1, y2 - y1], axis=-1)
 
             cajas_totales.append(cajas)
-            confianzas_totales.append(best_score)
-            clases_totales.append(best_clase)
+            confianzas_totales.append(best_score[mask])
+            clases_totales.append(best_clase[mask])
 
         if not cajas_totales:
             return []
@@ -350,23 +360,10 @@ class DetectorYoloHailo(DetectorYoloBase):
         todas_conf = np.concatenate(confianzas_totales, axis=0)
         todas_clases = np.concatenate(clases_totales, axis=0)
 
-        # Umbralización por clase
-        mask = np.zeros(len(todas_conf), dtype=bool)
-        for c in range(num_clases):
-            umbral = self._umbral_de_indice(c)
-            mask |= (todas_clases == c) & (todas_conf >= umbral)
-
-        cajas_f = todas_cajas[mask]
-        conf_f = todas_conf[mask]
-        clases_f = todas_clases[mask]
-
-        if len(cajas_f) == 0:
-            return []
-
         # NMS con OpenCV en CPU
         indices = cv2.dnn.NMSBoxes(
-            bboxes=cajas_f.tolist(),
-            scores=conf_f.tolist(),
+            bboxes=todas_cajas.tolist(),
+            scores=todas_conf.tolist(),
             score_threshold=0.0,
             nms_threshold=self.nms_threshold,
         )
@@ -377,7 +374,7 @@ class DetectorYoloHailo(DetectorYoloBase):
         indices = np.array(indices).flatten()
         resultados: list[ResultadoDeteccion] = []
         for idx in indices:
-            x, y, w, h = cajas_f[idx]
+            x, y, w, h = todas_cajas[idx]
             left = int(round((x - pad_x) / escala))
             top = int(round((y - pad_y) / escala))
             width = int(round(w / escala))
@@ -385,11 +382,11 @@ class DetectorYoloHailo(DetectorYoloBase):
             if width <= 0 or height <= 0:
                 continue
 
-            clase_id = int(clases_f[idx])
+            clase_id = int(todas_clases[idx])
             resultados.append(
                 ResultadoDeteccion(
                     label=self._etiqueta(clase_id),
-                    confianza=float(conf_f[idx]),
+                    confianza=float(todas_conf[idx]),
                     bbox=(left, top, width, height),
                 )
             )

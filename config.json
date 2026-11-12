@@ -98,10 +98,10 @@
                 "class_thresholds": {}
             },
             {
-                "model_id": "entrada-horno-v1",
-                "label": "YOLO Entrada Horno V1",
-                "file": "entrada_horno_V1.onnx",
-                "names_file": "entrada_horno_V1.names",
+                "model_id": "entrada-horno-v1.3",
+                "label": "YOLO Entrada Horno V1.3",
+                "file": "entrada_horno_1.3.onnx",
+                "names_file": "entrada_horno_1.3.names",
                 "class_thresholds": {
                     "fajita": 0.55,
                     "tc": 0.50
